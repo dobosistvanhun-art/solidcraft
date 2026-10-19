@@ -402,6 +402,21 @@ pub fn worm_section(w: &Worm) -> Result<Loop2> {
     closed(segs, "worm")
 }
 
+/// A worm thread's axial section (in a plane through the axis: x out from the axis, y along it),
+/// centred on y = 0, reaching `into` below the root into the core so the thread and the core
+/// overlap.
+pub fn worm_thread_section(w: &Worm, into: f64) -> Result<Loop2> {
+    worm_section(w)?;
+    let (m, alpha) = (w.module, w.pressure);
+    let r1 = w.pitch_radius();
+    let (ra, rf) = (r1 + m, r1 - 1.2 * m - into);
+    let half = |r: f64| PI * m / 4.0 - (r - r1) * alpha.tan();
+    if 2.0 * half(rf) >= PI * m * 0.95 {
+        return Err(bad("the worm's thread does not fit this pressure angle"));
+    }
+    Ok(Loop2::polygon(&[Vec2::new(rf, -half(rf)), Vec2::new(ra, -half(ra)), Vec2::new(ra, half(ra)), Vec2::new(rf, half(rf))]).ccw())
+}
+
 /// The region of a section with an optional bore of `bore` diameter (0: none).
 pub fn with_bore(outer: Loop2, bore: f64, root: f64) -> Result<Region2> {
     if !(bore.is_finite() && bore >= 0.0) {

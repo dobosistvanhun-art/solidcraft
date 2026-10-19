@@ -74,15 +74,20 @@ fn a_thin_loft_can_keep_one_end_closed() {
 
 #[test]
 fn a_thin_rectangle_to_circle_transition() {
-    let mut s = Session::default();
-    section(&mut s, "A", 0.0, 30.0, Some(20.0));
-    section(&mut s, "B", 50.0, 15.0, None);
-    let solid = {
-        let mut t = s.clone();
-        run(&mut t, "solid.loft", json!({"sections": [{"sketch": "A"}, {"sketch": "B"}]}));
-        volume(&mut t)
+    let transition = |thin: bool| {
+        let mut s = Session::default();
+        section(&mut s, "A", 0.0, 30.0, Some(20.0));
+        section(&mut s, "B", 50.0, 15.0, None);
+        let mut p = json!({"sections": [{"sketch": "A"}, {"sketch": "B"}]});
+        if thin {
+            p["thin"] = json!(true);
+            p["thickness"] = json!(1.5);
+        }
+        run(&mut s, "solid.loft", p);
+        s
     };
-    run(&mut s, "solid.loft", json!({"sections": [{"sketch": "A"}, {"sketch": "B"}], "thin": true, "thickness": 1.5}));
+    let solid = volume(&mut transition(false));
+    let mut s = transition(true);
     assert_eq!(feature_error(&s), None);
     let v = volume(&mut s);
     // The wall: about the side's area times the thickness, far less than the solid.

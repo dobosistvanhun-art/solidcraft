@@ -27,7 +27,8 @@ pub static COMMANDS: &[CommandSpec] = &[
          transverse for spur, axial for the worm and its wheel); chain (sprocket: ISO 606 / ANSI / motorcycle number such as 08B, 06B, 40, 428, 520); \
          width? (face width, a worm's length; a sprocket's default: its chain's tooth width); pressure_angle? (default 20 deg); helix_angle? (spur); \
          profile_shift? (spur, worm_wheel); quotient? (worm and worm_wheel: diameter quotient q, default 10); starts? (worm_wheel: the worm's starts, default 1); \
-         bore? (diameter); left_hand?: bool; base?: [x,y,z] (default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?, targets?, name?, body_name? \
+         bore? (diameter); left_hand?: bool; instead of teeth: ratio + driver_teeth (teeth = ratio × driver_teeth) or, for a sprocket, diameter (the pitch diameter wanted: the nearest whole number of teeth); \
+         a sprocket's chain may also be its own, pitch x roller x inner width in mm (12.7x8.51x7.75); base?: [x,y,z] (default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?, targets?, name?, body_name? \
          → also `geometry`: the pitch, tip and root diameters (and a worm pair's centre distance)",
     ),
     CommandSpec::new("solid.gear.sprocket", "Sprocket", sprocket).at("SOLID", "CREATE").icon("chain").params("as solid.gear with type: sprocket: chain, teeth; width?, bore?, base?, axis?, operation?, targets?"),
@@ -150,8 +151,37 @@ fn gear(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let base = point_param(s, p, "base", cmd)?.unwrap_or_else(|| solidcraft_doc::point_expr(Vec3::ZERO));
     let axis = axis_dir_param(p, cmd)?;
-    let teeth =
-        expr(p, "teeth").or_else(|| expr(p, "starts").filter(|_| gear == solidcraft_doc::GearType::Worm)).ok_or_else(|| bad(cmd, "give `teeth`"))?;
+    let given = |k: &str| expr(p, k).filter(|e| !e.trim().is_empty());
+    // The teeth: from a ratio to a driving wheel's teeth, or (a sprocket) from the pitch diameter
+    // wanted, else as given.
+    let derived = || -> Result<Option<solidcraft_doc::expr::Expr>> {
+        if let (Some(r), Some(z1)) = (given("ratio"), given("driver_teeth")) {
+            let (r, z1) = (s.doc.eval(&r, Kind::Unitless)?, s.doc.eval(&z1, Kind::Unitless)?);
+            let z = (r * z1).round();
+            if !(z.is_finite() && (6.0..=1000.0).contains(&z)) {
+                return Err(bad(cmd, format!("ratio × driver teeth gives {z} teeth (6…1000)")));
+            }
+            return Ok(Some(solidcraft_doc::expr::Expr::new(format!("{z}"))));
+        }
+        if gear == solidcraft_doc::GearType::Sprocket
+            && let Some(d) = given("diameter")
+        {
+            let d = s.doc.eval(&d, Kind::Length)?;
+            let c = solidcraft_doc::gear::chain(str_(p, "chain").unwrap_or_default()).ok_or_else(|| bad(cmd, "give a `chain`"))?;
+            if !(d > c.pitch * 1.2) {
+                return Err(bad(cmd, "the diameter is too small for this chain"));
+            }
+            let z = (std::f64::consts::PI / (c.pitch / d).asin()).round();
+            return Ok(Some(solidcraft_doc::expr::Expr::new(format!("{z}"))));
+        }
+        Ok(None)
+    };
+    let teeth = match derived()? {
+        Some(t) => t,
+        None => given("teeth")
+            .or_else(|| given("starts").filter(|_| gear == solidcraft_doc::GearType::Worm))
+            .ok_or_else(|| bad(cmd, "give `teeth` (or `ratio` and `driver_teeth`)"))?,
+    };
     check_expr(s, &teeth, Kind::Unitless, cmd, "teeth")?;
     let checked = |name: &str, kind: Kind| -> Result<Option<solidcraft_doc::expr::Expr>> {
         match expr(p, name).filter(|e| !e.trim().is_empty()) {

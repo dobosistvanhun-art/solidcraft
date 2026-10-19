@@ -105,3 +105,22 @@ fn gear_timings() {
         eprintln!("TIMING {cmd} {p}: {:?} ms={}", t.elapsed(), r["ms"]);
     }
 }
+
+#[test]
+fn teeth_from_a_ratio_or_a_diameter_and_a_chain_of_its_own() {
+    let mut s = Session::default();
+    // 15 × 2.8 = 42 teeth.
+    let r = run(&mut s, "solid.gear.sprocket", json!({"chain": "520", "ratio": 2.8, "driver_teeth": 15, "teeth": "", "name": "Rear"}));
+    let d = r["geometry"]["pitch_diameter"].as_f64().unwrap();
+    assert!((d - 15.875 / (std::f64::consts::PI / 42.0).sin()).abs() < 1e-6, "{r}");
+    // About 100 mm across the pitch circle with 08B: 25 teeth (101.33 mm).
+    let r = run(&mut s, "solid.gear.sprocket", json!({"chain": "08B", "diameter": 100, "name": "D100", "base": [150, 0, 0]}));
+    let d = r["geometry"]["pitch_diameter"].as_f64().unwrap();
+    assert!((d - 12.7 / (std::f64::consts::PI / 25.0).sin()).abs() < 1e-6, "{r}");
+    // A chain given by its pitch, roller and width.
+    run(&mut s, "solid.gear.sprocket", json!({"chain": "12.7x8.51x7.75", "teeth": 13, "base": [0, 150, 0]}));
+    assert_eq!(error(&s), None);
+    // A spur gear for a 1:3 pair with an 18-tooth pinion: 54 teeth.
+    let r = run(&mut s, "solid.gear", json!({"module": 1, "ratio": 3, "driver_teeth": 18, "width": 5, "base": [0, -150, 0]}));
+    assert!((r["geometry"]["pitch_diameter"].as_f64().unwrap() - 54.0).abs() < 1e-9, "{r}");
+}

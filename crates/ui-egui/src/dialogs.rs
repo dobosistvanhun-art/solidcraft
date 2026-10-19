@@ -645,6 +645,8 @@ impl Dialog {
                     fields: vec![
                         ("teeth", "20".into()),
                         ("module", length_default(s, "2")),
+                        ("ratio", String::new()),
+                        ("driver_teeth", String::new()),
                         ("width", length_default(s, "10")),
                         ("pressure_angle", "20 deg".into()),
                         ("helix_angle", "0 deg".into()),
@@ -658,7 +660,14 @@ impl Dialog {
             "solid.gear.sprocket" => Dialog::new(
                 Kind::Primitive {
                     cmd: "solid.gear.sprocket",
-                    fields: vec![("chain", "08B".into()), ("teeth", "17".into()), ("bore", length_default(s, "0"))],
+                    fields: vec![
+                        ("chain", "08B".into()),
+                        ("teeth", "17".into()),
+                        ("diameter", String::new()),
+                        ("ratio", String::new()),
+                        ("driver_teeth", String::new()),
+                        ("bore", length_default(s, "0")),
+                    ],
                     operation: 0,
                     at: None,
                 },
@@ -3075,7 +3084,31 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     Kind::Primitive { fields, operation, at, .. } => {
                         for (k, v) in fields.iter_mut() {
                             row_label(ui, k);
-                            enter |= field(ui, v);
+                            if *k == "chain" {
+                                // The chain catalogue: its number with pitch, roller and width; or a
+                                // chain of its own (pitch x roller x width).
+                                use solidcraft_engine::doc::gear::{CHAINS, chain};
+                                let mut labels: Vec<String> = CHAINS
+                                    .iter()
+                                    .map(|c| format!("{}  (p {} · roller {} · width {})", c.name, c.pitch, c.roller, c.inner_width))
+                                    .collect();
+                                labels.push("Custom: pitch x roller x width".into());
+                                let names: Vec<&str> = labels.iter().map(String::as_str).collect();
+                                let current = CHAINS.iter().position(|c| chain(v).is_some_and(|x| x.name == c.name));
+                                let mut sel = current.unwrap_or(CHAINS.len());
+                                let before = sel;
+                                ui.vertical(|ui| {
+                                    combo(ui, "sprocket_chain", &names, &mut sel);
+                                    if sel != before {
+                                        *v = CHAINS.get(sel).map(|c| c.name.to_string()).unwrap_or_else(|| "12.7x8.51x7.75".into());
+                                    }
+                                    if sel == CHAINS.len() {
+                                        enter |= field(ui, v);
+                                    }
+                                });
+                            } else {
+                                enter |= field(ui, v);
+                            }
                             ui.end_row();
                         }
                         if let Some((p, _)) = *at {

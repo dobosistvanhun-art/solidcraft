@@ -65,6 +65,21 @@ pub const CHAINS: &[Chain] = &[
 
 /// The chain with this name (`08B`, `ISO 08B`, `ANSI 40`, `520`; case and spaces ignored).
 pub fn chain(name: &str) -> Option<Chain> {
+    // A chain of its own: pitch x roller diameter x inner width (mm), e.g. 12.7x8.51x7.75.
+    let parts: Vec<f64> =
+        name.trim().to_ascii_lowercase().replace('×', "x").split('x').filter_map(|v| v.trim().replace(',', ".").parse::<f64>().ok()).collect();
+    if let [p, d1, b1] = parts[..]
+        && p.is_finite()
+        && d1.is_finite()
+        && b1.is_finite()
+        && p > 1.0
+        && d1 > 0.3 * p
+        && d1 < 0.9 * p
+        && b1 > 0.5
+        && p < 200.0
+    {
+        return Some(Chain { name: "custom", pitch: p, roller: d1, inner_width: b1 });
+    }
     let n: String = name.chars().filter(|c| !c.is_whitespace() && *c != '-').collect::<String>().to_ascii_uppercase();
     let n = n.strip_prefix("ISO").or_else(|| n.strip_prefix("ANSI")).or_else(|| n.strip_prefix("DIN")).unwrap_or(&n).to_string();
     CHAINS.iter().copied().find(|c| c.name == n)
@@ -479,6 +494,8 @@ mod tests {
         assert_eq!(chain("iso 08b").map(|c| c.pitch), Some(12.7));
         assert_eq!(chain("ANSI-40").map(|c| c.roller), Some(7.92));
         assert!(chain("99Z").is_none());
+        assert_eq!(chain("12.7x8.51x7.75").map(|c| c.roller), Some(8.51));
+        assert!(chain("12.7x12x7").is_none());
     }
 
     #[test]

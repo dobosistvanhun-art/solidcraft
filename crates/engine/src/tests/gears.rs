@@ -88,3 +88,20 @@ fn a_gear_saves_and_reopens() {
     let _ = std::fs::remove_file(&path);
     assert!(rel(volume(&mut r), v) < 1e-9);
 }
+
+#[test]
+#[ignore = "timing probe"]
+fn gear_timings() {
+    for (cmd, p) in [
+        ("solid.gear.worm", json!({"starts": 1, "module": 2, "quotient": 10, "width": 30})),
+        ("solid.gear.worm_wheel", json!({"teeth": 30, "module": 2, "width": 14})),
+        ("solid.gear", json!({"teeth": 40, "module": 2, "width": 10, "helix_angle": "20 deg"})),
+        ("solid.gear", json!({"teeth": 40, "module": 2, "width": 10})),
+        ("solid.gear.sprocket", json!({"chain": "520", "teeth": 45})),
+    ] {
+        let mut s = Session::default();
+        let t = std::time::Instant::now();
+        let r = run(&mut s, cmd, p.clone());
+        eprintln!("TIMING {cmd} {p}: {:?} ms={}", t.elapsed(), r["ms"]);
+    }
+}

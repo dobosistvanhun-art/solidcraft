@@ -3800,37 +3800,7 @@ fn feature_tools_with_constructor(
                         pressure: alpha,
                     };
                     let w = opt(width, Kind::Length, 4.0 * wm.lead().max(std::f64::consts::PI * wm.module * 4.0) / wm.starts as f64)?;
-                    if !(w.is_finite() && w > 1e-3 && w / wm.lead() < 150.0) {
-                        return Err(DocError::Invalid("the worm's length must be positive and at most 150 turns of its thread".into()));
-                    }
-                    let k = axis.normalized().ok_or_else(|| DocError::Invalid("gear axis".into()))?;
-                    let x0 = if k.cross(Vec3::X).len() > 1e-6 { (Vec3::X - k * k.dot(Vec3::X)).normalized() } else { Some(k.any_perp()) };
-                    let x0 = x0.ok_or_else(|| DocError::Invalid("gear axis".into()))?;
-                    // The core, and each start's thread swept as a coil's section is (from a turn
-                    // before the worm to a turn after it), joined and trimmed to the length.
-                    let root = wm.pitch_radius() - 1.2 * wm.module;
-                    let into = 0.2 * wm.module;
-                    let section = Region2 { outer: crate::gear::worm_thread_section(&wm, into)?, holes: Vec::new() };
-                    let lead = wm.lead();
-                    let (axis_dir, pitch) = if *left_hand { (k * -1.0, -lead) } else { (k, lead) };
-                    let mut body = kernel::cylinder(base, k, root, w)?;
-                    for i in 0..wm.starts {
-                        let at = base + k * (lead / wm.starts as f64 * i as f64 - lead);
-                        let plane = Plane { origin: at, x: x0, y: k };
-                        let thread = kernel::sweep_helix(&plane, &section, at, axis_dir, pitch, (w + 2.0 * lead) / lead)?;
-                        body = kernel::boolean(&body, &thread, BoolOp::Union)?.ok_or_else(|| DocError::Invalid("worm: the thread and core did not join".into()))?;
-                    }
-                    let tip = wm.pitch_radius() + wm.module;
-                    let trim = kernel::cylinder(base, k, tip + wm.module, w)?;
-                    body = kernel::boolean(&body, &trim, BoolOp::Intersect)?.ok_or_else(|| DocError::Invalid("worm: nothing left after trimming".into()))?;
-                    if bore_d > 0.0 {
-                        if bore_d >= 2.0 * root * 0.98 {
-                            return Err(DocError::Invalid(format!("the bore ({bore_d:.2} mm) is as large as the root circle ({:.2} mm)", 2.0 * root)));
-                        }
-                        let hole = kernel::cylinder(base - k * 1.0, k, bore_d / 2.0, w + 2.0)?;
-                        body = kernel::boolean(&body, &hole, BoolOp::Cut)?.ok_or_else(|| DocError::Invalid("gear: the bore removed everything".into()))?;
-                    }
-                    return Ok(unnamed(vec![body]));
+                    (crate::gear::worm_section(&wm)?, 2.0 * (wm.pitch_radius() - 1.2 * wm.module), w, Some(wm.lead()))
                 }
                 crate::GearType::WormWheel => {
                     let m = module_mm()?;

@@ -2907,6 +2907,24 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         row_label(ui, "Operation");
                         combo(ui, "lf_op", &OP_LABELS, operation);
                         ui.end_row();
+                        // Thin Loft: a wall of constant thickness, its ends open.
+                        row_label(ui, "Thin");
+                        extra_check(ui, &mut d.extra, "thin");
+                        ui.end_row();
+                        if d.extra.get("thin").and_then(Value::as_bool).unwrap_or(false) {
+                            row_label(ui, "Thickness");
+                            enter |= extra_field(ui, &mut d.extra, "thickness", "2 mm");
+                            ui.end_row();
+                            row_label(ui, "Side");
+                            extra_choice(ui, &mut d.extra, "lf_side", "side", &[("Inside", "inside"), ("Outside", "outside"), ("Both", "both")]);
+                            ui.end_row();
+                            row_label(ui, "Closed Start");
+                            extra_check(ui, &mut d.extra, "closed_start");
+                            ui.end_row();
+                            row_label(ui, "Closed End");
+                            extra_check(ui, &mut d.extra, "closed_end");
+                            ui.end_row();
+                        }
                     }
                     Kind::Sweep { operation, opts } => {
                         enter |= crate::dialogs_sweep::rows(ui, opts, "sw");
@@ -5229,9 +5247,18 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Loft { sections, operation, targets } => {
+        FeatureKind::Loft { sections, operation, targets, thin } => {
             let mut d = start("solid.loft")?;
             d.kind = Kind::Loft { operation: op_index(operation) };
+            if let Some(t) = thin {
+                d.extra.insert("thin".into(), json!(true));
+                d.extra.insert("thickness".into(), json!(t.thickness.to_string()));
+                if !t.side.is_empty() {
+                    d.extra.insert("side".into(), json!(t.side));
+                }
+                d.extra.insert("closed_start".into(), json!(t.closed_start));
+                d.extra.insert("closed_end".into(), json!(t.closed_end));
+            }
             if let Some(inp) = d.inputs.first_mut() {
                 inp.items = sections
                     .iter()

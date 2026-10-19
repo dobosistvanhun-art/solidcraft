@@ -133,3 +133,28 @@ fn worm_normals_probe() {
         eprintln!("PROBE turns={turns} vol={} faces: {:?}", m.measure().volume, stats);
     }
 }
+
+#[test]
+#[ignore = "worm display mesh probe"]
+fn worm_display_mesh_probe() {
+    let mut s = Session::default();
+    run(&mut s, "solid.gear.worm", json!({"starts": 1, "module": 2, "quotient": 10, "width": 3}));
+    let st = s.model.state();
+    let b = &st.bodies[0];
+    let m = b.mesh();
+    let (mut n, mut out, mut agree, mut bad) = (0, 0, 0, 0);
+    for t in &m.triangles {
+        let [a, bb, c] = [m.positions[t[0] as usize], m.positions[t[1] as usize], m.positions[t[2] as usize]];
+        let geo = (bb - a).cross(c - a);
+        let mid = (a + bb + c) * (1.0 / 3.0);
+        if geo.len() < 1e-12 { continue; }
+        let side = (geo.normalized().unwrap().z).abs() < 0.9;
+        if !side { continue; }
+        n += 1;
+        if geo.dot(Vec3::new(mid.x, mid.y, 0.0)) > 0.0 { out += 1; }
+        let nn = m.normals.get(t[0] as usize).copied().unwrap_or(Vec3::ZERO);
+        if nn.dot(geo) > 0.0 { agree += 1; }
+        if !(nn.len() > 0.5) { bad += 1; }
+    }
+    eprintln!("DISPLAY side triangles {n}: outward {out}, normals agree {agree}, bad normals {bad}; positions {} normals {}", m.positions.len(), m.normals.len());
+}

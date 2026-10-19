@@ -209,10 +209,10 @@ pub fn involute_section(g: &Involute) -> Result<Loop2> {
     for k in 0..z {
         let c = step * k as f64;
         // Right flank: outward, turned by c - off.
-        let right = hermite(|t| rot(inv_pt(t), c - off), |t| rot(inv_d(t), c - off), t0, t1, 4);
+        let right = hermite(|t| rot(inv_pt(t), c - off), |t| rot(inv_d(t), c - off), t0, t1, 2);
         // Left flank: the mirror image, inward.
         let mir = |v: Vec2| Vec2::new(v.x, -v.y);
-        let left = reversed(hermite(|t| rot(mir(inv_pt(t)), c + off), |t| rot(mir(inv_d(t)), c + off), t0, t1, 4));
+        let left = reversed(hermite(|t| rot(mir(inv_pt(t)), c + off), |t| rot(mir(inv_d(t)), c + off), t0, t1, 2));
         let a_root = half(r0);
         if rf < rb - 1e-9 {
             // Below the base circle the flank runs straight down to the root circle.
@@ -385,14 +385,14 @@ pub fn worm_section(w: &Worm) -> Result<Loop2> {
             |r| Vec2::from_angle(c - half(r)) + Vec2::from_angle(c - half(r)).perp() * (-dhalf * r),
             rf,
             ra,
-            6,
+            2,
         );
         let upper = reversed(hermite(
             |r| Vec2::from_angle(c + half(r)) * r,
             |r| Vec2::from_angle(c + half(r)) + Vec2::from_angle(c + half(r)).perp() * (dhalf * r),
             rf,
             ra,
-            6,
+            2,
         ));
         segs.extend(lower);
         segs.push(circle_arc(ra, c - ha, c + ha));

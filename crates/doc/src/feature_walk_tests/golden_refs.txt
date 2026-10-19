@@ -118,6 +118,7 @@ align
   remap_bodies: bodies[0]
 coil
   remap_bodies: targets[0]
+gear
 sheet_base
   sketches: [1]
   remap_refs: sketch

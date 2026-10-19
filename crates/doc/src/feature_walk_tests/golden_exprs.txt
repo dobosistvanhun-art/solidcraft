@@ -235,6 +235,18 @@ coil
     Section size = coil.section_size (Length)
     Start angle = coil.start_angle (Angle)
   expressions: coil.diameter, coil.pitch, coil.turns, coil.section_size, coil.start_angle, coil.x, coil.y, coil.z
+gear
+  inputs:
+    Teeth = gear.teeth (Unitless)
+    Module = gear.module (Length)
+    Width = gear.width (Length)
+    Pressure angle = gear.alpha (Angle)
+    Helix angle = gear.beta (Angle)
+    Profile shift = gear.x_shift (Unitless)
+    Diameter quotient = gear.q (Unitless)
+    Worm starts = gear.starts (Unitless)
+    Bore = gear.bore (Length)
+  expressions: gear.teeth, gear.module, gear.width, gear.alpha, gear.beta, gear.x_shift, gear.q, gear.starts, gear.bore, gear.x, gear.y, gear.z
 sheet_base
 sheet_contour
   inputs:

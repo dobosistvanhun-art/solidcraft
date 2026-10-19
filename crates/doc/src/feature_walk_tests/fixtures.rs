@@ -111,6 +111,10 @@ pub(super) fn fixtures() -> Vec<(&'static str, Value)> {
             "coil",
             json!({"type": "coil", "base": ["coil.x", "coil.y", "coil.z"], "diameter": "coil.diameter", "pitch": "coil.pitch", "turns": "coil.turns", "section_size": "coil.section_size", "start_angle": "coil.start_angle"}),
         ),
+        (
+            "gear",
+            json!({"type": "gear", "base": ["gear.x", "gear.y", "gear.z"], "gear": "worm_wheel", "teeth": "gear.teeth", "module": "gear.module", "width": "gear.width", "pressure_angle": "gear.alpha", "helix_angle": "gear.beta", "profile_shift": "gear.x_shift", "quotient": "gear.q", "starts": "gear.starts", "bore": "gear.bore"}),
+        ),
         ("sheet_base", json!({"type": "sheet_base", "sketch": 1, "profiles": {"type": "all"}})),
         ("sheet_contour", json!({"type": "sheet_contour", "sketch": 1, "curves": ["l1"], "distance": "contour.distance"})),
         (

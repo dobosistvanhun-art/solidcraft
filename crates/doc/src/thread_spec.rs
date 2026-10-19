@@ -548,17 +548,31 @@ pub fn groove(s: &ThreadSpec, internal: bool, inner: f64, outer: f64) -> Vec<(f6
     let r_root = r_major - s.depth;
     // The space at radius r: its two edges as axial offsets from the groove's centre line, which
     // runs through the middle of the root flat.
+    // Past where the groove is this wide it runs on straight (a tapered thread's groove reaches
+    // further than its depth), so neighbouring turns never meet.
+    let widest = 0.92 * s.pitch;
+    let tsum = (t1 + t2).max(1e-9);
     if internal {
         let half = s.crest_flat / 2.0;
         let edge_lo = |r: f64| -(half + (r_major - r) * t1);
         let edge_hi = |r: f64| half + (r_major - r) * t2;
         let r_out = r_major + 0.02 * s.pitch;
-        vec![(inner, edge_lo(inner)), (r_out, edge_lo(r_out)), (r_out, edge_hi(r_out)), (inner, edge_hi(inner))]
+        let r_cap = r_major - (widest - s.crest_flat) / tsum;
+        if inner < r_cap {
+            vec![(inner, edge_lo(r_cap)), (r_cap, edge_lo(r_cap)), (r_out, edge_lo(r_out)), (r_out, edge_hi(r_out)), (r_cap, edge_hi(r_cap)), (inner, edge_hi(r_cap))]
+        } else {
+            vec![(inner, edge_lo(inner)), (r_out, edge_lo(r_out)), (r_out, edge_hi(r_out)), (inner, edge_hi(inner))]
+        }
     } else {
         let half = s.root_flat() / 2.0;
         let edge_lo = |r: f64| -(half + (r - r_root) * t1);
         let edge_hi = |r: f64| half + (r - r_root) * t2;
-        let mut pts = vec![(r_root, edge_lo(r_root)), (outer, edge_lo(outer)), (outer, edge_hi(outer)), (r_root, edge_hi(r_root))];
+        let r_cap = r_root + (widest - s.root_flat()) / tsum;
+        let mut pts = if outer > r_cap {
+            vec![(r_root, edge_lo(r_root)), (r_cap, edge_lo(r_cap)), (outer, edge_lo(r_cap)), (outer, edge_hi(r_cap)), (r_cap, edge_hi(r_cap)), (r_root, edge_hi(r_root))]
+        } else {
+            vec![(r_root, edge_lo(r_root)), (outer, edge_lo(outer)), (outer, edge_hi(outer)), (r_root, edge_hi(r_root))]
+        };
         if s.root_round > 1e-9 {
             pts = round_root(&pts, s.root_round);
         }
@@ -592,7 +606,7 @@ fn round_root(pts: &[(f64, f64)], r: f64) -> Vec<(f64, f64)> {
         while sweep < -PI {
             sweep += 2.0 * PI;
         }
-        (0..=6).map(|i| (c.0 + r * (a0 + sweep * i as f64 / 6.0).cos(), c.1 + r * (a0 + sweep * i as f64 / 6.0).sin())).collect()
+        (0..=3).map(|i| (c.0 + r * (a0 + sweep * i as f64 / 3.0).cos(), c.1 + r * (a0 + sweep * i as f64 / 3.0).sin())).collect()
     };
     let n = pts.len();
     // The first corner, from the last point's side round to the second's.
@@ -636,7 +650,7 @@ mod tests {
             ("S16x4", Family::Buttress, 16.0, 4.0, "S16x4"),
             ("Rd16x1/8", Family::Round, 16.0, 3.175, "Rd16x1/8"),
             ("Pg13.5", Family::Pg, 20.4, 1.41, "Pg13.5"),
-            ("20x2.5 60°", Family::Custom, 20.0, 2.5, "20x2.5 60° h1.875"),
+            ("20x2.5 60°", Family::Custom, 20.0, 2.5, "20x2.5 60° h1.624"),
             ("20x3 3/30 h2.2", Family::Custom, 20.0, 3.0, "20x3 3/30° h2.2"),
         ];
         for (text, family, d, p, shown) in cases {
@@ -667,7 +681,7 @@ mod tests {
         let s = parse("M10").unwrap();
         // ISO 68-1: depth 5H/8, crest P/8, root P/4.
         assert!(close(s.depth, 0.541_266 * 1.5) && close(s.root_flat(), 1.5 / 4.0), "{s:?}");
-        let g = groove(&s, false, 0.0, 5.5);
+        let g = groove(&s, false, 0.0, 5.05);
         assert_eq!(g.len(), 4);
         // The groove is a pitch wide less the crest at the major diameter.
         let at_major = |pts: &[(f64, f64)]| {

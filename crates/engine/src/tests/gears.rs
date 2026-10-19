@@ -156,5 +156,9 @@ fn worm_display_mesh_probe() {
         if nn.dot(geo) > 0.0 { agree += 1; }
         if !(nn.len() > 0.5) { bad += 1; }
     }
+    for (i, e) in m.edges.iter().enumerate().take(40) {
+        let longest = e.windows(2).map(|w| w[0].dist(w[1])).fold(0.0, f64::max);
+        eprintln!("EDGE {i}: {} points, longest step {longest:.3}, seam {:?}", e.len(), m.seams.get(i));
+    }
     eprintln!("DISPLAY side triangles {n}: outward {out}, normals agree {agree}, bad normals {bad}; positions {} normals {}", m.positions.len(), m.normals.len());
 }

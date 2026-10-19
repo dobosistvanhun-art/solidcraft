@@ -1,8 +1,8 @@
 //! Inline dimensions while drawing in a sketch. Once a shape's first point is down, value
 //! boxes (line length and angle, rectangle width and height, circle diameter…) sit next to the
 //! segment they measure and follow the cursor. Typing goes straight into the first box and
-//! locks that value; Tab moves to the next box; Enter places the shape with the typed values,
-//! which become dimension constraints. Values are expressions ("25", "1 in", "d1 * 2").
+//! locks that value; Tab, or Enter after typing, moves to the next box; Enter in a box left as
+//! it is places the shape with the typed values, which become dimension constraints. Values are expressions ("25", "1 in", "d1 * 2").
 
 use egui::{Pos2, vec2};
 use serde_json::{Value, json};
@@ -466,6 +466,27 @@ fn boxes(app: &SolveApp, ui: &mut egui::Ui, proj: &Proj, t: &mut Tool) -> Option
         ui.ctx().memory_mut(|memory| memory.request_focus(id));
     }
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    // Enter after typing into a box moves on to the next box still following the cursor (as Tab
+    // does, for keyboards without a usable Tab); Enter in a box left as it is places the shape.
+    if enter {
+        let typed = (0..t.dims.len()).find(|i| {
+            let id = egui::Id::new(("sc_dim", *i));
+            ui.ctx().memory(|m| m.has_focus(id) || m.had_focus_last_frame(id)) && t.dims.get(*i).is_some_and(|b| b.locked)
+        });
+        if let Some(next) = typed.and_then(|i| (i + 1..t.dims.len()).find(|j| t.dims.get(*j).is_some_and(|b| !b.locked))) {
+            let id = egui::Id::new(("sc_dim", next));
+            if let Some(dimension) = t.dims.get(next) {
+                let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(dimension.value.chars().count()),
+                )));
+                state.store(ui.ctx(), id);
+            }
+            ui.ctx().memory_mut(|memory| memory.request_focus(id));
+            return None;
+        }
+    }
     let nothing = ui.ctx().memory(|m| m.focused().is_none());
     (enter && (any_focused || nothing)).then_some(e)
 }
@@ -503,3 +524,7 @@ mod typed_intent_tests;
 #[cfg(test)]
 #[path = "sketch_clover_ui_tests.rs"]
 mod clover_ui_tests;
+
+#[cfg(test)]
+#[path = "sketch_enter_ui_tests.rs"]
+mod enter_ui_tests;

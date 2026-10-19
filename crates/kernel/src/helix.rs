@@ -134,7 +134,7 @@ const STATIONS_PER_TURN: f64 = 12.0;
 fn smooth_helix(plane: &Plane, profile: &NumberedLoop, o: Vec3, k: Vec3, pitch: f64, turns: f64) -> Result<Body> {
     let lp = &profile.lp;
     let nseg = lp.segs.len();
-    if nseg == 0 || nseg > 64 {
+    if nseg == 0 || nseg > 1200 {
         return Err(KernelError::Invalid("helix profile".into()));
     }
     let n = ((turns * STATIONS_PER_TURN).ceil() as usize).clamp(4, 4800);
@@ -200,7 +200,7 @@ fn smooth_helix(plane: &Plane, profile: &NumberedLoop, o: Vec3, k: Vec3, pitch: 
         let w0: mt::Wire = e0.iter().cloned().collect();
         let w1: mt::Wire = e1.iter().cloned().collect();
         // Either orientation of the walls; keep the one that measures as a proper solid.
-        let expected = lp_area_path(plane, lp, o, k, turns);
+        let expected = lp_area_path(plane, lp, o, k, pitch, turns);
         // A coarse mesh (within ~10%) is enough to tell a proper solid from an empty or inside-out one.
         let section_tol = (lp.signed_area().abs().sqrt() * 0.05).max(1e-3);
         for ws in [walls.clone(), walls.iter().map(|(f, prov)| (f.inverse(), prov.clone())).collect()] {
@@ -214,12 +214,16 @@ fn smooth_helix(plane: &Plane, profile: &NumberedLoop, o: Vec3, k: Vec3, pitch: 
     })
 }
 
-/// Pappus estimate of a screw sweep's volume: section area × the centroid's path around the axis.
-fn lp_area_path(plane: &Plane, lp: &Loop2, o: Vec3, k: Vec3, turns: f64) -> f64 {
+/// Pappus estimate of a screw sweep's volume: section area × how far the centroid moves across the
+/// section's plane (round the axis for a section through the axis, as a coil's; along the axis
+/// for a section across it, as a helical gear's or a worm's; both for one in between).
+fn lp_area_path(plane: &Plane, lp: &Loop2, o: Vec3, k: Vec3, pitch: f64, turns: f64) -> f64 {
     let c = plane.to_world(lp.centroid());
     let d = c - o;
-    let r = (d - k * d.dot(k)).len();
-    lp.signed_area().abs() * std::f64::consts::TAU * r * turns
+    let radial = d - k * d.dot(k);
+    // The centroid's velocity per radian: round the axis, and along it.
+    let velocity = k.cross(radial) + k * (pitch / std::f64::consts::TAU);
+    lp.signed_area().abs() * velocity.dot(plane.normal()).abs() * std::f64::consts::TAU * turns
 }
 
 /// A solid from a planar loop of straight segments to an apex point off its plane (a pyramid).

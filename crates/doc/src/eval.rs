@@ -4514,7 +4514,13 @@ fn trim_to_body(tools: Vec<Traced>, target: &ModelBody, dist_to_start: impl Fn(V
 /// are offset in their planes (inside, outside or both, as a Thin Extrude's wall), the inner
 /// sections lofted the same way and cut out of the outer loft. A closed end keeps a floor as thick
 /// as the wall: the inner loft starts that far into the loft.
-fn thin_loft_tools(vals: &BTreeMap<String, Value>, st: &ModelState, sections: &[crate::LoftSection], thin: &crate::LoftThin, tools: Vec<Traced>) -> Result<Vec<Traced>> {
+fn thin_loft_tools(
+    vals: &BTreeMap<String, Value>,
+    st: &ModelState,
+    sections: &[crate::LoftSection],
+    thin: &crate::LoftThin,
+    tools: Vec<Traced>,
+) -> Result<Vec<Traced>> {
     let t = val(vals, &thin.thickness, Kind::Length)?;
     if !(t.is_finite() && t > 1e-6) {
         return Err(DocError::Invalid("the thin loft's thickness must be positive".into()));
@@ -4575,7 +4581,8 @@ fn thin_loft_tools(vals: &BTreeMap<String, Value>, st: &ModelState, sections: &[
         _ => Traced::unnamed(kernel::loft(&outer)?),
     };
     let cavity = Traced::unnamed(kernel::loft(&inner).map_err(|e| DocError::Invalid(format!("thin loft: the inside: {e}")))?);
-    let wall = kernel::boolean(&outer_tool.body, &cavity.body, BoolOp::Cut)?.ok_or_else(|| DocError::Invalid("thin loft: nothing is left of the wall".into()))?;
+    let wall = kernel::boolean(&outer_tool.body, &cavity.body, BoolOp::Cut)?
+        .ok_or_else(|| DocError::Invalid("thin loft: nothing is left of the wall".into()))?;
     Ok(vec![Traced::step(wall, &[&outer_tool, &cavity])])
 }
 

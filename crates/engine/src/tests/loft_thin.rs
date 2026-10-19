@@ -28,7 +28,8 @@ fn cone(side: &str, extra: Value) -> Session {
     let mut s = Session::default();
     section(&mut s, "A", 0.0, 30.0, None);
     section(&mut s, "B", 50.0, 15.0, None);
-    let mut p = json!({"sections": [{"sketch": "A"}, {"sketch": "B"}], "thin": true, "thickness": "2 mm", "side": side, "name": "Duct", "body_name": "Duct"});
+    let mut p =
+        json!({"sections": [{"sketch": "A"}, {"sketch": "B"}], "thin": true, "thickness": "2 mm", "side": side, "name": "Duct", "body_name": "Duct"});
     if let (Some(p), Some(e)) = (p.as_object_mut(), extra.as_object()) {
         p.extend(e.clone());
     }

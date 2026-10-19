@@ -38,9 +38,8 @@ fn cone(side: &str, extra: Value) -> Session {
 
 #[test]
 fn a_thin_cone_loft_is_a_wall_open_at_both_ends() {
-    let t = 2.0;
-    // The wall is square to the cone's side: across the radius it is t / cos(slope).
-    let k = t * (50.0f64.hypot(15.0)) / 50.0;
+    // The wall is 2 mm across each section, in its plane.
+    let k = 2.0;
     for (side, (o1, o2), (i1, i2)) in [
         ("inside", (30.0, 15.0), (30.0 - k, 15.0 - k)),
         ("outside", (30.0 + k, 15.0 + k), (30.0, 15.0)),
@@ -57,13 +56,12 @@ fn a_thin_cone_loft_is_a_wall_open_at_both_ends() {
 
 #[test]
 fn a_thin_loft_can_keep_one_end_closed() {
-    let mut open = cone("inside", json!({}));
     let mut cup = cone("inside", json!({"closed_start": true}));
     assert_eq!(feature_error(&cup), None);
-    let (vo, vc) = (volume(&mut open), volume(&mut cup));
-    // The floor: about a disc of the inner radius at the bottom, 2 mm thick.
-    let floor = PI * 28.0 * 28.0 * 2.0;
-    assert!(rel(vc - vo, floor) < 0.05, "{vc} - {vo} vs {floor}");
+    // The inside starts 2 mm up: a floor as thick as the wall.
+    let want = frustum(30.0, 15.0, 50.0) - frustum(28.0, 13.0, 48.0);
+    let got = volume(&mut cup);
+    assert!(rel(got, want) < 1e-2, "{got} vs {want}");
     // Both ends closed is refused before it is added.
     let mut s = Session::default();
     section(&mut s, "A", 0.0, 30.0, None);

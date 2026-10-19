@@ -280,15 +280,15 @@ pub struct ThinWall {
 }
 
 /// Thin Loft: the loft hollowed to a wall of constant thickness, its end sections open (a duct,
-/// a funnel, a nozzle), or one of them kept closed (a cup).
+/// a funnel, a nozzle), or one of them kept closed (a cup, with a floor as thick as the wall).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 pub struct LoftThin {
-    /// The wall thickness (expression), measured square to the loft's faces.
+    /// The wall thickness (expression), measured across each section in its plane.
     #[walk(length = "Thickness")]
     pub thickness: Expr,
-    /// Where the wall lies against the lofted faces: `inside` (empty, the default: the sections
-    /// are the outside of the wall), `outside` (the sections are its inside) or `both` (half
-    /// either side).
+    /// Where the wall lies against the sections: `inside` (empty, the default: the sections are
+    /// the outside of the wall), `outside` (the sections are its inside) or `both` (half either
+    /// side).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub side: String,
     /// Keep the first section's end closed (a floor).

@@ -4510,72 +4510,80 @@ fn trim_to_body(tools: Vec<Traced>, target: &ModelBody, dist_to_start: impl Fn(V
     Ok(out)
 }
 
-/// One point on each face of a body (a triangle centre, so it lies on the face).
-/// `mb` hollowed to walls of thickness `t`, the faces at the points `open` removed, the walls
-/// lying `direction` of its faces (inside, outside or both): the shell, and the operands of the
-/// operation that made it.
-fn shell_walls(mb: &ModelBody, open: &[Vec3], t: f64, direction: &str) -> Result<(Body, Vec<Traced>)> {
-    let input = mb.traced();
-    Ok(match direction {
-        "" | "inside" => (kernel::shell(&mb.body, open, t)?, vec![input]),
-        "outside" | "both" => {
-            // Walls grown out of the faces (or half out, half in): an offset body less a
-            // cavity, the open faces pushed out of the way.
-            if !(t > 1e-6) {
-                return Err(DocError::Invalid("shell thickness must be positive".into()));
-            }
-            let (out, inn) = if direction == "outside" { (t, 0.0) } else { (t / 2.0, t / 2.0) };
-            let samples = face_samples(mb);
-            let opened = |p: &Vec3| open.iter().any(|q| crate::appearance::face_index_at(mb, *q) == crate::appearance::face_index_at(mb, *p));
-            let walls: Vec<Vec3> = samples.iter().filter(|p| !opened(p)).copied().collect();
-            let outer = Traced::step(kernel::offset_faces(&mb.body, &walls, out)?, &[&input]);
-            // The cavity's faces are the shell's inner walls, named after the faces they offset.
-            let inner = mb.before_as(crate::lineage::Operand::Inner(mb.name.clone()));
-            let cavity = if inn > 0.0 { Traced::step(kernel::offset_faces(&mb.body, &walls, -inn)?, &[&inner]) } else { inner };
-            let cavity = Traced::step(kernel::offset_faces(&cavity.body, open, 2.0 * t + 1.0)?, &[&cavity]);
-            let cut = kernel::boolean(&outer.body, &cavity.body, BoolOp::Cut)?.ok_or_else(|| DocError::Invalid("the shell removed everything".into()))?;
-            (cut, vec![outer, cavity])
-        }
-        o => return Err(DocError::Invalid(format!("unknown shell direction `{o}` (inside, outside or both)"))),
-    })
-}
-
-/// A point inside each end of a loft (`None` where it closes to a point), in world coordinates:
-/// the faces a Thin Loft opens.
-fn loft_ends(st: &ModelState, sections: &[crate::LoftSection]) -> Result<[Option<Vec3>; 2]> {
-    let end = |sec: Option<&crate::LoftSection>| -> Result<Option<Vec3>> {
-        let Some(sec) = sec else { return Ok(None) };
-        if sec.point.is_some() {
-            return Ok(None);
-        }
-        let ss = st.sketch(sec.sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {}", sec.sketch)))?;
-        let regions = solidcraft_sketch::merge_regions(&select_profiles(ss, &sec.profiles)?);
-        Ok(regions.first().map(|r| ss.plane.to_world(r.interior_point())))
-    };
-    Ok([end(sections.first())?, end(sections.last())?])
-}
-
-/// The loft's tools hollowed to a Thin Loft's wall, its open ends removed.
-fn thin_loft_tools(vals: &BTreeMap<String, Value>, st: &ModelState, f: &Feature, sections: &[crate::LoftSection], thin: &crate::LoftThin, tools: Vec<Traced>) -> Result<Vec<Traced>> {
+/// A Thin Loft: the loft's wall, `thin.thickness` thick across each section's plane. The sections
+/// are offset in their planes (inside, outside or both, as a Thin Extrude's wall), the inner
+/// sections lofted the same way and cut out of the outer loft. A closed end keeps a floor as thick
+/// as the wall: the inner loft starts that far into the loft.
+fn thin_loft_tools(vals: &BTreeMap<String, Value>, st: &ModelState, sections: &[crate::LoftSection], thin: &crate::LoftThin, tools: Vec<Traced>) -> Result<Vec<Traced>> {
     let t = val(vals, &thin.thickness, Kind::Length)?;
     if !(t.is_finite() && t > 1e-6) {
         return Err(DocError::Invalid("the thin loft's thickness must be positive".into()));
     }
-    let [start, end] = loft_ends(st, sections)?;
-    let open: Vec<Vec3> = [(start, thin.closed_start), (end, thin.closed_end)].into_iter().filter(|(_, closed)| !closed).filter_map(|(p, _)| p).collect();
-    if open.is_empty() {
-        return Err(DocError::Invalid("a thin loft needs at least one open end (a loft to a point keeps its apex closed)".into()));
+    if sections.iter().any(|s| s.point.is_some()) {
+        return Err(DocError::Invalid("not supported yet: a thin loft to a point".into()));
     }
-    tools
-        .into_iter()
-        .map(|tool| {
-            let mb = ModelBody::traced_new(f.name.clone(), tool, f.id);
-            let (nb, operands) = shell_walls(&mb, &open, t, &thin.side).map_err(|e| DocError::Invalid(format!("thin loft: {e}")))?;
-            Ok(Traced::step(nb, &operands.iter().collect::<Vec<_>>()))
-        })
-        .collect()
+    if thin.closed_start && thin.closed_end {
+        return Err(DocError::Invalid("a thin loft needs at least one open end".into()));
+    }
+    let (inside, outside) = match thin.side.as_str() {
+        "" | "inside" => (t, 0.0),
+        "outside" => (0.0, t),
+        "both" => (t / 2.0, t / 2.0),
+        o => return Err(DocError::Invalid(format!("unknown thin loft side `{o}` (inside, outside or both)"))),
+    };
+    // Each section's outer and inner outline, in its plane.
+    let mut outer: Vec<(Plane, solidcraft_geom::Loop2)> = Vec::new();
+    let mut inner: Vec<(Plane, solidcraft_geom::Loop2)> = Vec::new();
+    for sec in sections {
+        let ss = st.sketch(sec.sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {}", sec.sketch)))?;
+        let regions = solidcraft_sketch::merge_regions(&select_profiles(ss, &sec.profiles)?);
+        let [r] = &regions[..] else { return Err(DocError::Invalid("each loft section must be one profile".into())) };
+        let lp = r.outer.ccw();
+        let wall = solidcraft_sketch::thin_wall_regions(std::slice::from_ref(&lp.segs), inside, outside)
+            .map_err(|e| DocError::Invalid(format!("thin loft: section {}: {e}", ss.name)))?;
+        let [w] = &wall[..] else { return Err(DocError::Invalid(format!("thin loft: the wall of section {} is not one ring", ss.name))) };
+        let [hole] = &w.holes[..] else {
+            return Err(DocError::Invalid(format!("thin loft: section {} is too small for the wall (nothing is left inside)", ss.name)));
+        };
+        // Unmoved outlines stay the section as drawn.
+        outer.push((ss.plane, if outside > 0.0 { w.outer.clone() } else { lp.clone() }));
+        inner.push((ss.plane, if inside > 0.0 { hole.clone() } else { lp }));
+    }
+    // A closed end: the inner loft starts the wall's thickness into the loft.
+    let into = |from: usize, to: usize| -> Result<Plane> {
+        let (Some((pa, la)), Some((pb, lb))) = (inner.get(from), inner.get(to)) else { return Err(DocError::Invalid("loft sections".into())) };
+        let n = pa.normal();
+        let towards = pb.to_world(lb.centroid()) - pa.to_world(la.centroid());
+        let gap = towards.dot(n).abs();
+        if gap <= t * 1.01 {
+            return Err(DocError::Invalid("thin loft: the closed end's floor is as thick as the sections are apart".into()));
+        }
+        Ok(pa.offset(if towards.dot(n) >= 0.0 { t } else { -t }))
+    };
+    let last = inner.len().saturating_sub(1);
+    if thin.closed_start {
+        let pl = into(0, 1)?;
+        if let Some(s) = inner.first_mut() {
+            s.0 = pl;
+        }
+    }
+    if thin.closed_end {
+        let pl = into(last, last.saturating_sub(1))?;
+        if let Some(s) = inner.last_mut() {
+            s.0 = pl;
+        }
+    }
+    // The outer loft is the feature's own (its faces named) when the wall lies inside it.
+    let outer_tool = match (outside > 0.0, tools.into_iter().next()) {
+        (false, Some(tool)) => tool,
+        _ => Traced::unnamed(kernel::loft(&outer)?),
+    };
+    let cavity = Traced::unnamed(kernel::loft(&inner).map_err(|e| DocError::Invalid(format!("thin loft: the inside: {e}")))?);
+    let wall = kernel::boolean(&outer_tool.body, &cavity.body, BoolOp::Cut)?.ok_or_else(|| DocError::Invalid("thin loft: nothing is left of the wall".into()))?;
+    Ok(vec![Traced::step(wall, &[&outer_tool, &cavity])])
 }
 
+/// One point on each face of a body (a triangle centre, so it lies on the face).
 fn face_samples(b: &ModelBody) -> Vec<Vec3> {
     let m = b.mesh();
     let mut out: Vec<Option<Vec3>> = Vec::new();
@@ -4876,7 +4884,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             let mut tools = feature_tools_with_constructor(doc, vals, f, st, &mut constructor)?;
             // Thin Loft: the loft hollowed, its ends open.
             if let FeatureKind::Loft { sections, thin: Some(thin), .. } = &f.kind {
-                tools = thin_loft_tools(vals, st, f, sections, thin, tools)?;
+                tools = thin_loft_tools(vals, st, sections, thin, tools)?;
             }
             // Cuts through sheet metal become cut-outs of its flat pattern.
             if matches!(operation, Operation::Cut | Operation::Intersect) && matches!(f.kind, FeatureKind::Extrude { .. }) && !st.sheets.is_empty() {
@@ -4942,7 +4950,32 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             let i = body_at(st, body, &crate::plain(faces))?;
             let Some(mb) = st.bodies.get(i).cloned() else { return Err(DocError::Invalid("body".into())) };
             let open = if *tangent_chain { smooth_chain(&mb, &crate::plain(faces)) } else { crate::plain(faces) };
-            let (nb, operands) = shell_walls(&mb, &open, t, direction)?;
+            let input = mb.traced();
+            // The shell, and the operands of the operation that made it.
+            let (nb, operands) = match direction.as_str() {
+                "" | "inside" => (kernel::shell(&mb.body, &open, t)?, vec![input]),
+                "outside" | "both" => {
+                    // Walls grown out of the faces (or half out, half in): an offset body less a
+                    // cavity, the open faces pushed out of the way.
+                    if !(t > 1e-6) {
+                        return Err(DocError::Invalid("shell thickness must be positive".into()));
+                    }
+                    let (out, inn) = if direction == "outside" { (t, 0.0) } else { (t / 2.0, t / 2.0) };
+                    let samples = face_samples(&mb);
+                    let opened =
+                        |p: &Vec3| open.iter().any(|q| crate::appearance::face_index_at(&mb, *q) == crate::appearance::face_index_at(&mb, *p));
+                    let walls: Vec<Vec3> = samples.iter().filter(|p| !opened(p)).copied().collect();
+                    let outer = Traced::step(kernel::offset_faces(&mb.body, &walls, out)?, &[&input]);
+                    // The cavity's faces are the shell's inner walls, named after the faces they offset.
+                    let inner = mb.before_as(crate::lineage::Operand::Inner(mb.name.clone()));
+                    let cavity = if inn > 0.0 { Traced::step(kernel::offset_faces(&mb.body, &walls, -inn)?, &[&inner]) } else { inner };
+                    let cavity = Traced::step(kernel::offset_faces(&cavity.body, &open, 2.0 * t + 1.0)?, &[&cavity]);
+                    let cut = kernel::boolean(&outer.body, &cavity.body, BoolOp::Cut)?
+                        .ok_or_else(|| DocError::Invalid("the shell removed everything".into()))?;
+                    (cut, vec![outer, cavity])
+                }
+                o => return Err(DocError::Invalid(format!("unknown shell direction `{o}` (inside, outside or both)"))),
+            };
             // Certifying may join faces; their history stays over the same operands.
             let nb = Traced::step(nb.with_shell_certificate(f.id)?, &operands.iter().collect::<Vec<_>>());
             if let Some(slot) = st.bodies.get_mut(i) {

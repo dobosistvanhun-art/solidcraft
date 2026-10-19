@@ -315,7 +315,6 @@ mod loft_cut;
 mod loft_ring;
 mod loft_spacing;
 mod loft_thin;
-mod loft_thin_probe;
 mod mirror_placed;
 mod mirror_planes;
 #[cfg(not(target_arch = "wasm32"))]

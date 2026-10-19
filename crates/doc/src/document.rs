@@ -297,6 +297,10 @@ pub struct LoftThin {
     /// Keep the last section's end closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed_end: bool,
+    /// Keep sharp corners sharp (by default they are bent round: inside radius the thickness,
+    /// outside radius twice it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sharp: bool,
 }
 
 /// How a swept profile turns as it follows its path.

@@ -4678,11 +4678,26 @@ fn thin_loft_tools(
     // Each section's outer and inner outline, in its plane.
     let mut outer: Vec<(Plane, solidcraft_geom::Loop2)> = Vec::new();
     let mut inner: Vec<(Plane, solidcraft_geom::Loop2)> = Vec::new();
+    let mut rounded_any = false;
     for sec in sections {
         let ss = st.sketch(sec.sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {}", sec.sketch)))?;
         let regions = solidcraft_sketch::merge_regions(&select_profiles(ss, &sec.profiles)?);
         let [r] = &regions[..] else { return Err(DocError::Invalid("each loft section must be one profile".into())) };
-        let lp = r.outer.ccw();
+        let mut lp = r.outer.ccw();
+        // Sharp corners are bent round, as sheet metal is: the inside radius the thickness, the
+        // outside radius twice it (the drawn outline is the wall's outside, inside or middle).
+        if !thin.sharp {
+            let along = if inside > 0.0 && outside > 0.0 {
+                1.5
+            } else if outside > 0.0 {
+                1.0
+            } else {
+                2.0
+            };
+            let (rounded, any) = round_sharp_corners(&lp, along * t);
+            rounded_any |= any;
+            lp = rounded;
+        }
         let wall = solidcraft_sketch::thin_wall_regions(std::slice::from_ref(&lp.segs), inside, outside)
             .map_err(|e| DocError::Invalid(format!("thin loft: section {}: {e}", ss.name)))?;
         let [w] = &wall[..] else { return Err(DocError::Invalid(format!("thin loft: the wall of section {} is not one ring", ss.name))) };
@@ -4693,20 +4708,23 @@ fn thin_loft_tools(
         outer.push((ss.plane, if outside > 0.0 { w.outer.clone() } else { lp.clone() }));
         inner.push((ss.plane, if inside > 0.0 { hole.clone() } else { lp }));
     }
-    // A closed end: the inner loft starts the wall's thickness into the loft.
-    let into = |from: usize, to: usize| -> Result<Plane> {
+    // A closed end: the inner loft starts the wall's thickness into the loft. An open end: it
+    // reaches a little past the outer one, so the cut leaves no film where the two ends would
+    // otherwise lie in one plane.
+    let past = 0.02f64.max(t * 0.01);
+    let into = |from: usize, to: usize, by: f64| -> Result<Plane> {
         let (Some((pa, la)), Some((pb, lb))) = (inner.get(from), inner.get(to)) else { return Err(DocError::Invalid("loft sections".into())) };
         let n = pa.normal();
         let towards = pb.to_world(lb.centroid()) - pa.to_world(la.centroid());
         let gap = towards.dot(n).abs();
-        if gap <= t * 1.01 {
+        if gap <= by * 1.01 {
             return Err(DocError::Invalid("thin loft: the closed end's floor is as thick as the sections are apart".into()));
         }
-        Ok(pa.offset(if towards.dot(n) >= 0.0 { t } else { -t }))
+        Ok(pa.offset(if towards.dot(n) >= 0.0 { by } else { -by }))
     };
     let last = inner.len().saturating_sub(1);
-    let start = if thin.closed_start { Some(into(0, 1)?) } else { None };
-    let end = if thin.closed_end { Some(into(last, last.saturating_sub(1))?) } else { None };
+    let start = Some(into(0, 1, if thin.closed_start { t } else { -past })?);
+    let end = Some(into(last, last.saturating_sub(1), if thin.closed_end { t } else { -past })?);
     if let (Some(pl), Some(s)) = (start, inner.first_mut()) {
         s.0 = pl;
     }
@@ -4714,7 +4732,7 @@ fn thin_loft_tools(
         s.0 = pl;
     }
     // The outer loft is the feature's own (its faces named) when the wall lies inside it.
-    let outer_tool = match (outside > 0.0, tools.into_iter().next()) {
+    let outer_tool = match (outside > 0.0 || rounded_any, tools.into_iter().next()) {
         (false, Some(tool)) => tool,
         _ => Traced::unnamed(kernel::loft(&outer)?),
     };
@@ -4722,6 +4740,68 @@ fn thin_loft_tools(
     let wall = kernel::boolean(&outer_tool.body, &cavity.body, BoolOp::Cut)?
         .ok_or_else(|| DocError::Invalid("thin loft: nothing is left of the wall".into()))?;
     Ok(vec![Traced::step(wall, &[&outer_tool, &cavity])])
+}
+
+/// `lp` (counter-clockwise) with each convex corner between two straight segments rounded by
+/// `r` (less where a side is too short for it), and whether any was.
+fn round_sharp_corners(lp: &solidcraft_geom::Loop2, r: f64) -> (solidcraft_geom::Loop2, bool) {
+    use solidcraft_geom::Seg2;
+    let n = lp.segs.len();
+    if n < 3 || !(r > 1e-9) || !lp.segs.iter().any(|s| matches!(s, Seg2::Line { .. })) {
+        return (lp.clone(), false);
+    }
+    // Per corner (at the end of segment i): how far back along each side the round starts.
+    let line = |s: &Seg2| match *s {
+        Seg2::Line { a, b } => Some((a, b)),
+        _ => None,
+    };
+    let mut cut = vec![(0.0f64, 0.0f64); n];
+    let mut any = false;
+    for i in 0..n {
+        let (Some(s0), Some(s1)) = (lp.segs.get(i), lp.segs.get((i + 1) % n)) else { continue };
+        let (Some((a, b)), Some((_, c))) = (line(s0), line(s1)) else { continue };
+        let (Some(u), Some(w)) = ((b - a).normalized(), (c - b).normalized()) else { continue };
+        let turn = u.cross(w).atan2(u.dot(w));
+        if turn <= 1e-3 {
+            continue;
+        }
+        let d = (r * (turn / 2.0).tan()).min(0.49 * (b - a).len()).min(0.49 * (c - b).len());
+        if d > 1e-9 {
+            if let Some(x) = cut.get_mut(i) {
+                x.1 = d;
+            }
+            if let Some(x) = cut.get_mut((i + 1) % n) {
+                x.0 = d;
+            }
+            any = true;
+        }
+    }
+    if !any {
+        return (lp.clone(), false);
+    }
+    let mut segs = Vec::with_capacity(2 * n);
+    for i in 0..n {
+        let Some(s) = lp.segs.get(i) else { continue };
+        let (before, after) = cut.get(i).copied().unwrap_or((0.0, 0.0));
+        match line(s) {
+            Some((a, b)) => {
+                let Some(u) = (b - a).normalized() else { continue };
+                segs.push(Seg2::Line { a: a + u * before, b: b - u * after });
+                if after > 0.0
+                    && let Some((_, c)) = lp.segs.get((i + 1) % n).and_then(line)
+                    && let Some(w) = (c - b).normalized()
+                {
+                    let turn = u.cross(w).atan2(u.dot(w));
+                    let rr = after / (turn / 2.0).tan();
+                    let p1 = b - u * after;
+                    let center = p1 + u.perp() * rr;
+                    segs.push(Seg2::Arc { center, radius: rr, start: (p1 - center).angle(), sweep: turn });
+                }
+            }
+            None => segs.push(*s),
+        }
+    }
+    (solidcraft_geom::Loop2 { segs }, true)
 }
 
 /// One point on each face of a body (a triangle centre, so it lies on the face).

@@ -15,7 +15,15 @@ pub(crate) fn rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut 
     // The thread standard: ISO metric keeps its diameter and pitch pickers below, the others
     // pick from their sizes (Custom is typed: diameter x pitch, angles, depth).
     use solidcraft_engine::doc::thread_spec;
-    let profile = thread_spec::profile_of(designation).unwrap_or("ISO metric");
+    // The profile picked stays while a designation is half typed (unreadable): otherwise the
+    // dialog would switch back to ISO metric under the cursor at every keystroke.
+    let memo = egui::Id::new("thread_profile_choice");
+    let remembered: Option<usize> = ui.ctx().data(|d| d.get_temp(memo));
+    let profile = match (thread_spec::profile_of(designation), remembered.and_then(|i| thread_spec::PROFILES.get(i).copied())) {
+        (Some(p), _) => p,
+        (None, Some(p)) if !designation.trim().is_empty() => p,
+        _ => "ISO metric",
+    };
     let mut selected = thread_spec::PROFILES.iter().position(|p| *p == profile).unwrap_or(0);
     let before_profile = selected;
     row_label(ui, "Profile");
@@ -30,6 +38,7 @@ pub(crate) fn rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut 
         };
         *suggested = None;
     }
+    ui.ctx().data_mut(|d| d.insert_temp(memo, selected));
     let profile = thread_spec::PROFILES.get(selected).copied().unwrap_or("ISO metric");
     if profile != "ISO metric" {
         if profile != "Custom" {

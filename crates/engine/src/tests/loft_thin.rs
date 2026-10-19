@@ -107,3 +107,26 @@ fn a_thin_loft_saves_and_reopens() {
     let _ = std::fs::remove_file(&path);
     assert!(rel(volume(&mut r), v) < 1e-9);
 }
+
+#[test]
+fn a_rectangle_to_circle_duct_is_open_and_its_corners_are_bent_round() {
+    let duct = |sharp: bool| {
+        let mut s = Session::default();
+        section(&mut s, "A", 0.0, 30.0, Some(20.0));
+        section(&mut s, "B", 50.0, 15.0, None);
+        run(&mut s, "solid.loft", json!({"sections": [{"sketch": "A"}, {"sketch": "B"}], "thin": true, "thickness": 2, "sharp_corners": sharp}));
+        assert_eq!(feature_error(&s), None, "sharp {sharp}");
+        s
+    };
+    let (mut round, mut sharp) = (duct(false), duct(true));
+    // Rounding the corners takes material off the outside.
+    assert!(volume(&mut round) < volume(&mut sharp));
+    // Both ends are open: no film across either end.
+    for s in [&round, &sharp] {
+        let st = s.model.state();
+        let m = st.bodies[0].mesh();
+        for z in [0.3, 49.7] {
+            assert!(!m.contains(Vec3::new(0.0, 0.0, z)), "film at z {z}");
+        }
+    }
+}

@@ -2984,6 +2984,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             row_label(ui, "Closed End");
                             extra_check(ui, &mut d.extra, "closed_end");
                             ui.end_row();
+                            row_label(ui, "Sharp Corners");
+                            extra_check(ui, &mut d.extra, "sharp_corners");
+                            ui.end_row();
                         }
                     }
                     Kind::Sweep { operation, opts } => {
@@ -5388,6 +5391,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 }
                 d.extra.insert("closed_start".into(), json!(t.closed_start));
                 d.extra.insert("closed_end".into(), json!(t.closed_end));
+                d.extra.insert("sharp_corners".into(), json!(t.sharp));
             }
             if let Some(inp) = d.inputs.first_mut() {
                 inp.items = sections

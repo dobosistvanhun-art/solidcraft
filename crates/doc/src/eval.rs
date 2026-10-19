@@ -4561,17 +4561,13 @@ fn thin_loft_tools(vals: &BTreeMap<String, Value>, st: &ModelState, sections: &[
         Ok(pa.offset(if towards.dot(n) >= 0.0 { t } else { -t }))
     };
     let last = inner.len().saturating_sub(1);
-    if thin.closed_start {
-        let pl = into(0, 1)?;
-        if let Some(s) = inner.first_mut() {
-            s.0 = pl;
-        }
+    let start = if thin.closed_start { Some(into(0, 1)?) } else { None };
+    let end = if thin.closed_end { Some(into(last, last.saturating_sub(1))?) } else { None };
+    if let (Some(pl), Some(s)) = (start, inner.first_mut()) {
+        s.0 = pl;
     }
-    if thin.closed_end {
-        let pl = into(last, last.saturating_sub(1))?;
-        if let Some(s) = inner.last_mut() {
-            s.0 = pl;
-        }
+    if let (Some(pl), Some(s)) = (end, inner.last_mut()) {
+        s.0 = pl;
     }
     // The outer loft is the feature's own (its faces named) when the wall lies inside it.
     let outer_tool = match (outside > 0.0, tools.into_iter().next()) {

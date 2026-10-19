@@ -592,6 +592,9 @@ fn round_root(pts: &[(f64, f64)], r: f64) -> Vec<(f64, f64)> {
         let (u, w) = (unit((a.0 - at.0, a.1 - at.1)), unit((b.0 - at.0, b.1 - at.1)));
         let cos = (u.0 * w.0 + u.1 * w.1).clamp(-1.0, 1.0);
         let phi = cos.acos();
+        // At most half of each side: two rounded corners may share one side.
+        let room = 0.5 * ((a.0 - at.0).hypot(a.1 - at.1)).min((b.0 - at.0).hypot(b.1 - at.1));
+        let r = r.min(room * (phi / 2.0).tan());
         let t = r / (phi / 2.0).tan();
         let ea = (at.0 + u.0 * t, at.1 + u.1 * t);
         let eb = (at.0 + w.0 * t, at.1 + w.1 * t);
@@ -612,10 +615,22 @@ fn round_root(pts: &[(f64, f64)], r: f64) -> Vec<(f64, f64)> {
     // The first corner, from the last point's side round to the second's.
     let first = corner(p(0), p(n - 1), p(1));
     let last = corner(p(n - 1), p(n - 2), p(0));
-    let mut out = Vec::new();
-    out.extend(first);
-    out.extend(pts.iter().copied().take(n - 1).skip(1));
-    out.extend(last);
+    let mut all = Vec::new();
+    all.extend(first);
+    all.extend(pts.iter().copied().take(n - 1).skip(1));
+    all.extend(last);
+    // A fully rounded root (Whitworth): the two arcs meet in the middle of the root; keep one of
+    // the points where they meet.
+    let scale = pts.iter().map(|q| q.1.abs()).fold(0.0, f64::max).max(1e-9);
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(all.len());
+    for q in all {
+        if out.last().is_none_or(|l: &(f64, f64)| (l.0 - q.0).hypot(l.1 - q.1) > 1e-6 * scale) {
+            out.push(q);
+        }
+    }
+    while out.len() > 3 && out.first().zip(out.last()).is_some_and(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1) <= 1e-6 * scale) {
+        out.pop();
+    }
     out
 }
 

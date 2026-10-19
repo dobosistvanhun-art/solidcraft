@@ -22,6 +22,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         "diameter; two of revolutions (or turns), height, pitch; section_size; section?: circular|square; section_position?: inside|center|outside; \
          base?: [x,y,z] (numbers in mm or length expressions; default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); start_angle?; clockwise?: bool; operation?, targets?, name?, body_name?",
     ),
+    CommandSpec::new("solid.gear", "Gear", gear).at("SOLID", "CREATE").icon("pattern_circ").params(
+        "type?: spur (default; helical with helix_angle) | sprocket | worm | worm_wheel; teeth (a worm's: starts); module (spur, worm, worm_wheel; \
+         transverse for spur, axial for the worm and its wheel); chain (sprocket: ISO 606 / ANSI / motorcycle number such as 08B, 06B, 40, 428, 520); \
+         width? (face width, a worm's length; a sprocket's default: its chain's tooth width); pressure_angle? (default 20 deg); helix_angle? (spur); \
+         profile_shift? (spur, worm_wheel); quotient? (worm and worm_wheel: diameter quotient q, default 10); starts? (worm_wheel: the worm's starts, default 1); \
+         bore? (diameter); left_hand?: bool; base?: [x,y,z] (default: the origin); axis?: X|Y|Z|[x,y,z] (default Z); operation?, targets?, name?, body_name? \
+         → also `geometry`: the pitch, tip and root diameters (and a worm pair's centre distance)",
+    ),
+    CommandSpec::new("solid.gear.sprocket", "Sprocket", sprocket).at("SOLID", "CREATE").icon("chain").params("as solid.gear with type: sprocket: chain, teeth; width?, bore?, base?, axis?, operation?, targets?"),
+    CommandSpec::new("solid.gear.worm", "Worm", worm).at("SOLID", "CREATE").icon("coil").params("as solid.gear with type: worm: starts (or teeth), module; quotient?, width? (length), pressure_angle?, left_hand?, bore?, base?, axis?, operation?, targets?"),
+    CommandSpec::new("solid.gear.worm_wheel", "Worm Wheel", worm_wheel).at("SOLID", "CREATE").icon("pattern_circ").params("as solid.gear with type: worm_wheel: teeth, module, starts? (the worm's), quotient? (the worm's); width?, pressure_angle?, profile_shift?, left_hand?, bore?, base?, axis?, operation?, targets?"),
     CommandSpec::new("solid.rib", "Rib", rib)
         .at("SOLID", "CREATE")
         .icon("rib")
@@ -106,6 +117,132 @@ fn coil(s: &mut Session, p: &Value) -> Result<Value> {
             targets: string_list(p, "targets").into_iter().map(BodyName).collect(),
         },
     )
+}
+
+fn typed_gear(s: &mut Session, p: &Value, t: &str) -> Result<Value> {
+    let mut p = p.clone();
+    if let Some(o) = p.as_object_mut() {
+        o.insert("type".into(), Value::String(t.into()));
+    }
+    gear(s, &p)
+}
+
+fn sprocket(s: &mut Session, p: &Value) -> Result<Value> {
+    typed_gear(s, p, "sprocket")
+}
+
+fn worm(s: &mut Session, p: &Value) -> Result<Value> {
+    typed_gear(s, p, "worm")
+}
+
+fn worm_wheel(s: &mut Session, p: &Value) -> Result<Value> {
+    typed_gear(s, p, "worm_wheel")
+}
+
+fn gear(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "solid.gear";
+    let gear = match str_(p, "type").map(|t| t.trim().to_ascii_lowercase().replace([' ', '-'], "_")).as_deref() {
+        None | Some("" | "spur" | "helical" | "gear") => solidcraft_doc::GearType::Spur,
+        Some("sprocket" | "chain") => solidcraft_doc::GearType::Sprocket,
+        Some("worm") => solidcraft_doc::GearType::Worm,
+        Some("worm_wheel" | "wormwheel" | "wheel") => solidcraft_doc::GearType::WormWheel,
+        Some(o) => return Err(bad(cmd, format!("unknown gear type `{o}` (spur, sprocket, worm or worm_wheel)"))),
+    };
+    let base = point_param(s, p, "base", cmd)?.unwrap_or_else(|| solidcraft_doc::point_expr(Vec3::ZERO));
+    let axis = axis_dir_param(p, cmd)?;
+    let teeth =
+        expr(p, "teeth").or_else(|| expr(p, "starts").filter(|_| gear == solidcraft_doc::GearType::Worm)).ok_or_else(|| bad(cmd, "give `teeth`"))?;
+    check_expr(s, &teeth, Kind::Unitless, cmd, "teeth")?;
+    let checked = |name: &str, kind: Kind| -> Result<Option<solidcraft_doc::expr::Expr>> {
+        match expr(p, name).filter(|e| !e.trim().is_empty()) {
+            Some(e) => {
+                check_expr(s, &e, kind, cmd, name)?;
+                Ok(Some(e))
+            }
+            None => Ok(None),
+        }
+    };
+    let module = checked("module", Kind::Length)?;
+    if module.is_none() && gear != solidcraft_doc::GearType::Sprocket {
+        return Err(bad(cmd, "give the `module`"));
+    }
+    let chain = str_(p, "chain").map(str::trim).unwrap_or_default().to_string();
+    if gear == solidcraft_doc::GearType::Sprocket && solidcraft_doc::gear::chain(&chain).is_none() {
+        return Err(bad(cmd, format!("give a `chain`: {}", solidcraft_doc::gear::chain_names())));
+    }
+    let width = checked("width", Kind::Length)?;
+    let pressure_angle = checked("pressure_angle", Kind::Angle)?;
+    let helix_angle = checked("helix_angle", Kind::Angle)?;
+    let profile_shift = checked("profile_shift", Kind::Unitless)?;
+    let quotient = checked("quotient", Kind::Unitless)?;
+    // A worm wheel's `starts` are its worm's; a worm's are its `teeth`.
+    let starts = if gear == solidcraft_doc::GearType::WormWheel { checked("starts", Kind::Unitless)? } else { None };
+    let bore = checked("bore", Kind::Length)?;
+    let r = add_feature(
+        s,
+        p,
+        FeatureKind::Gear {
+            base,
+            axis: Dir(axis),
+            gear,
+            teeth,
+            module,
+            chain: if gear == solidcraft_doc::GearType::Sprocket { chain } else { String::new() },
+            width,
+            pressure_angle,
+            helix_angle,
+            profile_shift,
+            quotient,
+            starts,
+            bore,
+            left_hand: bool_(p, "left_hand").unwrap_or(false),
+            operation: super::features::operation(p, cmd)?,
+            targets: string_list(p, "targets").into_iter().map(BodyName).collect(),
+        },
+    )?;
+    Ok(gear_geometry(s, r))
+}
+
+/// The gear just added's pitch, tip and root diameters, added to the command's result.
+fn gear_geometry(s: &Session, mut r: Value) -> Value {
+    let Some(f) = s.doc.features.last() else { return r };
+    let FeatureKind::Gear { gear, teeth, module, chain, pressure_angle, helix_angle, profile_shift, quotient, starts, .. } = &f.kind else {
+        return r;
+    };
+    let ev = |e: &Option<solidcraft_doc::expr::Expr>, k: Kind, d: f64| e.as_ref().and_then(|e| s.doc.eval(e, k).ok()).unwrap_or(d);
+    let z = s.doc.eval(teeth, Kind::Unitless).unwrap_or(0.0);
+    let m = ev(module, Kind::Length, 0.0);
+    let alpha = ev(pressure_angle, Kind::Angle, 20f64.to_radians());
+    let x = ev(profile_shift, Kind::Unitless, 0.0);
+    let q = ev(quotient, Kind::Unitless, 10.0);
+    let g = match gear {
+        solidcraft_doc::GearType::Spur => {
+            let beta = ev(helix_angle, Kind::Angle, 0.0);
+            let mt = m / beta.cos();
+            let d = mt * z;
+            serde_json::json!({"pitch_diameter": d, "tip_diameter": d + 2.0 * m * (1.0 + x), "root_diameter": d - 2.0 * m * (1.25 - x), "transverse_module": mt, "pressure_angle_deg": alpha.to_degrees()})
+        }
+        solidcraft_doc::GearType::Sprocket => {
+            match solidcraft_doc::gear::chain(chain).and_then(|c| solidcraft_doc::gear::sprocket_form(&c, z.round() as usize).ok()) {
+                Some(f) => {
+                    serde_json::json!({"pitch_diameter": f.pitch_diameter, "tip_diameter": f.tip_diameter, "root_diameter": f.root_diameter, "tooth_width": f.tooth_width, "seating_radius": f.seating_radius, "flank_radius": f.flank_radius})
+                }
+                None => return r,
+            }
+        }
+        solidcraft_doc::GearType::Worm => {
+            let d = m * q;
+            serde_json::json!({"pitch_diameter": d, "tip_diameter": d + 2.0 * m, "root_diameter": d - 2.4 * m, "lead": std::f64::consts::PI * m * z, "lead_angle_deg": (z / q).atan().to_degrees()})
+        }
+        solidcraft_doc::GearType::WormWheel => {
+            let (d2, z1) = (m * z, ev(starts, Kind::Unitless, 1.0));
+            serde_json::json!({"pitch_diameter": d2, "tip_diameter": d2 + 2.0 * m * (1.0 + x), "root_diameter": d2 - 2.0 * m * (1.25 - x), "center_distance": (m * q + d2) / 2.0 + x * m, "lead_angle_deg": (z1 / q).atan().to_degrees()})
+        }
+    };
+    if let Some(o) = r.as_object_mut() {
+        o.insert("geometry".into(), g);
+    }
+    r
 }
 
 fn curves_param(p: &Value, cmd: &str) -> Result<Vec<String>> {

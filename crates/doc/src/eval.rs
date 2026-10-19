@@ -267,19 +267,25 @@ fn thread_on(st: &ModelState, feature: u64, p: Vec3, designation: Option<&str>, 
         })
         .ok_or_else(|| DocError::Invalid("no cylindrical face there to thread".into()))?;
     let dia = cyl.radius * 2.0;
-    let (major, pitch) = match designation {
-        Some(s) => parse_metric_thread(s).ok_or_else(|| DocError::Invalid(format!("unknown thread `{s}` (ISO metric, like M8 or M8x1)")))?,
-        None => thread_for(dia, cyl.internal).ok_or_else(|| DocError::Invalid(format!("no metric thread fits a {dia:.2} mm cylinder")))?,
+    let spec = match designation {
+        Some(s) => crate::thread_spec::parse(s).ok_or_else(|| DocError::Invalid(format!("unknown thread `{s}` ({})", crate::thread_spec::HELP)))?,
+        None => {
+            let (n, q) = thread_for(dia, cyl.internal).ok_or_else(|| DocError::Invalid(format!("no metric thread fits a {dia:.2} mm cylinder")))?;
+            crate::thread_spec::parse(&format_thread(n, q)).ok_or_else(|| DocError::Invalid("thread".into()))?
+        }
     };
+    let (major, pitch) = (spec.major, spec.pitch);
+    // A tapered thread's diameter changes along it: it fits a little more loosely.
+    let slack = if spec.taper > 0.0 { 0.25 } else { 0.0 };
     let fits = if cyl.internal {
-        (major - pitch * 1.0825 - dia).abs() < 0.2 * major || (major - pitch - dia).abs() < 0.15 * major
+        (spec.major - 2.0 * spec.depth - dia).abs() < (0.2 + slack) * major || (spec.tap_drill() - dia).abs() < (0.15 + slack) * major
     } else {
-        (major - dia).abs() < 0.15 * major
+        (major - dia).abs() < (0.15 + slack) * major
     };
     if !fits {
         return Err(DocError::Invalid(format!(
-            "an {} thread does not fit a {dia:.2} mm {}",
-            format_thread(major, pitch),
+            "a {} thread does not fit a {dia:.2} mm {}",
+            spec.designation,
             if cyl.internal { "hole" } else { "shaft" }
         )));
     }
@@ -299,7 +305,7 @@ fn thread_on(st: &ModelState, feature: u64, p: Vec3, designation: Option<&str>, 
     Ok(ThreadInfo {
         feature,
         body,
-        designation: format_thread(major, pitch),
+        designation: spec.designation.clone(),
         major_diameter: major,
         pitch,
         internal: cyl.internal,
@@ -310,52 +316,51 @@ fn thread_on(st: &ModelState, feature: u64, p: Vec3, designation: Option<&str>, 
     })
 }
 
-/// The helical space between the teeth of a modelled ISO metric thread (ISO 68-1 basic
-/// profile, 60° flanks): cut from the shaft (external) or the hole wall (internal), running from
-/// `start` to `end` along the axis. `radius` is the face's own radius; `open` says which ends
-/// of the threaded length are free ends of the face.
-fn thread_groove(t: &ThreadInfo, radius: f64, open: (bool, bool)) -> Result<solidcraft_geom::Mesh> {
-    let (p, d) = (t.pitch, t.major_diameter);
-    let h = p * 3f64.sqrt() / 2.0;
-    let slope = (std::f64::consts::PI / 6.0).tan();
+/// The helical space between the teeth of a modelled thread (its standard's basic profile, see
+/// [`crate::thread_spec`]): cut from the shaft (external) or the hole wall (internal), running from
+/// `start` to `end` along the axis, one groove per start. `radius` is the face's own radius;
+/// `open` says which ends of the threaded length are free ends of the face. A tapered thread
+/// (1:16) is largest at the end away from a shaft's free end (at a hole's free end).
+fn thread_groove(t: &ThreadInfo, radius: f64, open: (bool, bool)) -> Result<Vec<solidcraft_geom::Mesh>> {
+    let spec = crate::thread_spec::parse(&t.designation).ok_or_else(|| DocError::Invalid(format!("unknown thread `{}`", t.designation)))?;
+    let (p, d) = (spec.pitch, spec.major);
+    let lead = spec.lead();
     let len = t.end - t.start;
     if !(p > 1e-3 && len > 1e-6) {
         return Err(DocError::Invalid("thread too short".into()));
     }
-    if len / p > 190.0 {
-        return Err(DocError::Invalid(format!("a modelled thread is limited to 190 turns ({:.0} mm at this pitch); use a cosmetic one", 190.0 * p)));
+    if len / lead > 190.0 {
+        return Err(DocError::Invalid(format!(
+            "a modelled thread is limited to 190 turns ({:.0} mm at this lead); use a cosmetic one",
+            190.0 * lead
+        )));
     }
     // How deep the groove cuts into the material: from the hole wall out to the major diameter,
     // or from the shaft's surface in to the root. Next to nothing (a hole as wide as the thread,
     // #995) is refused: the faceted cut would leave the face faceted and unthreaded.
-    let basic = 5.0 * h / 8.0;
+    let basic = spec.depth;
     let depth = if t.internal { d / 2.0 - radius } else { radius - (d / 2.0 - basic) };
     if !(depth >= basic / 4.0) {
         let (m, dia) = (&t.designation, 2.0 * radius);
         let cut = format!("it would cut {:.2} mm of the thread's {basic:.2} mm depth", depth.max(0.0));
-        let alt = thread_for(dia, t.internal).map(|(n, q)| format_thread(n, q)).filter(|a| a != m);
+        let alt =
+            thread_for(dia, t.internal).map(|(n, q)| format_thread(n, q)).filter(|a| a != m && spec.family == crate::thread_spec::Family::Metric);
         let shown = show_mm(dia);
         return Err(DocError::Invalid(if t.internal {
             let alt = alt.map(|a| format!(", or thread this hole {a}")).unwrap_or_default();
-            format!("this {shown} mm hole is too wide for a modelled {m} thread: {cut}; drill {} mm for {m}{alt}", show_mm(d - p))
+            format!("this {shown} mm hole is too wide for a modelled {m} thread: {cut}; drill {} mm for {m}{alt}", show_mm(spec.tap_drill()))
         } else {
             let alt = alt.map(|a| format!(", or thread this shaft {a}")).unwrap_or_default();
             format!("this {shown} mm shaft is too thin for a modelled {m} thread: {cut}; make the shaft {} mm for {m}{alt}", show_mm(d))
         }));
     }
-    // (radius, half width of the groove) at its two ends: a trapezoid in the axial plane.
-    let (r0, w0, r1, w1) = if t.internal {
-        // From inside the hole wall out to the major diameter, where the bolt's crest sits
-        // (the root flat is P/8 wide).
-        let r_in = radius.min(d / 2.0 - 5.0 * h / 8.0) - 0.1 * p;
-        (r_in, (p / 8.0 + 2.0 * (d / 2.0 - r_in) * slope) / 2.0, d / 2.0, p / 16.0)
-    } else {
-        // From the root (5H/8 under the major diameter, flat P/4 wide) out past the surface.
-        let r_root = d / 2.0 - 5.0 * h / 8.0;
-        let r_out = radius.max(d / 2.0) + 0.05 * p;
-        (r_root, p / 8.0, r_out, (p / 4.0 + 2.0 * (r_out - r_root) * slope) / 2.0)
-    };
-    if w0.max(w1) * 2.0 >= p * 0.98 {
+    // The taper's reach over the threaded length, and so where the groove starts.
+    let taper_len = spec.taper * (len + 2.0 * p);
+    let inner = radius.min(d / 2.0 - basic) - 0.1 * p - taper_len;
+    let outer = radius.max(d / 2.0) + 0.05 * p + taper_len;
+    let groove = crate::thread_spec::groove(&spec, t.internal, inner, outer);
+    let widest = groove.iter().map(|q| q.1).fold(f64::NEG_INFINITY, f64::max) - groove.iter().map(|q| q.1).fold(f64::INFINITY, f64::min);
+    if widest >= p * 0.98 {
         return Err(DocError::Invalid("the face is too far from the thread's diameter".into()));
     }
     let k = t.axis;
@@ -364,11 +369,20 @@ fn thread_groove(t: &ThreadInfo, radius: f64, open: (bool, bool)) -> Result<soli
     // Past a free end of the face the groove runs out into the air; elsewhere it stops square
     // at the threaded length's end.
     let (s0, s1) = (if open.0 { t.start - p } else { t.start }, if open.1 { t.end + p } else { t.end });
-    let base = t.axis_point + k * s0;
-    let plane = Plane { origin: base, x: u, y: *k };
-    let section = [Vec2::new(r0, -w0), Vec2::new(r1, -w1), Vec2::new(r1, w1), Vec2::new(r0, w0)];
-    // Sections 7.5° apart: the chords sag 0.2% of the radius.
-    Ok(kernel::sweep_helix_mesh(&plane, &section, base, *k, p, (s1 - s0) / p, 48)?)
+    // A taper: the radius falls along +axis when the large end is at the start.
+    let large_at_start = if t.internal { open.0 || !open.1 } else { !open.0 || open.1 };
+    let taper = if large_at_start { spec.taper } else { -spec.taper };
+    let pre = if large_at_start { 0.0 } else { -spec.taper * (s1 - s0) };
+    let section: Vec<Vec2> = groove.iter().map(|(r, w)| Vec2::new(r + pre, *w)).collect();
+    let (axis, pitch) = if spec.left_hand { (k * -1.0, -lead) } else { (*k, lead) };
+    (0..spec.starts)
+        .map(|i| {
+            let base = t.axis_point + *k * (s0 + p * i as f64);
+            let plane = Plane { origin: base, x: u, y: *k };
+            // Sections 7.5° apart: the chords sag 0.2% of the radius.
+            Ok(kernel::sweep_helix_mesh_tapered(&plane, &section, base, axis, pitch, (s1 - s0) / lead, 48, taper)?)
+        })
+        .collect()
 }
 
 /// A constant fillet of `edges`; with [`FilletFit::Reduce`](crate::FilletFit::Reduce), a radius too
@@ -3714,6 +3728,130 @@ fn feature_tools_with_constructor(
             let pitch = if *clockwise { -p } else { p };
             Ok(unnamed(vec![kernel::sweep_helix(&plane, &region, *base, axis, pitch, n)?]))
         }
+        FeatureKind::Gear {
+            base,
+            axis,
+            gear,
+            teeth,
+            module,
+            chain,
+            width,
+            pressure_angle,
+            helix_angle,
+            profile_shift,
+            quotient,
+            starts,
+            bore,
+            left_hand,
+            ..
+        } => {
+            let base = point(vals, base)?;
+            let k = axis.normalized().ok_or_else(|| DocError::Invalid("gear axis".into()))?;
+            let opt = |e: &Option<crate::expr::Expr>, kind: Kind, default: f64| -> Result<f64> {
+                match e {
+                    Some(e) => val(vals, e, kind),
+                    None => Ok(default),
+                }
+            };
+            let count = |v: f64, what: &str, max: f64| -> Result<usize> {
+                if !(v.is_finite() && (v - v.round()).abs() < 1e-6 && v >= 1.0 && v <= max) {
+                    return Err(DocError::Invalid(format!("the {what} must be a whole number from 1 to {max}")));
+                }
+                Ok(v.round() as usize)
+            };
+            let module_mm = || -> Result<f64> {
+                let e = module.as_ref().ok_or_else(|| DocError::Invalid("this gear needs a module".into()))?;
+                val(vals, e, Kind::Length)
+            };
+            let alpha = opt(pressure_angle, Kind::Angle, 20f64.to_radians())?;
+            let shift = opt(profile_shift, Kind::Unitless, 0.0)?;
+            let bore_d = opt(bore, Kind::Length, 0.0)?;
+            // The section, the root diameter (for the bore), the face width and the helix's lead
+            // (none: straight).
+            let (outer, root, w, lead) = match gear {
+                crate::GearType::Spur => {
+                    let m = module_mm()?;
+                    let beta = opt(helix_angle, Kind::Angle, 0.0)?;
+                    if !(beta.is_finite() && beta.abs() < 45f64.to_radians()) {
+                        return Err(DocError::Invalid("the helix angle must be within ±45°".into()));
+                    }
+                    let g = crate::gear::Involute {
+                        module: m / beta.cos(),
+                        teeth: count(val(vals, teeth, Kind::Unitless)?, "number of teeth", 1000.0)?,
+                        pressure: (alpha.tan() / beta.cos()).atan(),
+                        shift,
+                    };
+                    let w = opt(width, Kind::Length, 10.0)?;
+                    let lead = (beta.abs() > 1e-9).then(|| std::f64::consts::PI * 2.0 * g.pitch_radius() / beta.abs().tan());
+                    (crate::gear::involute_section(&g)?, 2.0 * g.root_radius(), w, lead)
+                }
+                crate::GearType::Sprocket => {
+                    let c = crate::gear::chain(chain)
+                        .ok_or_else(|| DocError::Invalid(format!("unknown chain `{chain}` ({})", crate::gear::chain_names())))?;
+                    let (lp, form) = crate::gear::sprocket_section(&c, count(val(vals, teeth, Kind::Unitless)?, "number of teeth", 200.0)?)?;
+                    let w = opt(width, Kind::Length, form.tooth_width)?;
+                    (lp, form.root_diameter, w, None)
+                }
+                crate::GearType::Worm => {
+                    let wm = crate::gear::Worm {
+                        module: module_mm()?,
+                        starts: count(val(vals, teeth, Kind::Unitless)?, "number of starts", 8.0)?,
+                        quotient: opt(quotient, Kind::Unitless, 10.0)?,
+                        pressure: alpha,
+                    };
+                    let w = opt(width, Kind::Length, 4.0 * wm.lead().max(std::f64::consts::PI * wm.module * 4.0) / wm.starts as f64)?;
+                    (crate::gear::worm_section(&wm)?, 2.0 * (wm.pitch_radius() - 1.2 * wm.module), w, Some(wm.lead()))
+                }
+                crate::GearType::WormWheel => {
+                    let m = module_mm()?;
+                    let z1 = count(opt(starts, Kind::Unitless, 1.0)?, "number of worm starts", 8.0)?;
+                    let q = opt(quotient, Kind::Unitless, 10.0)?;
+                    if !(q.is_finite() && (5.0..=30.0).contains(&q)) {
+                        return Err(DocError::Invalid("the diameter quotient q must be between 5 and 30".into()));
+                    }
+                    // The wheel's teeth lean at the worm's lead angle.
+                    let gamma = (z1 as f64 / q).atan();
+                    let g = crate::gear::Involute {
+                        module: m,
+                        teeth: count(val(vals, teeth, Kind::Unitless)?, "number of teeth", 1000.0)?,
+                        pressure: alpha,
+                        shift,
+                    };
+                    let w = opt(width, Kind::Length, 0.8 * m * q)?;
+                    (crate::gear::involute_section(&g)?, 2.0 * g.root_radius(), w, Some(std::f64::consts::PI * 2.0 * g.pitch_radius() / gamma.tan()))
+                }
+            };
+            if !(w.is_finite() && w > 1e-3 && w < 1e5) {
+                return Err(DocError::Invalid("the gear's width must be positive".into()));
+            }
+            let x0 = if k.cross(Vec3::X).len() > 1e-6 { (Vec3::X - k * k.dot(Vec3::X)).normalized() } else { Some(k.any_perp()) };
+            let x0 = x0.ok_or_else(|| DocError::Invalid("gear axis".into()))?;
+            let plane = Plane { origin: base, x: x0, y: k.cross(x0) };
+            let body = match lead {
+                None => {
+                    let region = crate::gear::with_bore(outer, bore_d, root)?;
+                    kernel::extrude(&plane, std::slice::from_ref(&region), 0.0, w)?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| DocError::Invalid("gear: no body".into()))?
+                }
+                Some(lead) => {
+                    let region = crate::gear::with_bore(outer, 0.0, root)?;
+                    let (axis_dir, pitch) = if *left_hand { (k * -1.0, -lead) } else { (k, lead) };
+                    let swept = kernel::sweep_helix(&plane, &region, base, axis_dir, pitch, w / lead)?;
+                    if bore_d > 0.0 {
+                        if bore_d >= root * 0.98 {
+                            return Err(DocError::Invalid(format!("the bore ({bore_d:.2} mm) is as large as the root circle ({root:.2} mm)")));
+                        }
+                        let hole = kernel::cylinder(base - k * 1.0, k, bore_d / 2.0, w + 2.0)?;
+                        kernel::boolean(&swept, &hole, BoolOp::Cut)?.ok_or_else(|| DocError::Invalid("gear: the bore removed everything".into()))?
+                    } else {
+                        swept
+                    }
+                }
+            };
+            Ok(unnamed(vec![body]))
+        }
         FeatureKind::Loft { sections, .. } => {
             let mut secs = Vec::new();
             let mut sketches = Vec::new();
@@ -4088,7 +4226,7 @@ fn feature_op(f: &Feature) -> (Operation, Vec<String>) {
         FeatureKind::Hole { .. } => (Operation::Cut, Vec::new()),
         FeatureKind::Pipe { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Loft { operation, targets, .. } | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
-        FeatureKind::Coil { operation, targets, .. } => (*operation, crate::plain(targets)),
+        FeatureKind::Coil { operation, targets, .. } | FeatureKind::Gear { operation, targets, .. } => (*operation, crate::plain(targets)),
         _ => (Operation::NewBody, Vec::new()),
     }
 }
@@ -4882,6 +5020,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         | FeatureKind::Revolve { operation, targets, .. }
         | FeatureKind::Loft { operation, targets, .. }
         | FeatureKind::Coil { operation, targets, .. }
+        | FeatureKind::Gear { operation, targets, .. }
         | FeatureKind::Sweep { operation, targets, .. } => {
             let mut constructor = None;
             let mut tools = feature_tools_with_constructor(doc, vals, f, st, &mut constructor)?;
@@ -4934,15 +5073,18 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             let Some(mb) = st.bodies.get(i).cloned() else { return Err(DocError::Invalid("body".into())) };
             let cyl = kernel::cylinder_face_at(&mb.body, face.0).ok_or_else(|| DocError::Invalid("no cylindrical face there to thread".into()))?;
             let tol = t.pitch * 1e-3;
-            let groove = thread_groove(&t, cyl.radius, ((t.start - cyl.start).abs() < tol, (t.end - cyl.end).abs() < tol))?;
+            let grooves = thread_groove(&t, cyl.radius, ((t.start - cyl.start).abs() < tol, (t.end - cyl.end).abs() < tol))?;
             // The B-rep boolean can't take helical walls in reasonable time: the body is cut
-            // faceted (curved faces within a two-hundredth of the pitch).
-            let nb = kernel::faceted_boolean(&mb.body, &groove, BoolOp::Cut, t.pitch * 0.005)?
-                .ok_or_else(|| DocError::Invalid("the thread removed everything".into()))?;
-            // The groove's faces are its triangles, with no role to name them by.
-            let groove = crate::lineage::Lineage::unnamed_faces(groove.triangles.len());
-            let lineage = mb.traced().lineage.and_then(|l| crate::lineage::Lineage::step(&nb, &[&l, &groove]));
-            let nb = Traced { body: nb, lineage };
+            // faceted (curved faces within a two-hundredth of the pitch), one start at a time.
+            let mut nb = Traced { body: mb.body.clone(), lineage: mb.traced().lineage };
+            for groove in grooves {
+                let cut = kernel::faceted_boolean(&nb.body, &groove, BoolOp::Cut, t.pitch * 0.005)?
+                    .ok_or_else(|| DocError::Invalid("the thread removed everything".into()))?;
+                // The groove's faces are its triangles, with no role to name them by.
+                let faces = crate::lineage::Lineage::unnamed_faces(groove.triangles.len());
+                let lineage = nb.lineage.and_then(|l| crate::lineage::Lineage::step(&cut, &[&l, &faces]));
+                nb = Traced { body: cut, lineage };
+            }
             if let Some(slot) = st.bodies.get_mut(i) {
                 *slot = ModelBody::traced_new(mb.name, nb, mb.feature);
             }

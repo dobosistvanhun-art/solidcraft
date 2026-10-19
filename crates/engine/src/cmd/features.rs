@@ -80,7 +80,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.thread", "Thread", thread)
         .at("SOLID", "CREATE")
         .icon("thread")
-        .params("face: [x,y,z] on a cylindrical face; designation?: ISO metric (\"M8\", \"M8x1\"; default: the size that fits); length?: expr (default: the whole face); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body"),
+        .params("face: [x,y,z] on a cylindrical face; designation?: M8, M8x1, MF10x1, 1/4-20 UNC, #10-32 UNF, 1/4 BSW, G1/2, R1/2, Rc1/2, Rp1/2, 1/2 NPT, Tr16x4, Tr16x8(P4), S16x4, Rd16x1/8, Pg13.5, or custom \"20x2.5 60°\" / \"20x3 3/30° h2.2\" (the flank angles and depth); LH for left-handed (default: the ISO metric size that fits); length?: expr (default: the whole face); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body"),
     CommandSpec::new("solid.shell", "Shell", shell)
         .at("SOLID", "MODIFY")
         .icon("shell")
@@ -1697,9 +1697,9 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let thread = str_(p, "thread").map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     if let Some(t) = &thread
-        && solidcraft_doc::parse_metric_thread(t).is_none()
+        && solidcraft_doc::thread_spec::parse(t).is_none()
     {
-        return Err(bad(cmd, format!("unknown thread `{t}` (ISO metric, like M6 or M6x0.75)")));
+        return Err(bad(cmd, format!("unknown thread `{t}` ({})", solidcraft_doc::thread_spec::HELP)));
     }
     // A position given as length expressions (#1678), say `["leg_h*0.4", "width/2", "t"]`: kept,
     // so the hole follows the parameters; drilled where they evaluate now.
@@ -1754,8 +1754,8 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
             Expr::new(format!("{d} mm"))
         }
         (None, Some(t), None) => {
-            let (major, pitch) = solidcraft_doc::parse_metric_thread(t).ok_or_else(|| bad(cmd, "thread"))?;
-            Expr::new(format!("{} mm", ((major - pitch) * 1000.0).round() / 1000.0))
+            let spec = solidcraft_doc::thread_spec::parse(t).ok_or_else(|| bad(cmd, "thread"))?;
+            Expr::new(format!("{} mm", (spec.tap_drill() * 1000.0).round() / 1000.0))
         }
         (None, None, None) => return Err(bad(cmd, "needs `diameter`, `thread` (a tapped hole) or `clearance` (a bolt size)")),
     };
@@ -2081,9 +2081,9 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(cmd, "`face` must be a point [x, y, z] on a cylindrical face"))?;
     let designation = str_(p, "designation").map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     if let Some(t) = &designation
-        && solidcraft_doc::parse_metric_thread(t).is_none()
+        && solidcraft_doc::thread_spec::parse(t).is_none()
     {
-        return Err(bad(cmd, format!("unknown thread `{t}` (ISO metric, like M8 or M8x1)")));
+        return Err(bad(cmd, format!("unknown thread `{t}` ({})", solidcraft_doc::thread_spec::HELP)));
     }
     let length = expr(p, "length");
     if let Some(l) = &length {

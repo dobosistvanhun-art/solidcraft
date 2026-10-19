@@ -1000,6 +1000,59 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<BodyName>,
     },
+    /// A gear, chain sprocket, worm or worm wheel made from its parameters, its axis through
+    /// `base` along `axis`, its face starting at `base`.
+    Gear {
+        #[serde(with = "point_expr")]
+        #[walk(placement)]
+        base: PointExpr,
+        #[serde(default = "z_axis")]
+        axis: Dir,
+        #[serde(default)]
+        gear: GearType,
+        /// Teeth (a worm's: its starts).
+        #[walk(unitless = "Teeth")]
+        teeth: Expr,
+        /// Module (mm): transverse for a spur or helical gear, axial for a worm and its wheel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Module")]
+        module: Option<Expr>,
+        /// A sprocket's chain (ISO 606 / ANSI number, e.g. `08B`, `40`, `520`).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        chain: String,
+        /// Face width (a worm's length); a sprocket's defaults to its chain's tooth width.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Width")]
+        width: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Pressure angle")]
+        pressure_angle: Option<Expr>,
+        /// A helical gear's helix angle.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Helix angle")]
+        helix_angle: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "Profile shift")]
+        profile_shift: Option<Expr>,
+        /// A worm's (and its wheel's) diameter quotient q.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "Diameter quotient")]
+        quotient: Option<Expr>,
+        /// A worm wheel's worm starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "Worm starts")]
+        starts: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Bore")]
+        bore: Option<Expr>,
+        /// Left-handed helix (helical gear, worm, worm wheel).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        left_hand: bool,
+        #[serde(default)]
+        operation: Operation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyName>,
+    },
     /// Sheet metal base flange: a sheet from a closed profile (thickness from the rule).
     SheetBase {
         sketch: SketchId,
@@ -1900,6 +1953,21 @@ fn loft_crown_is_plain(c: &[f64; 2]) -> bool {
     c.iter().all(|v| *v == 0.0)
 }
 
+/// What a Gear feature makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GearType {
+    /// An involute spur gear (helical with a helix angle).
+    #[default]
+    Spur,
+    /// A roller-chain sprocket (ISO 606 tooth form).
+    Sprocket,
+    /// A cylindrical worm.
+    Worm,
+    /// The wheel for a worm.
+    WormWheel,
+}
+
 /// Coil cross-sections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2141,6 +2209,7 @@ impl FeatureKind {
             FeatureKind::SheetUnfold { .. } => "RefoldFeature",
             FeatureKind::SheetConvert { .. } => "ConvertToSheetMetalFeature",
             FeatureKind::Coil { .. } => "CoilFeature",
+            FeatureKind::Gear { .. } => "GearFeature",
             FeatureKind::Rib { web: false, .. } => "RibFeature",
             FeatureKind::Rib { .. } => "WebFeature",
             FeatureKind::ReplaceFace { .. } => "ReplaceFaceFeature",
@@ -2221,6 +2290,10 @@ impl FeatureKind {
             FeatureKind::SheetUnfold { .. } => "Refold",
             FeatureKind::SheetConvert { .. } => "ConvertToSheetMetal",
             FeatureKind::Coil { .. } => "Coil",
+            FeatureKind::Gear { gear: GearType::Sprocket, .. } => "Sprocket",
+            FeatureKind::Gear { gear: GearType::Worm, .. } => "Worm",
+            FeatureKind::Gear { gear: GearType::WormWheel, .. } => "WormWheel",
+            FeatureKind::Gear { .. } => "Gear",
             FeatureKind::Rib { web: false, .. } => "Rib",
             FeatureKind::Rib { .. } => "Web",
             FeatureKind::ReplaceFace { .. } => "ReplaceFace",

@@ -639,6 +639,62 @@ impl Dialog {
                 },
                 vec![],
             ),
+            "solid.gear" => Dialog::new(
+                Kind::Primitive {
+                    cmd: "solid.gear",
+                    fields: vec![
+                        ("teeth", "20".into()),
+                        ("module", length_default(s, "2")),
+                        ("width", length_default(s, "10")),
+                        ("pressure_angle", "20 deg".into()),
+                        ("helix_angle", "0 deg".into()),
+                        ("bore", length_default(s, "0")),
+                    ],
+                    operation: 0,
+                    at: None,
+                },
+                vec![],
+            ),
+            "solid.gear.sprocket" => Dialog::new(
+                Kind::Primitive {
+                    cmd: "solid.gear.sprocket",
+                    fields: vec![("chain", "08B".into()), ("teeth", "17".into()), ("bore", length_default(s, "0"))],
+                    operation: 0,
+                    at: None,
+                },
+                vec![],
+            ),
+            "solid.gear.worm" => Dialog::new(
+                Kind::Primitive {
+                    cmd: "solid.gear.worm",
+                    fields: vec![
+                        ("starts", "1".into()),
+                        ("module", length_default(s, "2")),
+                        ("quotient", "10".into()),
+                        ("width", length_default(s, "40")),
+                        ("bore", length_default(s, "0")),
+                    ],
+                    operation: 0,
+                    at: None,
+                },
+                vec![],
+            ),
+            "solid.gear.worm_wheel" => Dialog::new(
+                Kind::Primitive {
+                    cmd: "solid.gear.worm_wheel",
+                    fields: vec![
+                        ("teeth", "30".into()),
+                        ("module", length_default(s, "2")),
+                        ("starts", "1".into()),
+                        ("quotient", "10".into()),
+                        ("width", length_default(s, "16")),
+                        ("bore", length_default(s, "0")),
+                    ],
+                    operation: 0,
+                    at: None,
+                },
+                vec![],
+            ),
             "solid.combine" => Dialog::new(
                 Kind::Combine { operation: 1, keep_tools: false },
                 vec![SelInput::new("Target Body", BODIES, false), SelInput::new("Tool Bodies", BODIES, true)],
@@ -1456,6 +1512,10 @@ fn title(k: &Kind) -> &'static str {
             "solid.cylinder" => "CYLINDER",
             "solid.sphere" => "SPHERE",
             "solid.coil" => "COIL",
+            "solid.gear" => "GEAR",
+            "solid.gear.sprocket" => "SPROCKET",
+            "solid.gear.worm" => "WORM",
+            "solid.gear.worm_wheel" => "WORM WHEEL",
             _ => "TORUS",
         },
         Kind::Combine { .. } => "COMBINE",
@@ -4353,7 +4413,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                     "solid.box" => {
                         p.insert("corner".into(), box_corner(s, fields, point, normal));
                     }
-                    "solid.cylinder" | "solid.coil" => {
+                    "solid.cylinder" | "solid.coil" | "solid.gear" | "solid.gear.sprocket" | "solid.gear.worm" | "solid.gear.worm_wheel" => {
                         p.insert("base".into(), pt(point));
                         if let Some(n) = normal {
                             p.insert("axis".into(), pt(n));
@@ -5099,6 +5159,76 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             };
             d.extra.insert("base".into(), pt_expr(base));
             d.extra.insert("axis".into(), pt3(axis.0));
+            d
+        }
+        FeatureKind::Gear {
+            base,
+            axis,
+            gear,
+            teeth,
+            module,
+            chain,
+            width,
+            pressure_angle,
+            helix_angle,
+            profile_shift,
+            quotient,
+            starts,
+            bore,
+            left_hand,
+            operation,
+            ..
+        } => {
+            use solidcraft_engine::doc::GearType;
+            let cmd = match gear {
+                GearType::Spur => "solid.gear",
+                GearType::Sprocket => "solid.gear.sprocket",
+                GearType::Worm => "solid.gear.worm",
+                GearType::WormWheel => "solid.gear.worm_wheel",
+            };
+            let mut d = start(cmd)?;
+            let e =
+                |x: &Option<solidcraft_engine::doc::Expr>, default: &str| x.as_ref().map(|v| v.to_string()).unwrap_or_else(|| default.to_string());
+            let fields: Vec<(&'static str, String)> = match gear {
+                GearType::Spur => vec![
+                    ("teeth", teeth.to_string()),
+                    ("module", e(module, "2 mm")),
+                    ("width", e(width, "10 mm")),
+                    ("pressure_angle", e(pressure_angle, "20 deg")),
+                    ("helix_angle", e(helix_angle, "0 deg")),
+                    ("bore", e(bore, "0 mm")),
+                ],
+                GearType::Sprocket => vec![("chain", chain.clone()), ("teeth", teeth.to_string()), ("bore", e(bore, "0 mm"))],
+                GearType::Worm => vec![
+                    ("starts", teeth.to_string()),
+                    ("module", e(module, "2 mm")),
+                    ("quotient", e(quotient, "10")),
+                    ("width", e(width, "40 mm")),
+                    ("bore", e(bore, "0 mm")),
+                ],
+                GearType::WormWheel => vec![
+                    ("teeth", teeth.to_string()),
+                    ("module", e(module, "2 mm")),
+                    ("starts", e(starts, "1")),
+                    ("quotient", e(quotient, "10")),
+                    ("width", e(width, "16 mm")),
+                    ("bore", e(bore, "0 mm")),
+                ],
+            };
+            d.kind = Kind::Primitive { cmd, fields, operation: op_index(operation), at: None };
+            d.extra.insert("base".into(), pt_expr(base));
+            d.extra.insert("axis".into(), pt3(axis.0));
+            if *left_hand {
+                d.extra.insert("left_hand".into(), json!(true));
+            }
+            if let Some(x) = profile_shift {
+                d.extra.insert("profile_shift".into(), json!(x.to_string()));
+            }
+            if *gear == GearType::Sprocket
+                && let Some(w) = width
+            {
+                d.extra.insert("width".into(), json!(w.to_string()));
+            }
             d
         }
         FeatureKind::Sphere { center, radius, operation } => {

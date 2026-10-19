@@ -27,6 +27,7 @@ mod feature_refs;
 pub use face_anchor::{FaceAnchor, FaceAttachmentStatus};
 pub mod format;
 mod format_offsets;
+pub mod gear;
 mod history_names;
 pub use format_offsets::whole_profile_selection_from_value;
 pub mod joints;
@@ -51,6 +52,7 @@ mod project3d;
 pub mod render_settings;
 pub use project3d::iso_grid;
 pub mod sheet;
+pub mod thread_spec;
 
 pub use assembly::{
     IDENTITY, MAX_PLACEMENT_DEPTH, MAX_PLACEMENTS, Mat, Occurrence, apply_point, apply_vector, is_identity, map_point_expr, mat_inverse, mat_mul,

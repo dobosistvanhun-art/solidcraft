@@ -308,6 +308,7 @@ mod boolean_diagnostics;
 mod component_frames;
 mod curved_seam_round;
 mod flush_join_loft;
+mod gears;
 mod gltf_import;
 mod import_component;
 mod large_step_import;
@@ -328,6 +329,7 @@ mod robustness;
 mod robustness_goldens;
 mod spiral_join;
 mod step_import_options;
+mod thread_standards;
 mod xz_plane;
 
 /// Plan area a round of radius `r` fills at the concave corner `x` where circles (c1, r1) and

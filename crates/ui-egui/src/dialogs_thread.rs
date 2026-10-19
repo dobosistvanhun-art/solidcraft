@@ -12,9 +12,52 @@ const PITCHES: &[f64] = &[0.2, 0.25, 0.35, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 
 
 /// Returns (Enter pressed, automatic sizing requested).
 pub(crate) fn rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut Option<String>) -> (bool, bool) {
+    // The thread standard: ISO metric keeps its diameter and pitch pickers below, the others
+    // pick from their sizes (Custom is typed: diameter x pitch, angles, depth).
+    use solidcraft_engine::doc::thread_spec;
+    let profile = thread_spec::profile_of(designation).unwrap_or("ISO metric");
+    let mut selected = thread_spec::PROFILES.iter().position(|p| *p == profile).unwrap_or(0);
+    let before_profile = selected;
     row_label(ui, "Profile");
-    ui.label(tr("ISO metric"));
+    combo(ui, "thread_profile", thread_spec::PROFILES, &mut selected);
     ui.end_row();
+    if selected != before_profile
+        && let Some(p) = thread_spec::PROFILES.get(selected)
+    {
+        *designation = match *p {
+            "Custom" => "20x2.5 60°".to_string(),
+            other => thread_spec::sizes(other).into_iter().nth(4).or_else(|| thread_spec::sizes(other).into_iter().next()).unwrap_or_default(),
+        };
+        *suggested = None;
+    }
+    let profile = thread_spec::PROFILES.get(selected).copied().unwrap_or("ISO metric");
+    if profile != "ISO metric" {
+        if profile != "Custom" {
+            let sizes = thread_spec::sizes(profile);
+            let labels: Vec<&str> = sizes.iter().map(String::as_str).collect();
+            let shown = thread_spec::parse(designation).map(|s| s.designation).unwrap_or_default();
+            let mut at = sizes.iter().position(|d| *d == shown || thread_spec::parse(d).map(|s| s.designation) == Some(shown.clone())).unwrap_or(0);
+            let before = at;
+            row_label(ui, "Size");
+            combo(ui, "thread_family_size", &labels, &mut at);
+            if at != before
+                && let Some(d) = sizes.get(at)
+            {
+                *designation = d.clone();
+                *suggested = None;
+            }
+            ui.end_row();
+        }
+        row_label(ui, "Designation");
+        let response = ui.add(egui::TextEdit::singleline(designation).hint_text(tr("e.g. Tr16x4, G1/2, 20x2.5 60°")));
+        crate::scenario::publish_handle("dialog:thread_size", response.rect.center());
+        if response.changed() {
+            *suggested = None;
+        }
+        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.end_row();
+        return (enter, false);
+    }
 
     row_label(ui, "Automatic size");
     let before = designation.trim().is_empty() || suggested.as_deref() == Some(designation.as_str());

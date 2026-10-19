@@ -69,8 +69,28 @@ pub fn sweep_helix(plane: &Plane, region: &Region2, axis_origin: Vec3, axis: Vec
 /// wound outward: `stations` sections per turn, flat end caps. Watertight by construction, for
 /// faceted booleans (modelled threads).
 pub fn sweep_helix_mesh(plane: &Plane, polygon: &[Vec2], axis_origin: Vec3, axis: Vec3, pitch: f64, turns: f64, stations: usize) -> Result<Mesh> {
+    sweep_helix_mesh_tapered(plane, polygon, axis_origin, axis, pitch, turns, stations, 0.0)
+}
+
+/// [`sweep_helix_mesh`] with a taper: the polygon moves toward the axis (along `-plane.x`) by
+/// `taper` per unit of the distance climbed (a tapered pipe thread: 1:16 on the diameter is
+/// 1/32); a negative taper moves it outward.
+#[allow(clippy::too_many_arguments)]
+pub fn sweep_helix_mesh_tapered(
+    plane: &Plane,
+    polygon: &[Vec2],
+    axis_origin: Vec3,
+    axis: Vec3,
+    pitch: f64,
+    turns: f64,
+    stations: usize,
+    taper: f64,
+) -> Result<Mesh> {
     let k = axis.normalized().ok_or_else(|| KernelError::Invalid("helix axis".into()))?;
     let m = polygon.len();
+    if !(taper.is_finite() && taper.abs() < 1.0) {
+        return Err(KernelError::Invalid("helix mesh: taper".into()));
+    }
     if !(pitch.is_finite() && turns.is_finite() && turns > 0.0 && turns <= 200.0 && (3..=64).contains(&m) && (8..=720).contains(&stations)) {
         return Err(KernelError::Invalid("helix mesh: turns in (0, 200], 3…64 corners, 8…720 stations".into()));
     }
@@ -79,8 +99,9 @@ pub fn sweep_helix_mesh(plane: &Plane, polygon: &[Vec2], axis_origin: Vec3, axis
     let mut mesh = Mesh::default();
     for i in 0..=n {
         let a = total * i as f64 / n as f64;
+        let climbed = pitch.abs() * a / std::f64::consts::TAU;
         for q in polygon {
-            let w = plane.to_world(*q);
+            let w = plane.to_world(Vec2::new(q.x - taper * climbed, q.y));
             mesh.positions.push(axis_origin + rot(w - axis_origin, k, a) + k * (pitch * a / std::f64::consts::TAU));
         }
     }

@@ -559,7 +559,14 @@ pub fn groove(s: &ThreadSpec, internal: bool, inner: f64, outer: f64) -> Vec<(f6
         let r_out = r_major + 0.02 * s.pitch;
         let r_cap = r_major - (widest - s.crest_flat) / tsum;
         if inner < r_cap {
-            vec![(inner, edge_lo(r_cap)), (r_cap, edge_lo(r_cap)), (r_out, edge_lo(r_out)), (r_out, edge_hi(r_out)), (r_cap, edge_hi(r_cap)), (inner, edge_hi(r_cap))]
+            vec![
+                (inner, edge_lo(r_cap)),
+                (r_cap, edge_lo(r_cap)),
+                (r_out, edge_lo(r_out)),
+                (r_out, edge_hi(r_out)),
+                (r_cap, edge_hi(r_cap)),
+                (inner, edge_hi(r_cap)),
+            ]
         } else {
             vec![(inner, edge_lo(inner)), (r_out, edge_lo(r_out)), (r_out, edge_hi(r_out)), (inner, edge_hi(inner))]
         }
@@ -569,7 +576,14 @@ pub fn groove(s: &ThreadSpec, internal: bool, inner: f64, outer: f64) -> Vec<(f6
         let edge_hi = |r: f64| half + (r - r_root) * t2;
         let r_cap = r_root + (widest - s.root_flat()) / tsum;
         let mut pts = if outer > r_cap {
-            vec![(r_root, edge_lo(r_root)), (r_cap, edge_lo(r_cap)), (outer, edge_lo(r_cap)), (outer, edge_hi(r_cap)), (r_cap, edge_hi(r_cap)), (r_root, edge_hi(r_root))]
+            vec![
+                (r_root, edge_lo(r_root)),
+                (r_cap, edge_lo(r_cap)),
+                (outer, edge_lo(r_cap)),
+                (outer, edge_hi(r_cap)),
+                (r_cap, edge_hi(r_cap)),
+                (r_root, edge_hi(r_root)),
+            ]
         } else {
             vec![(r_root, edge_lo(r_root)), (outer, edge_lo(outer)), (outer, edge_hi(outer)), (r_root, edge_hi(r_root))]
         };

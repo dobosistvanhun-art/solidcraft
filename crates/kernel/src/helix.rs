@@ -304,39 +304,3 @@ mod tests {
         assert!(loft_to_point(&pl, &lp, Vec3::new(1.0, 1.0, 0.0)).is_err());
     }
 }
-
-#[cfg(test)]
-mod worm_probe {
-    use super::*;
-
-    #[test]
-    #[ignore = "worm probe"]
-    fn why_the_smooth_helix_fails() {
-        // A worm's section: six segments (two cubic pieces per flank, tip and root arcs).
-        let r1 = 10.0f64;
-        let (m, lead, alpha) = (2.0f64, std::f64::consts::PI * 2.0, 20f64.to_radians());
-        let half = |r: f64| std::f64::consts::TAU * (std::f64::consts::PI * m / 4.0 - (r - r1) * alpha.tan()) / lead;
-        let (ra, rf) = (r1 + m, r1 - 1.2 * m);
-        let pt = |r: f64, s: f64| Vec2::from_angle(s * half(r)) * r;
-        let mut segs = Vec::new();
-        let n = 2;
-        for i in 0..n {
-            let (a, b) = (rf + (ra - rf) * i as f64 / n as f64, rf + (ra - rf) * (i + 1) as f64 / n as f64);
-            segs.push(solidcraft_geom::Seg2::Line { a: pt(a, -1.0), b: pt(b, -1.0) });
-        }
-        segs.push(solidcraft_geom::Seg2::Arc { center: Vec2::new(0.0, 0.0), radius: ra, start: -half(ra), sweep: 2.0 * half(ra) });
-        for i in (0..n).rev() {
-            let (a, b) = (rf + (ra - rf) * i as f64 / n as f64, rf + (ra - rf) * (i + 1) as f64 / n as f64);
-            segs.push(solidcraft_geom::Seg2::Line { a: pt(b, 1.0), b: pt(a, 1.0) });
-        }
-        segs.push(solidcraft_geom::Seg2::Arc { center: Vec2::new(0.0, 0.0), radius: rf, start: half(rf), sweep: std::f64::consts::TAU - 2.0 * half(rf) });
-        let region = solidcraft_geom::Region2 { outer: solidcraft_geom::Loop2 { segs }, holes: vec![] };
-        let plane = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Y };
-        let numbered = crate::numbered::number_regions(std::slice::from_ref(&region)).pop().unwrap();
-        let profile = numbered.outer.oriented(false);
-        for turns in [0.5, 3.0] {
-            let r = smooth_helix(&plane, &profile, Vec3::ZERO, Vec3::Z, lead, turns);
-            eprintln!("SMOOTH turns={turns}: {:?}", r.as_ref().map(|b| b.face_count()).map_err(|e| e.to_string()));
-        }
-    }
-}

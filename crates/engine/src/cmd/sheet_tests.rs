@@ -4571,3 +4571,109 @@ fn a_hole_that_parts_a_flange_from_the_base_names_it() {
     assert_eq!(out["warning"], json!(last_warning(&s)));
     assert_eq!(flat_pieces(&s).len(), 2);
 }
+
+#[test]
+fn an_edge_flange_feature_sets_the_gap_of_its_own_corners() {
+    use std::f64::consts::SQRT_2;
+    // At 90° the end of the flange on y = 0 at the corner at the origin lies at x = g/√2 + T in the flat
+    // (see closed_corners_reach_the_flat_pattern_and_the_dxf), at flat y = s0 − BA for s0 = 3, BA = π.
+    let tray = |gap: Option<&str>| {
+        let mut s = Session::default();
+        run(
+            &mut s,
+            "sheet.manage_rules",
+            json!({"name": "AL2", "thickness": "2 mm", "k_factor": 0.5, "bend_radius": "1 mm", "gap": "0.5 mm", "active": true}),
+        );
+        base(&mut s, 120.0, 90.0);
+        let mut p = json!({"edges": [[60, 0, 2], [120, 45, 2], [60, 90, 2], [0, 45, 2]], "height": 38.6});
+        if let Some(g) = gap {
+            p["corner_gap"] = json!(g);
+        }
+        run(&mut s, "sheet.flange", p);
+        s
+    };
+    let has = |s: &mut Session, g: f64| {
+        let f = flat(s);
+        let (x, y) = (g / SQRT_2 + 2.0, 3.0 - PI);
+        f["outline"][0].as_array().is_some_and(|l| {
+            l.iter().any(|p| (p[0].as_f64().unwrap_or(f64::NAN) - x).abs() < 1e-6 && (p[1].as_f64().unwrap_or(f64::NAN) - y).abs() < 1e-6)
+        })
+    };
+    let mut rule = tray(None);
+    assert!(no_errors_or_warnings(&rule), "{:?}", rule.model.results);
+    assert!(has(&mut rule, 0.5), "the rule's gap");
+    let mut own = tray(Some("2 mm"));
+    assert!(no_errors_or_warnings(&own), "{:?}", own.model.results);
+    assert!(has(&mut own, 2.0) && !has(&mut own, 0.5), "the feature's gap at its corners");
+    // It is an input of the feature after the height and angle, saved with it and kept on reopening.
+    let names = own
+        .doc
+        .features
+        .iter()
+        .find(|f| matches!(f.kind, solidcraft_doc::FeatureKind::SheetFlange { .. }))
+        .map(|f| f.param_names.clone())
+        .unwrap_or_default();
+    assert_eq!(names.len(), 3, "height, angle and the corner gap: {names:?}");
+    assert!(own.doc.to_json().contains("\"corner_gap\""));
+    assert!(!rule.doc.to_json().contains("\"corner_gap\""), "a flange that follows the rule saves no gap");
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&own.doc.to_json()).unwrap());
+    assert!(has(&mut reopened, 2.0));
+    run(&mut own, "parameters.change", json!({"name": names[2], "expression": "1 mm"}));
+    assert!(has(&mut own, 1.0));
+    // The rule keeps its own gap.
+    let listed = run(&mut own, "sheet.rules", json!({}));
+    assert_eq!(listed["rules"][0]["values"]["gap"], json!(0.5));
+}
+
+#[test]
+fn only_an_edge_flange_takes_a_corner_gap_and_it_must_be_a_length() {
+    let mut s = Session::default();
+    run(&mut s, "sheet.manage_rules", json!({"name": "AL2", "thickness": "2 mm", "k_factor": 0.5, "bend_radius": "1 mm", "active": true}));
+    base(&mut s, 120.0, 90.0);
+    let err = s.execute("sheet.flange", &json!({"edges": [[60, 0, 2]], "height": 10, "corner_gap": "5 deg"})).map(|_| ()).unwrap_err().to_string();
+    assert!(err.contains("corner_gap"), "{err}");
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Base"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [50, 40]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let err = s.execute("sheet.flange", &json!({"sketch": "Base", "corner_gap": "1 mm"})).map(|_| ()).unwrap_err().to_string();
+    assert!(err.contains("edge flanges only"), "{err}");
+}
+
+#[test]
+fn a_rule_names_its_material_and_an_auto_k_factor_follows_it() {
+    let mut s = Session::default();
+    // The materials are listed with their class.
+    let listed = run(&mut s, "sheet.rules", json!({}));
+    let mats = listed["materials"].as_array().cloned().unwrap_or_default();
+    assert!(mats.iter().any(|m| m["id"] == "1.4301" && m["class"] == "hard"), "{mats:?}");
+    assert!(mats.iter().any(|m| m["id"] == "almg3" && m["class"] == "soft"), "{mats:?}");
+    // 2 mm stainless, bend radius 2 mm (r/t = 1): K 0.40; 7 mm (r/t = 3.5): 0.5.
+    let r = run(
+        &mut s,
+        "sheet.manage_rules",
+        json!({"name": "INOX2", "thickness": "2 mm", "bend_radius": "2 mm", "material": "1.4301", "k_factor": "auto", "active": true}),
+    );
+    assert_eq!((r["rule"]["material"].clone(), r["rule"]["k_factor"].clone()), (json!("1.4301"), json!("auto")));
+    assert!((r["values"]["k_factor"].as_f64().unwrap_or(0.0) - 0.40).abs() < 1e-12, "{r}");
+    let r = run(&mut s, "sheet.manage_rules", json!({"name": "INOX2", "bend_radius": "7 mm"}));
+    assert!((r["values"]["k_factor"].as_f64().unwrap_or(0.0) - 0.5).abs() < 1e-12, "{r}");
+    // Aluminium at r/t = 2: 0.40; the thickness alone moves it (4 mm: r/t = 0.5 → 0.33).
+    let r =
+        run(&mut s, "sheet.manage_rules", json!({"name": "AL", "thickness": "2 mm", "bend_radius": "4 mm", "material": "AlMg3", "k_factor": "auto"}));
+    assert_eq!(r["rule"]["material"], "almg3", "ids are stored as listed");
+    assert!((r["values"]["k_factor"].as_f64().unwrap_or(0.0) - 0.40).abs() < 1e-12, "{r}");
+    let r = run(&mut s, "sheet.manage_rules", json!({"name": "AL", "thickness": "8 mm"}));
+    assert!((r["values"]["k_factor"].as_f64().unwrap_or(0.0) - 0.33).abs() < 1e-12, "{r}");
+    // A K-factor of its own wins over the material; an unknown material is refused.
+    let r = run(&mut s, "sheet.manage_rules", json!({"name": "AL", "k_factor": 0.42}));
+    assert!((r["values"]["k_factor"].as_f64().unwrap_or(0.0) - 0.42).abs() < 1e-12, "{r}");
+    let err = s.execute("sheet.manage_rules", &json!({"name": "AL", "material": "unobtainium"})).map(|_| ()).unwrap_err().to_string();
+    assert!(err.contains("unknown material"), "{err}");
+    // Material and auto K are saved and reopen; a sheet's bend allowance follows the auto K.
+    let doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+    let rule = doc.sheet_rule(Some("INOX2"));
+    assert_eq!((rule.material.as_str(), rule.k_factor.as_str()), ("1.4301", "auto"));
+    let r = run(&mut s, "sheet.manage_rules", json!({"name": "AL", "material": ""}));
+    assert!(r["rule"].get("material").is_none(), "no material: none saved: {r}");
+}

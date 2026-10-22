@@ -1111,6 +1111,11 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Corner relief")]
         corner_relief: Option<Expr>,
+        /// The gap between this feature's flanges where they meet at a corner, in place of the
+        /// rule's `gap`. Walked after the corner relief, so the inputs before it keep their names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Corner gap")]
+        corner_gap: Option<Expr>,
     },
     /// Flat hems on sheet edges.
     SheetHem {

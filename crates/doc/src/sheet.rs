@@ -247,8 +247,14 @@ pub(crate) fn material_union(regions: Vec<Region2>, work: &mut FlatWork) -> Resu
 pub struct SheetRule {
     pub name: String,
     pub thickness: String,
+    /// An expression, or `auto`: the K-factor from the material's class and the bend radius
+    /// over the thickness ([`auto_k_factor`]).
     pub k_factor: String,
     pub bend_radius: String,
+    /// The sheet's material: an id from [`MATERIALS`], or empty (none named; `auto` K-factors
+    /// then take mild steel).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material: String,
     #[serde(default = "rule_relief_width")]
     pub relief_width: String,
     #[serde(default = "rule_relief_depth")]
@@ -297,6 +303,7 @@ impl SheetRule {
             thickness: "2.5 mm".into(),
             k_factor: "0.44".into(),
             bend_radius: "Thickness".into(),
+            material: String::new(),
             relief_width: rule_relief_width(),
             relief_depth: rule_relief_depth(),
             corner_relief: rule_corner_relief(),
@@ -304,6 +311,74 @@ impl SheetRule {
             hem_gap: rule_hem_gap(),
             gap: rule_gap(),
         }
+    }
+}
+
+/// How readily a sheet material yields in a bend, which sets where its neutral fibre lies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MaterialClass {
+    /// Soft aluminium, copper.
+    Soft,
+    /// Mild and galvanised steel, brass, harder aluminium.
+    Medium,
+    /// Stainless and spring steel.
+    Hard,
+}
+
+/// A sheet material a rule may name: its id (what a rule saves), a label and its class.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Material {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub class: MaterialClass,
+}
+
+/// The materials a rule may name.
+pub const MATERIALS: &[Material] = &[
+    Material { id: "dc01", label: "Steel DC01 (cold rolled)", class: MaterialClass::Medium },
+    Material { id: "s235", label: "Steel S235JR", class: MaterialClass::Medium },
+    Material { id: "s355", label: "Steel S355", class: MaterialClass::Hard },
+    Material { id: "dx51d", label: "Galvanised steel DX51D", class: MaterialClass::Medium },
+    Material { id: "1.4301", label: "Stainless 1.4301 (304)", class: MaterialClass::Hard },
+    Material { id: "1.4404", label: "Stainless 1.4404 (316L)", class: MaterialClass::Hard },
+    Material { id: "1.4016", label: "Stainless 1.4016 (430)", class: MaterialClass::Hard },
+    Material { id: "al99.5", label: "Aluminium Al99.5 (1050)", class: MaterialClass::Soft },
+    Material { id: "almg1", label: "Aluminium AlMg1 (5005)", class: MaterialClass::Soft },
+    Material { id: "almg3", label: "Aluminium AlMg3 (5754)", class: MaterialClass::Soft },
+    Material { id: "almg4.5mn", label: "Aluminium AlMg4.5Mn (5083)", class: MaterialClass::Medium },
+    Material { id: "cu-etp", label: "Copper Cu-ETP", class: MaterialClass::Soft },
+    Material { id: "cuzn37", label: "Brass CuZn37", class: MaterialClass::Medium },
+];
+
+/// A material by id (case does not matter).
+pub fn material(id: &str) -> Option<&'static Material> {
+    let id = id.trim();
+    MATERIALS.iter().find(|m| m.id.eq_ignore_ascii_case(id))
+}
+
+/// Whether a rule's K-factor text asks for it to be worked out (`auto`).
+pub fn is_auto_k(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("auto")
+}
+
+/// The K-factor for air bending from the material's class and the inner bend radius over the
+/// thickness (the common workshop table): up to one thickness 0.33 / 0.38 / 0.40 (soft / medium
+/// / hard), up to three thicknesses 0.40 / 0.43 / 0.45, beyond that 0.50 (the neutral fibre in the
+/// middle).
+pub fn auto_k_factor(class: MaterialClass, radius: f64, thickness: f64) -> f64 {
+    let rt = if thickness > 0.0 { radius / thickness } else { 0.0 };
+    let (tight, mid) = match class {
+        MaterialClass::Soft => (0.33, 0.40),
+        MaterialClass::Medium => (0.38, 0.43),
+        MaterialClass::Hard => (0.40, 0.45),
+    };
+    if !rt.is_finite() || rt <= 1.0 {
+        tight
+    } else if rt <= 3.0 {
+        mid
+    } else {
+        0.5
     }
 }
 
@@ -368,6 +443,8 @@ pub struct ReliefOverride {
     pub shape: Option<ReliefShape>,
     /// How far across the relief is (mm).
     pub size: Option<f64>,
+    /// The gap between the flanges that meet at the corner (mm), in place of the rule's.
+    pub gap: Option<f64>,
 }
 
 /// A rule's values (mm, unit-less K).
@@ -405,10 +482,16 @@ impl Document {
             let f = |n: &str| if n == "Thickness" && !vals.contains_key("Thickness") { Ok(Value::length(t)) } else { look(n) };
             expr::eval_with(e, &f)?.to_kind(k)
         };
+        let class = if r.material.trim().is_empty() {
+            MaterialClass::Medium
+        } else {
+            material(&r.material).map(|m| m.class).ok_or_else(|| DocError::Invalid(format!("unknown sheet material `{}`", r.material)))?
+        };
+        let bend_radius = with_t(&r.bend_radius, Kind::Length)?;
         let v = RuleValues {
             thickness: t,
-            k_factor: with_t(&r.k_factor, Kind::Unitless)?,
-            bend_radius: with_t(&r.bend_radius, Kind::Length)?,
+            k_factor: if is_auto_k(&r.k_factor) { auto_k_factor(class, bend_radius, t) } else { with_t(&r.k_factor, Kind::Unitless)? },
+            bend_radius,
             relief_width: with_t(&r.relief_width, Kind::Length)?,
             relief_depth: with_t(&r.relief_depth, Kind::Length)?,
             corner_relief: with_t(&r.corner_relief, Kind::Length)?,
@@ -2367,8 +2450,14 @@ impl SheetBody {
         for (&i, &free) in made.iter().zip(&freed) {
             notes.extend(self.relieve_bend_ends(i, free));
         }
+        // The feature's own corner gap holds for the corners it makes only: the sheet keeps the rule's.
+        let rule_gap = self.gap;
+        if let Some(g) = relief.gap {
+            self.gap = g;
+        }
         notes.extend(self.close_corners(&made, relief));
         notes.extend(self.close_return_corners(&made));
+        self.gap = rule_gap;
         Ok((made, notes))
     }
 
@@ -7659,5 +7748,50 @@ mod tests {
         let material = after.flat_material().unwrap();
         assert_eq!(material.len(), 2);
         assert!(after.parted_from_base(&material, &two).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::*;
+
+    #[test]
+    fn the_auto_k_factor_follows_the_air_bending_table() {
+        // Up to one thickness, up to three, beyond: soft / medium / hard.
+        for (class, want) in [
+            (MaterialClass::Soft, [0.33, 0.33, 0.40, 0.40, 0.5]),
+            (MaterialClass::Medium, [0.38, 0.38, 0.43, 0.43, 0.5]),
+            (MaterialClass::Hard, [0.40, 0.40, 0.45, 0.45, 0.5]),
+        ] {
+            for (r, k) in [0.0, 2.0, 2.01, 6.0, 6.01].iter().zip(want) {
+                assert_eq!(auto_k_factor(class, *r, 2.0), k, "{class:?} r {r}");
+            }
+        }
+        // A thickness of nothing (refused elsewhere) gives the tight value, never NaN.
+        assert_eq!(auto_k_factor(MaterialClass::Hard, 1.0, 0.0), 0.40);
+    }
+
+    #[test]
+    fn materials_have_unique_ids_and_are_found_ignoring_case() {
+        for (i, m) in MATERIALS.iter().enumerate() {
+            assert!(MATERIALS.iter().skip(i + 1).all(|n| !n.id.eq_ignore_ascii_case(m.id)), "{}", m.id);
+            assert_eq!(material(&m.id.to_ascii_uppercase()).map(|x| x.id), Some(m.id));
+        }
+        assert!(material("nothing").is_none() && is_auto_k(" Auto ") && !is_auto_k("0.44"));
+    }
+
+    #[test]
+    fn a_rule_without_a_material_takes_mild_steel_for_an_auto_k_and_an_unknown_one_is_an_error() {
+        let doc = Document::new("A");
+        let vals = std::collections::BTreeMap::new();
+        // Steel default: 2.5 mm, radius = Thickness (r/t = 1).
+        let auto = SheetRule { k_factor: "auto".into(), ..SheetRule::steel() };
+        assert_eq!(doc.rule_values(&vals, &auto).map(|v| v.k_factor).ok(), Some(0.38));
+        let alu = SheetRule { material: "almg3".into(), ..auto.clone() };
+        assert_eq!(doc.rule_values(&vals, &alu).map(|v| v.k_factor).ok(), Some(0.33));
+        let bad = SheetRule { material: "unobtainium".into(), ..auto };
+        assert!(doc.rule_values(&vals, &bad).is_err());
+        // The steel rule saves no material, so designs without one save as before.
+        assert!(!serde_json::to_string(&SheetRule::steel()).unwrap_or_default().contains("material"));
     }
 }

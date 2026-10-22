@@ -7,7 +7,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Stroke, pos2, vec2};
 use serde_json::{Map, Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
-use solidcraft_engine::doc::sheet::SheetRule;
+use solidcraft_engine::doc::sheet::{MATERIALS, SheetRule};
 use solidcraft_engine::doc::{FeatureKind, ProfileSel};
 use solidcraft_engine::geom::Vec3;
 
@@ -59,6 +59,8 @@ pub enum Sm {
         /// 0 is the rule's) and its size (empty: the rule's).
         relief: usize,
         relief_size: String,
+        /// Edge flanges: the gap where their flanges meet at a corner (empty: the rule's).
+        gap: String,
     },
     Hem {
         length: String,
@@ -85,6 +87,8 @@ pub enum Sm {
         values: Vec<String>,
         /// The corner relief shape (index into `RELIEF_SHAPES`).
         relief: usize,
+        /// The material (0: none named, else 1 + index into `MATERIALS`).
+        material: usize,
         active: bool,
         loaded: Option<usize>,
     },
@@ -143,6 +147,7 @@ fn new_flange(ty: usize) -> Sm {
         own: Vec::new(),
         relief: 0,
         relief_size: String::new(),
+        gap: String::new(),
     }
 }
 
@@ -164,12 +169,42 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             let active = app.session.doc.sheet.active.clone();
             let rules = rule_list(app);
             let pick = active.and_then(|a| rules.iter().position(|r| r.name == a)).unwrap_or(0);
-            (Sm::Rules { pick, name: String::new(), values: Vec::new(), relief: 0, active: true, loaded: None }, vec![])
+            (Sm::Rules { pick, name: String::new(), values: Vec::new(), relief: 0, material: 0, active: true, loaded: None }, vec![])
         }
         "sheet.flat_pattern" => (Sm::FlatPattern { data: None, key: None, status: None }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         _ => return None,
     };
     Some((Kind::Sheet(sm), inputs))
+}
+
+/// The rule the manager's fields make (for showing its values while it is edited).
+fn rule_from(name: &str, values: &[String], relief: usize, material: usize) -> SheetRule {
+    let mut r = SheetRule { name: name.to_string(), ..SheetRule::steel() };
+    for ((key, _), v) in RULE_FIELDS.iter().zip(values) {
+        if v.trim().is_empty() {
+            continue;
+        }
+        let slot = match *key {
+            "thickness" => &mut r.thickness,
+            "k_factor" => &mut r.k_factor,
+            "bend_radius" => &mut r.bend_radius,
+            "relief_width" => &mut r.relief_width,
+            "relief_depth" => &mut r.relief_depth,
+            "corner_relief" => &mut r.corner_relief,
+            "hem_gap" => &mut r.hem_gap,
+            _ => &mut r.gap,
+        };
+        *slot = v.trim().to_string();
+    }
+    r.corner_relief_shape = RELIEF_SHAPES.get(relief).copied().unwrap_or("notch").into();
+    r.material = material.checked_sub(1).and_then(|i| MATERIALS.get(i)).map_or_else(String::new, |m| m.id.to_string());
+    r
+}
+
+/// The K-factor a rule comes to ("0.43"), or "?" while a field doesn't evaluate.
+fn k_text(app: &SolveApp, r: &SheetRule) -> String {
+    let (vals, _) = app.session.doc.param_values();
+    app.session.doc.rule_values(&vals, r).map_or_else(|_| "?".into(), |v| format!("{:.2}", v.k_factor))
 }
 
 /// The design's rules (the default steel rule when it has none).
@@ -189,6 +224,39 @@ fn rule_combo(app: &SolveApp, ui: &mut egui::Ui, id: &str, rule: &mut usize) {
     row_label(ui, "Rule");
     combo(ui, id, &refs, rule);
     ui.end_row();
+    // What the rule makes: thickness, material and K-factor (changed in Sheet Metal Rules).
+    let r = match rule.checked_sub(1) {
+        Some(i) => rule_list(app).get(i).cloned().unwrap_or_else(|| app.session.doc.sheet_rule(None)),
+        None => app.session.doc.sheet_rule(None),
+    };
+    row_label(ui, "Sheet");
+    ui.label(RichText::new(rule_summary(app, &r)).weak())
+        .on_hover_text("Thickness, material and K-factor of the rule — Sheet Metal Rules changes them");
+    ui.end_row();
+}
+
+/// A material's label for the rule manager's list.
+fn material_labels() -> Vec<&'static str> {
+    std::iter::once("—").chain(MATERIALS.iter().map(|m| m.label)).collect()
+}
+
+/// 2.5 → "2.5", 2.0 → "2", to three decimals.
+fn trim_number(v: f64) -> String {
+    let t = format!("{v:.3}");
+    t.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// "2.5 mm · Steel DC01 (cold rolled) · K 0.43 (auto)": a rule's sheet, evaluated.
+fn rule_summary(app: &SolveApp, r: &SheetRule) -> String {
+    let (vals, _) = app.session.doc.param_values();
+    match app.session.doc.rule_values(&vals, r) {
+        Ok(v) => {
+            let mat = solidcraft_engine::doc::sheet::material(&r.material).map(|m| format!(" · {}", m.label)).unwrap_or_default();
+            let auto = if solidcraft_engine::doc::sheet::is_auto_k(&r.k_factor) { " (auto)" } else { "" };
+            format!("{} mm{mat} · K {:.2}{auto}", trim_number(v.thickness), v.k_factor)
+        }
+        Err(e) => e.to_string(),
+    }
 }
 
 /// The flange type the picks make: edges an edge flange, sketch lines a contour, else base.
@@ -208,7 +276,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
     let t = Tokens::get();
     let mut enter = false;
     match k {
-        Sm::Flange { ty, height, angle, radius, position, flip, distance, reverse, rule, own, relief, relief_size } => {
+        Sm::Flange { ty, height, angle, radius, position, flip, distance, reverse, rule, own, relief, relief_size, gap } => {
             *ty = flange_type(inputs);
             row_label(ui, "Type");
             ui.label(FLANGE_TYPES.get(*ty).copied().unwrap_or(""));
@@ -236,6 +304,15 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
                     row_label(ui, "Corner Relief");
                     let r = ui.add(egui::TextEdit::singleline(relief_size).hint_text(crate::i18n::tr_label("from the rule")));
                     crate::params_dialog::complete(ui, &r, relief_size);
+                    enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.end_row();
+                    // The gap between these flanges where they meet at a corner: the rule's unless set here.
+                    row_label(ui, "Corner Gap");
+                    let r = ui
+                        .add(egui::TextEdit::singleline(gap).hint_text(crate::i18n::tr_label("from the rule")))
+                        .on_hover_text("The gap between the flanges where they meet at a corner. Empty: the rule's Flange Gap.");
+                    crate::scenario::publish_handle("dialog:Corner Gap", r.rect.center());
+                    crate::params_dialog::complete(ui, &r, gap);
                     enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.end_row();
                     // With several edges, a row for each: an angle and a height of its own, left
@@ -317,7 +394,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
         }
         Sm::Unfold { .. } => {}
         Sm::Convert { rule } => rule_combo(app, ui, "sm_conv_rule", rule),
-        Sm::Rules { pick, name, values, relief, active, loaded } => {
+        Sm::Rules { pick, name, values, relief, material, active, loaded } => {
             let rules = rule_list(app);
             let mut names: Vec<String> = rules.iter().map(|r| r.name.clone()).collect();
             names.push("New rule…".into());
@@ -339,6 +416,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
                     base.gap.clone(),
                 ];
                 *relief = RELIEF_SHAPES.iter().position(|s| s.eq_ignore_ascii_case(base.corner_relief_shape.trim())).unwrap_or(0);
+                *material = solidcraft_engine::doc::sheet::material(&base.material)
+                    .and_then(|m| MATERIALS.iter().position(|x| x.id == m.id))
+                    .map_or(0, |i| i + 1);
                 *active = app.session.doc.sheet_rule(None).name == base.name || *pick >= rules.len();
                 if *pick >= rules.len() {
                     *name = format!("Rule{}", rules.len() + 1);
@@ -350,7 +430,36 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
                 ui.text_edit_singleline(name);
                 ui.end_row();
             }
+            // The material: with an automatic K-factor it sets where the neutral fibre lies.
+            row_label(ui, "Material");
+            combo(ui, "sm_rule_material", &material_labels(), material);
+            ui.end_row();
+            let shown = rule_from(name, values, *relief, *material);
             for ((key, label), v) in RULE_FIELDS.iter().zip(values.iter_mut()) {
+                if *key == "k_factor" {
+                    // A number or expression, or Auto: from the material and the bend radius over the thickness.
+                    row_label(ui, label);
+                    let mut auto = solidcraft_engine::doc::sheet::is_auto_k(v);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut auto, crate::i18n::tr_label("Auto"))
+                            .on_hover_text("From the material and the bend radius over the thickness (air bending table)")
+                            .changed()
+                        {
+                            *v = if auto { "auto".into() } else { k_text(app, &shown) };
+                        }
+                        if auto {
+                            ui.label(RichText::new(format!("= {}", k_text(app, &shown))).weak());
+                        } else {
+                            let w = (ui.available_width() - 4.0).max(40.0);
+                            let r = ui.add(egui::TextEdit::singleline(v).desired_width(w));
+                            crate::params_dialog::complete(ui, &r, v);
+                            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        }
+                    });
+                    ui.end_row();
+                    continue;
+                }
                 if *key == "corner_relief" {
                     // The shape goes with its size, the row below.
                     row_label(ui, "Corner Relief Shape");
@@ -532,7 +641,7 @@ fn flange_edges(inputs: &[SelInput], own: &[(Vec3, String, String)]) -> Vec<Valu
 pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String, Value>) -> Result<Vec<(String, Value)>, String> {
     let s = &app.session;
     let (cmd, mut p): (&str, Value) = match k {
-        Sm::Flange { height, angle, radius, position, flip, distance, reverse, rule, own, relief, relief_size, .. } => {
+        Sm::Flange { height, angle, radius, position, flip, distance, reverse, rule, own, relief, relief_size, gap, .. } => {
             let mut p = match flange_type(inputs) {
                 1 => {
                     let mut p = json!({"type": "edge", "edges": flange_edges(inputs, own), "height": height, "angle": angle,
@@ -545,6 +654,9 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
                     }
                     if !relief_size.trim().is_empty() {
                         p["corner_relief"] = json!(relief_size);
+                    }
+                    if !gap.trim().is_empty() {
+                        p["corner_gap"] = json!(gap);
                     }
                     p
                 }
@@ -638,7 +750,7 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             }
             ("sheet.convert", p)
         }
-        Sm::Rules { pick, name, values, relief, active, .. } => {
+        Sm::Rules { pick, name, values, relief, material, active, .. } => {
             let rules = rule_list(app);
             let n = match rules.get(*pick) {
                 Some(r) => r.name.clone(),
@@ -647,7 +759,8 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             if n.is_empty() {
                 return Err("give the rule a name".into());
             }
-            let mut p = json!({"name": n, "active": active, "corner_relief_shape": RELIEF_SHAPES.get(*relief).copied().unwrap_or("notch")});
+            let mut p = json!({"name": n, "active": active, "corner_relief_shape": RELIEF_SHAPES.get(*relief).copied().unwrap_or("notch"),
+                "material": material.checked_sub(1).and_then(|i| MATERIALS.get(i)).map_or("", |m| m.id)});
             for ((k, _), v) in RULE_FIELDS.iter().zip(values) {
                 if !v.trim().is_empty() {
                     p[*k] = json!(v);
@@ -691,7 +804,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
             }
             (f, curves.iter().map(|id| Sel::SketchCurve { id: id.clone() }).collect())
         }
-        FeatureKind::SheetFlange { edges, height, angle, radius, position, flip, body, corner_relief_shape, corner_relief } => {
+        FeatureKind::SheetFlange { edges, height, angle, radius, position, flip, body, corner_relief_shape, corner_relief, corner_gap } => {
             if let Some(b) = body {
                 extra.insert("body".into(), json!(b));
             }
@@ -725,6 +838,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
                     .and_then(|name| RELIEF_SHAPES.iter().position(|s| s.eq_ignore_ascii_case(name.trim())))
                     .map_or(0, |i| i + 1),
                 relief_size: corner_relief.as_deref().map(str::to_string).unwrap_or_default(),
+                gap: corner_gap.as_deref().map(str::to_string).unwrap_or_default(),
             };
             (f, picked)
         }

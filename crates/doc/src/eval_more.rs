@@ -527,7 +527,7 @@ pub(super) fn sheet_eval(
             st.sheets.push(sh);
             Ok(())
         }
-        FeatureKind::SheetFlange { edges, height, angle, radius, position, flip, body, corner_relief_shape, corner_relief } => {
+        FeatureKind::SheetFlange { edges, height, angle, radius, position, flip, body, corner_relief_shape, corner_relief, corner_gap } => {
             let i = sheet_for(st, body, edges.first().map(|e| e.point.0))?;
             let (h, a) = (val(vals, height, Kind::Length)?, val(vals, angle, Kind::Angle)?);
             // Each edge's own height and angle, else the feature's.
@@ -560,6 +560,10 @@ pub(super) fn sheet_eval(
                     None => None,
                 },
                 size: match corner_relief {
+                    Some(e) => Some(val(vals, e, Kind::Length)?),
+                    None => None,
+                },
+                gap: match corner_gap {
                     Some(e) => Some(val(vals, e, Kind::Length)?),
                     None => None,
                 },

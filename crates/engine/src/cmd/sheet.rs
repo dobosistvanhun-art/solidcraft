@@ -20,7 +20,8 @@ pub static COMMANDS: &[CommandSpec] = &[
          edge: edges: [[x,y,z] on top/bottom edges, or {point: [x,y,z], angle?, height?} for an edge with its own angle and height] + \
          height (to the outer face), angle? (default 90 deg), radius? (default: rule), \
          position?: inside|outside|middle, flip?, body?, corner_relief_shape?: notch|round|rectangular|tear and corner_relief? (size across): \
-         the relief at the corners these flanges make (default: the rule's); \
+         the relief at the corners these flanges make (default: the rule's); corner_gap? (the gap between these flanges where they meet \
+         at a corner, default: the rule's gap); \
          type?: base|edge|contour (default from the inputs); name?, body_name? (the new body). \
          Thickness, K-factor and bend radius come from the rule (sheet.manage_rules); passing them here is refused, \
          and so is the corner relief on a base or contour flange",
@@ -53,13 +54,14 @@ pub static COMMANDS: &[CommandSpec] = &[
              the faces' holes become cut-outs and their engravings, up to half the thickness deep, pockets)",
         ),
     CommandSpec::new("sheet.manage_rules", "Sheet Metal Rules", rules).at("SHEET METAL", "MODIFY").icon("sheet_rules").params(
-        "name (new or existing); thickness?, k_factor?, bend_radius?, relief_width?, relief_depth?, corner_relief?, hem_gap?, gap? (expressions; `Thickness` is the rule's; \
+        "name (new or existing); thickness?, k_factor? (an expression, or `auto`: from the material and the bend radius over the thickness), \
+         material? (one of sheet.rules → materials, e.g. dc01, 1.4301, almg3; empty for none), bend_radius?, relief_width?, relief_depth?, corner_relief?, hem_gap?, gap? (expressions; `Thickness` is the rule's; \
          gap: between flanges that meet at a corner, whose ends are closed toward each other at any angle); \
          corner_relief_shape?: notch|round|rectangular|tear (what is cut where two bends meet at a corner of the base: round and rectangular a relief \
          `corner_relief` across; tear none, each bend's end is cut straight from the corner to its flange's end; default notch); \
          active?: bool; delete?: bool",
     ),
-    CommandSpec::new("sheet.rules", "List Sheet Metal Rules", list_rules).icon("sheet_rules").noundo().doc_only().params("→ rules with their expressions and values, and the active one"),
+    CommandSpec::new("sheet.rules", "List Sheet Metal Rules", list_rules).icon("sheet_rules").noundo().doc_only().params("→ rules with their expressions and values, the active one, and the materials a rule may name (id, label, class)"),
     CommandSpec::new("sheet.flat_pattern", "Create Flat Pattern", flat_pattern)
         .at("SHEET METAL", "CREATE")
         .icon("flat")
@@ -140,6 +142,8 @@ const RULE_ONLY: [&str; 8] =
 
 /// The two rule values an edge flange may set for itself: the corner relief.
 const EDGE_RELIEF: [&str; 2] = ["corner_relief", "corner_relief_shape"];
+/// Edge-flange-only parameters that a base or contour flange refuses.
+const EDGE_ONLY: [&str; 1] = ["corner_gap"];
 
 fn flange(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sheet.flange";
@@ -159,6 +163,11 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
                  sheet.manage_rules {{name, {key}, …}} and pass its name as `rule`"
             ),
         ));
+    }
+    if ty != "edge"
+        && let Some(key) = EDGE_ONLY.iter().find(|k| p.get(**k).is_some_and(|v| !v.is_null()))
+    {
+        return Err(bad(cmd, format!("`{key}` is for edge flanges only (the corners their flanges make)")));
     }
     match ty.as_str() {
         "base" => {
@@ -221,6 +230,10 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(c) = &corner_relief {
                 check_expr(s, c, Kind::Length, cmd, "corner_relief")?;
             }
+            let corner_gap = expr(p, "corner_gap");
+            if let Some(g) = &corner_gap {
+                check_expr(s, g, Kind::Length, cmd, "corner_gap")?;
+            }
             add_feature(
                 s,
                 p,
@@ -234,6 +247,7 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
                     body: body.map(BodyName),
                     corner_relief_shape,
                     corner_relief,
+                    corner_gap,
                 },
             )
         }
@@ -416,6 +430,16 @@ fn rules(s: &mut Session, p: &Value) -> Result<Value> {
             *slot = e.into();
         }
     }
+    if let Some(m) = p.get("material").filter(|v| !v.is_null()) {
+        let m = m.as_str().map(str::trim).ok_or_else(|| bad(cmd, "`material` must be a material id"))?;
+        rule.material = if m.is_empty() {
+            String::new()
+        } else {
+            solidcraft_doc::sheet::material(m)
+                .map(|x| x.id.to_string())
+                .ok_or_else(|| bad(cmd, format!("unknown material `{m}` (sheet.rules lists them)")))?
+        };
+    }
     if let Some(shape) = p.get("corner_relief_shape").filter(|v| !v.is_null()) {
         let shape = shape.as_str().and_then(solidcraft_doc::sheet::ReliefShape::parse);
         rule.corner_relief_shape = shape.ok_or_else(|| bad(cmd, "`corner_relief_shape` must be notch, round, rectangular or tear"))?.name().into();
@@ -448,7 +472,7 @@ fn list_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     }
     let rules: Vec<Value> = all.iter().map(|r| json!({"rule": r, "values": s.doc.rule_values(&vals, r).ok()})).collect();
     let active = s.doc.sheet_rule(None).name;
-    Ok(json!({"rules": rules, "active": active}))
+    Ok(json!({"rules": rules, "active": active, "materials": solidcraft_doc::sheet::MATERIALS}))
 }
 
 fn sheet_of(s: &Session, p: &Value, cmd: &str) -> Result<SheetBody> {

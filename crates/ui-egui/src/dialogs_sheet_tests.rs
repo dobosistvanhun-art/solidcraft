@@ -748,3 +748,72 @@ fn fit_and_home_frame_the_flat_pattern() {
     frame(&mut app, &ctx, &mut t, none, vec![]);
     assert!(!app.flat_view.fitted);
 }
+
+/// The Flange dialog's Corner Gap row: empty leaves the rule's gap, a value reaches the feature
+/// and Edit Feature shows it again.
+#[test]
+fn flange_dialog_sets_a_corner_gap_of_its_own() {
+    let mut h = crate::scenario::Harness::new();
+    h.app
+        .run(
+            "sheet.manage_rules",
+            json!({"name": "AL2", "thickness": "2 mm", "k_factor": 0.5, "bend_radius": "1 mm", "gap": "0.5 mm", "active": true}),
+        )
+        .unwrap();
+    h.app.run("sketch.create", json!({"plane": "XY", "name": "Base"})).unwrap();
+    h.app.run("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [120, 90]})).unwrap();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    h.app.run("sheet.flange", json!({"sketch": "Base"})).unwrap();
+    let edges: Vec<Sel> = [[60.0, 0.0, 2.0], [0.0, 45.0, 2.0]].iter().filter_map(|p| edge_sel(&h.app.session, Vec3::new(p[0], p[1], p[2]))).collect();
+    h.app.session.selection = edges;
+    h.app.start("sheet.flange");
+    h.frames(3);
+    let d = h.app.dialog.clone().unwrap();
+    let c = apply_commands(&h.app, &d).unwrap();
+    assert!(c[0].1.get("corner_gap").is_none(), "{}", c[0].1);
+    if let Some(Kind::Sheet(Sm::Flange { gap, .. })) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+        *gap = "2 mm".into();
+    }
+    h.step(&json!({"widget": "OK"})).unwrap();
+    assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog);
+    let saved = match &h.app.session.doc.features.last().map(|f| &f.kind) {
+        Some(FeatureKind::SheetFlange { corner_gap, .. }) => corner_gap.as_deref().map(str::to_string),
+        _ => None,
+    };
+    assert_eq!(saved.as_deref(), Some("2 mm"));
+    assert!(h.app.session.model.results.iter().all(|r| r.error.is_none() && r.warning.is_none()), "{:?}", h.app.session.model.results);
+    let id = h.app.session.doc.features.last().map(|f| f.id).unwrap();
+    let e = edit_dialog(&h.app, id, None).unwrap();
+    assert!(matches!(&e.kind, Kind::Sheet(Sm::Flange { gap, .. }) if gap == "2 mm"));
+}
+
+/// Sheet Metal Rules: the material list and Auto K-factor reach the rule.
+#[test]
+fn rules_dialog_names_a_material_and_an_automatic_k_factor() {
+    let mut h = crate::scenario::Harness::new();
+    h.step(&json!({"start": "sheet.manage_rules"})).unwrap();
+    h.frames(3);
+    if let Some(Kind::Sheet(Sm::Rules { values, material, .. })) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+        *material = 1 + MATERIALS.iter().position(|m| m.id == "1.4301").unwrap();
+        values[0] = "2 mm".into();
+        values[1] = "auto".into();
+        values[2] = "2 mm".into();
+    }
+    h.frames(2);
+    h.step(&json!({"widget": "OK"})).unwrap();
+    assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog);
+    let r = h.app.session.doc.sheet_rule(None);
+    assert_eq!((r.material.as_str(), r.k_factor.as_str()), ("1.4301", "auto"));
+    let (vals, _) = h.app.session.doc.param_values();
+    assert_eq!(h.app.session.doc.rule_values(&vals, &r).map(|v| v.k_factor).ok(), Some(0.40));
+    // The summary a flange's rule row shows.
+    assert_eq!(rule_summary(&h.app, &r), "2 mm · Stainless 1.4301 (304) · K 0.40 (auto)");
+    // Opened again, the dialog shows the material.
+    h.step(&json!({"start": "sheet.manage_rules"})).unwrap();
+    h.frames(3);
+    let shown = match h.app.dialog.as_ref().map(|d| &d.kind) {
+        Some(Kind::Sheet(Sm::Rules { material, values, .. })) => Some((*material, values.get(1).cloned())),
+        _ => None,
+    };
+    assert_eq!(shown, Some((1 + MATERIALS.iter().position(|m| m.id == "1.4301").unwrap(), Some("auto".to_string()))));
+}

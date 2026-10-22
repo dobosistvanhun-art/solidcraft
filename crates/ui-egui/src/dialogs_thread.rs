@@ -40,6 +40,9 @@ pub(crate) fn rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut 
     }
     ui.ctx().data_mut(|d| d.insert_temp(memo, selected));
     let profile = thread_spec::PROFILES.get(selected).copied().unwrap_or("ISO metric");
+    if profile == "Custom" {
+        custom_rows(ui, designation, suggested);
+    }
     if profile != "ISO metric" {
         if profile != "Custom" {
             let sizes = thread_spec::sizes(profile);
@@ -144,4 +147,136 @@ pub(crate) fn rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut 
     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.end_row();
     (enter, reset)
+}
+
+/// The shapes of a custom thread.
+const SHAPES: &[&str] = &["Triangle", "Trapezoid", "Square", "Own contour"];
+
+fn fmt(x: f64) -> String {
+    let r = (x * 1000.0).round() / 1000.0;
+    if (r - r.round()).abs() < 1e-9 { format!("{}", r.round()) } else { format!("{r}") }
+}
+
+/// A custom thread's shape and sizes, written into its designation as they change.
+fn custom_rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut Option<String>) {
+    use solidcraft_engine::doc::thread_spec;
+    let spec = thread_spec::parse(designation);
+    let up = designation.to_ascii_uppercase();
+    let lh = if spec.as_ref().is_some_and(|s| s.left_hand) { " LH" } else { "" };
+    let memo = egui::Id::new("thread_custom_shape");
+    let derived = match &spec {
+        Some(s) if s.contour.is_some() => 3,
+        Some(_) if up.contains(" SQ") => 2,
+        Some(_) if up.split_whitespace().any(|w| w.starts_with('C')) => 1,
+        Some(_) => 0,
+        None => ui.ctx().data(|d| d.get_temp(memo)).unwrap_or(0),
+    };
+    let mut shape = derived;
+    row_label(ui, "Shape");
+    combo(ui, "thread_custom_shape", SHAPES, &mut shape);
+    ui.end_row();
+    ui.ctx().data_mut(|d| d.insert_temp(memo, shape));
+    let (d, p) = spec.as_ref().map(|s| (s.major, s.pitch)).unwrap_or((20.0, 4.0));
+    if shape != derived {
+        let h = p / 2.0;
+        *designation = match shape {
+            1 => format!("{}x{} 30° h{} c{}{lh}", fmt(d), fmt(p), fmt(h), fmt(0.366 * p)),
+            2 => format!("{}x{} SQ{lh}", fmt(d), fmt(p)),
+            3 => format!("{}x{} P0:0;{}:{};{}:{};{}:0{lh}", fmt(d), fmt(p), fmt(p / 4.0), fmt(h), fmt(p / 2.0), fmt(h), fmt(3.0 * p / 4.0)),
+            _ => format!("{}x{} 60°{lh}", fmt(d), fmt(p)),
+        };
+        *suggested = None;
+        return;
+    }
+    let Some(s) = spec else { return };
+    let (mut d, mut p) = (s.major, s.pitch);
+    let mut angle = (s.flanks.0 + s.flanks.1).to_degrees();
+    let (mut h, mut c) = (s.depth, s.crest_flat);
+    let mut changed = false;
+    let mut field = |ui: &mut egui::Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>, unit: &str| {
+        row_label(ui, label);
+        let r = ui.add(egui::DragValue::new(v).speed(0.05).range(range).max_decimals(3).suffix(unit));
+        changed |= r.changed();
+        ui.end_row();
+    };
+    field(ui, "Diameter", &mut d, 0.5..=2000.0, " mm");
+    field(ui, "Pitch", &mut p, 0.1..=200.0, " mm");
+    if shape <= 1 {
+        field(ui, "Angle", &mut angle, 0.0..=160.0, "°");
+    }
+    if (1..=2).contains(&shape) {
+        field(ui, "Depth", &mut h, 0.01..=1000.0, " mm");
+    }
+    if shape == 1 {
+        field(ui, "Crest width", &mut c, 0.01..=200.0, " mm");
+    }
+    if changed {
+        let next = match shape {
+            1 => format!("{}x{} {}° h{} c{}{lh}", fmt(d), fmt(p), fmt(angle), fmt(h), fmt(c)),
+            2 => format!("{}x{} SQ h{}{lh}", fmt(d), fmt(p), fmt(h)),
+            3 => {
+                let pts: Vec<String> = s.contour.iter().flatten().map(|(x, h)| format!("{}:{}", fmt(*x), fmt(*h))).collect();
+                format!("{}x{} P{}{lh}", fmt(d), fmt(p), pts.join(";"))
+            }
+            _ => format!("{}x{} {}°{lh}", fmt(d), fmt(p), fmt(angle)),
+        };
+        // Only a thread that reads back replaces the designation (a crest too wide for the
+        // pitch, say, keeps the last good one).
+        if thread_spec::parse(&next).is_some() {
+            *designation = next;
+            *suggested = None;
+        }
+    }
+    if shape == 3 {
+        // The points are typed as x:h pairs (along the axis, height above the root) over one
+        // pitch; the text stays while it doesn't read as a contour yet.
+        let key = egui::Id::new("thread_custom_points");
+        let current: Vec<String> = s.contour.iter().flatten().map(|(x, h)| format!("{}:{}", fmt(*x), fmt(*h))).collect();
+        let current = current.join("; ");
+        let mut text: String =
+            ui.ctx().data(|dd| dd.get_temp::<(String, String)>(key)).filter(|(of, _)| *of == *designation).map(|(_, t)| t).unwrap_or(current);
+        row_label(ui, "Points");
+        let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(2).hint_text(tr("x:h; x:h; … over one pitch")));
+        ui.end_row();
+        let mut shown_for = designation.clone();
+        if r.changed() {
+            let compact: String = text.split_whitespace().collect();
+            let next = format!("{}x{} P{}{lh}", fmt(s.major), fmt(s.pitch), compact);
+            if thread_spec::parse(&next).is_some() {
+                *designation = next;
+                *suggested = None;
+                shown_for = designation.clone();
+            }
+        }
+        ui.ctx().data_mut(|dd| dd.insert_temp(key, (shown_for, text)));
+    }
+    row_label(ui, "");
+    preview(ui, &s);
+    ui.end_row();
+}
+
+/// Two pitches of the thread's outline (the material below it), to see the shape.
+fn preview(ui: &mut egui::Ui, s: &solidcraft_engine::doc::thread_spec::ThreadSpec) {
+    let p = s.pitch;
+    let one: Vec<(f64, f64)> = match &s.contour {
+        Some(pts) => pts.clone(),
+        None => {
+            // The falling flank closes the period (to the next root).
+            let t1 = s.flanks.0.tan();
+            let rf = s.root_flat().max(0.0);
+            vec![(0.0, 0.0), (rf, 0.0), (rf + s.depth * t1, s.depth), (rf + s.depth * t1 + s.crest_flat, s.depth)]
+        }
+    };
+    let mut line: Vec<(f64, f64)> = (0..3).flat_map(|k| one.iter().map(move |(x, h)| (x + p * k as f64, *h))).collect();
+    if let Some(f) = one.first() {
+        line.push((f.0 + 3.0 * p, f.1));
+    }
+    let (w, ht) = (220.0_f32, 56.0_f32);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, ht), egui::Sense::hover());
+    let span = (2.0 * p).max(1e-9);
+    let scale = ((w - 8.0) as f64 / span).min((ht - 10.0) as f64 / s.depth.max(1e-9));
+    let to = |(x, h): (f64, f64)| egui::pos2(rect.left() + 4.0 + (x * scale) as f32, rect.bottom() - 5.0 - (h * scale) as f32);
+    let pts: Vec<egui::Pos2> = line.iter().filter(|q| q.0 <= 2.0 * p + 1e-9).map(|q| to(*q)).collect();
+    let stroke = ui.visuals().widgets.active.fg_stroke;
+    ui.painter().add(egui::Shape::line(pts, egui::Stroke::new(1.5, stroke.color)));
 }

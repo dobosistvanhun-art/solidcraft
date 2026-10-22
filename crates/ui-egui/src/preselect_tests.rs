@@ -1788,3 +1788,36 @@ fn point_along_path_has_its_position_and_missing_picks_are_named() {
     let e = h.app.dialog.as_ref().and_then(|d| d.error.clone()).unwrap_or_default();
     assert!(e.contains("path"), "{e}");
 }
+
+#[test]
+fn custom_thread_shapes_write_their_designation() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("solid.cylinder", json!({"radius":10,"height":20})).unwrap();
+    h.app.session.selection = vec![thread_face(&h.app, "Body1")];
+    h.step(&json!({"start":"solid.thread"})).unwrap();
+    let designation = |h: &crate::scenario::Harness| match &h.app.dialog.as_ref().unwrap().kind {
+        Kind::Thread { designation, .. } => designation.clone(),
+        other => panic!("{other:?}"),
+    };
+    // Custom is at the foot of the profile list (out of the popup's view here): typed instead.
+    if let Some(Kind::Thread { designation, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+        *designation = "20x2.5 60°".into();
+    }
+    h.frames(2);
+    assert_eq!(designation(&h), "20x2.5 60°");
+    for (shape, expected) in [
+        ("Square", "20x2.5 SQ"),
+        ("Trapezoid", "20x2.5 30° h1.25 c0.915"),
+        ("Own contour", "20x2.5 P0:0;0.625:1.25;1.25:1.25;1.875:0"),
+        ("Triangle", "20x2.5 60°"),
+    ] {
+        h.step(&json!({"click":{"handle":"dialog:Shape"}})).unwrap();
+        h.step(&json!({"click":{"handle":format!("dialog:Shape:{shape}")}})).unwrap();
+        h.frames(2);
+        assert_eq!(designation(&h), expected, "{shape}");
+        // The dialog keeps it (no rewriting under the cursor) and it reads as a thread.
+        h.frames(3);
+        assert_eq!(designation(&h), expected, "{shape}");
+        assert!(solidcraft_engine::doc::thread_spec::parse(expected).is_some(), "{shape}");
+    }
+}

@@ -80,7 +80,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.thread", "Thread", thread)
         .at("SOLID", "CREATE")
         .icon("thread")
-        .params("face: [x,y,z] on a cylindrical face; designation?: M8, M8x1, MF10x1, 1/4-20 UNC, #10-32 UNF, 1/4 BSW, G1/2, R1/2, Rc1/2, Rp1/2, 1/2 NPT, Tr16x4, Tr16x8(P4), S16x4, Rd16x1/8, Pg13.5, or custom \"20x2.5 60°\" / \"20x3 3/30° h2.2\" (the flank angles and depth); LH for left-handed (default: the ISO metric size that fits); length?: expr (default: the whole face); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body"),
+        .params("face: [x,y,z] on a cylindrical face; designation?: M8, M8x1, MF10x1, 1/4-20 UNC, #10-32 UNF, 1/4 BSW, G1/2, R1/2, Rc1/2, Rp1/2, 1/2 NPT, Tr16x4, Tr16x8(P4), S16x4, Rd16x1/8, Pg13.5, or custom \"20x2.5 60°\" / \"20x3 3/30° h2.2\" (the flank angles and depth) / \"20x4 30° h1.5 c1.2\" (trapezoid, crest width) / \"20x4 SQ\" (square) / \"20x4 P0:0;1:2;2:2;3:0\" (own contour: x:h points over one pitch, h above the root); LH for left-handed (default: the ISO metric size that fits); length?: expr (default: the whole face); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body"),
     CommandSpec::new("solid.shell", "Shell", shell)
         .at("SOLID", "MODIFY")
         .icon("shell")

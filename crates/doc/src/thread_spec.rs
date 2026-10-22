@@ -13,7 +13,7 @@
 //! | Buttress | `S16x4` | 3° / 30° (DIN 513) |
 //! | Round (knuckle) | `Rd16x1/8`, `Rd40x4` | 30°, rounded (DIN 405) |
 //! | Steel conduit | `Pg13.5` | 80° (DIN 40430) |
-//! | Custom | `20x2.5 60°`, `20x3 3/30° h2.2` | an included angle, or the two flank angles from square to the axis, and an optional depth |
+//! | Custom | `20x2.5 60°`, `20x3 3/30° h2.2`, `20x4 30° h1.5 c1.2`, `20x4 SQ`, `20x4 P0:0;1:2;2:2;3:0` | a triangle or trapezoid (an included angle, or the two flank angles from square to the axis; an optional depth `h` and crest width `c`), a square thread (`SQ`), or a contour of its own (`P`: points `x:h` over one pitch, `x` along the axis, `h` the height above the root) |
 //!
 //! Any designation may end in `LH` (left-handed). Inch sizes are converted to millimetres.
 
@@ -61,6 +61,10 @@ pub struct ThreadSpec {
     /// The radius's change per unit length along the axis (1:16 on the diameter is 1/32).
     pub taper: f64,
     pub left_hand: bool,
+    /// A contour of its own (custom threads): the thread's outline over one pitch as (axial
+    /// position from 0 to the pitch, height above the root from 0 to the depth), in order along
+    /// the axis. The material of an external thread lies under it.
+    pub contour: Option<Vec<(f64, f64)>>,
 }
 
 impl ThreadSpec {
@@ -280,7 +284,7 @@ fn spec(family: Family, designation: String, major: f64, pitch: f64, starts: u32
     }
     let (flanks, depth, crest_flat, root_round) = profile(family, pitch);
     let taper = if matches!(family, Family::PipeTapered | Family::Npt) { 1.0 / 32.0 } else { 0.0 };
-    let s = ThreadSpec { family, designation, major, pitch, starts, flanks, depth, crest_flat, root_round, taper, left_hand };
+    let s = ThreadSpec { family, designation, major, pitch, starts, flanks, depth, crest_flat, root_round, taper, left_hand, contour: None };
     (s.root_flat() > 0.0).then_some(s)
 }
 
@@ -416,18 +420,32 @@ pub fn parse(text: &str) -> Option<ThreadSpec> {
     custom(&up, left)
 }
 
-/// `20x2.5 60°`, `20x3 3/30° h2.2`: diameter x pitch, then the included angle (or the two flank
-/// angles from square to the axis), then an optional depth.
+/// `20x2.5 60°`, `20x3 3/30° h2.2`, `20x4 30° h1.5 c1.2`, `20x4 SQ`, `20x4 P0:0;1:2;2:2;3:0`:
+/// diameter x pitch, then the included angle (or the two flank angles from square to the axis),
+/// an optional depth `h` and crest width `c`; or `SQ` (a square thread); or `P` and a contour.
 fn custom(up: &str, left: bool) -> Option<ThreadSpec> {
     let mut words = up.split_whitespace();
     let size = words.next()?;
     let (d, p) = size.split_once('X')?;
     let (d, p) = (d.trim_start_matches('D').parse::<f64>().ok()?, p.parse::<f64>().ok()?);
+    if !(d.is_finite() && p.is_finite() && d > 0.2 && p > 0.05 && p < d && d < 2000.0) {
+        return None;
+    }
+    let lh = if left { " LH" } else { "" };
     let mut flanks = None;
     let mut depth = None;
+    let mut crest = None;
+    let mut square = false;
+    let mut contour = None;
     for w in words {
         if let Some(h) = w.strip_prefix('H') {
             depth = Some(h.parse::<f64>().ok()?);
+        } else if let Some(c) = w.strip_prefix('C') {
+            crest = Some(c.parse::<f64>().ok()?);
+        } else if w == "SQ" {
+            square = true;
+        } else if let Some(pts) = w.strip_prefix('P') {
+            contour = Some(parse_contour(pts, p)?);
         } else {
             let a = w.trim_end_matches("DEG").trim_end_matches('°');
             flanks = Some(match a.split_once('/') {
@@ -439,25 +457,54 @@ fn custom(up: &str, left: bool) -> Option<ThreadSpec> {
             });
         }
     }
-    let flanks = flanks?;
+    if let Some(pts) = contour {
+        let depth = pts.iter().map(|q| q.1).fold(0.0, f64::max);
+        if !(depth > 0.0 && depth < d / 2.0) {
+            return None;
+        }
+        let shown: Vec<String> = pts.iter().map(|(x, h)| format!("{}:{}", num(*x), num(*h))).collect();
+        return Some(ThreadSpec {
+            family: Family::Custom,
+            designation: format!("{}x{} P{}{lh}", num(d), num(p), shown.join(";")),
+            major: d,
+            pitch: p,
+            starts: 1,
+            flanks: (0.0, 0.0),
+            depth,
+            crest_flat: p / 2.0,
+            root_round: 0.0,
+            taper: 0.0,
+            left_hand: left,
+            contour: Some(pts),
+        });
+    }
+    let flanks = if square { (0.0, 0.0) } else { flanks? };
     if !(flanks.0 >= 0.0 && flanks.1 >= 0.0 && flanks.0 < PI / 2.2 && flanks.1 < PI / 2.2) {
         return None;
     }
     let tsum = flanks.0.tan() + flanks.1.tan();
-    // By default the crest and root flats are each an eighth of the pitch.
-    let depth = depth.unwrap_or(if tsum > 1e-9 { 0.75 * p / tsum } else { 0.5 * p });
-    let crest_flat = (p - depth * tsum) / 2.0;
-    if !(depth > 0.0 && depth < d / 2.0 && crest_flat > 0.0) {
+    // By default the crest and root flats are each an eighth of the pitch (a square thread's
+    // half of it).
+    let depth = depth.unwrap_or(match crest {
+        Some(c) if tsum > 1e-9 => (p - 2.0 * c) / tsum,
+        _ if tsum > 1e-9 => 0.75 * p / tsum,
+        _ => 0.5 * p,
+    });
+    let crest_flat = crest.unwrap_or((p - depth * tsum) / 2.0);
+    if !(depth.is_finite() && crest_flat.is_finite() && depth > 0.0 && depth < d / 2.0 && crest_flat > 0.0) {
         return None;
     }
-    let angles = if (flanks.0 - flanks.1).abs() < 1e-9 {
+    let angles = if square {
+        "SQ".to_string()
+    } else if (flanks.0 - flanks.1).abs() < 1e-9 {
         format!("{}°", num((flanks.0 * 2.0).to_degrees()))
     } else {
         format!("{}/{}°", num(flanks.0.to_degrees()), num(flanks.1.to_degrees()))
     };
+    let crest_shown = if crest.is_some() { format!(" c{}", num(crest_flat)) } else { String::new() };
     let s = ThreadSpec {
         family: Family::Custom,
-        designation: format!("{}x{} {angles} h{}{}", num(d), num(p), num(depth), if left { " LH" } else { "" }),
+        designation: format!("{}x{} {angles} h{}{crest_shown}{lh}", num(d), num(p), num(depth)),
         major: d,
         pitch: p,
         starts: 1,
@@ -467,8 +514,103 @@ fn custom(up: &str, left: bool) -> Option<ThreadSpec> {
         root_round: 0.0,
         taper: 0.0,
         left_hand: left,
+        contour: None,
     };
-    (s.root_flat() > 0.0 && p < d).then_some(s)
+    (s.root_flat() > 0.0).then_some(s)
+}
+
+/// `0:0;1:2;2:2;3:0`: the points of a contour over one pitch `p`, as `x:h` (the axial position
+/// and the height above the root). The x values rise from 0 to under `p` (the contour repeats:
+/// the last point runs on to the first one a pitch further); the lowest point is the root.
+fn parse_contour(text: &str, p: f64) -> Option<Vec<(f64, f64)>> {
+    let mut pts = Vec::new();
+    for pair in text.trim_matches(['(', ')']).split(';').filter(|q| !q.trim().is_empty()) {
+        let (x, h) = pair.split_once(':')?;
+        let (x, h) = (x.trim().parse::<f64>().ok()?, h.trim().parse::<f64>().ok()?);
+        if !(x.is_finite() && h.is_finite()) || pts.len() >= 200 {
+            return None;
+        }
+        pts.push((x, h));
+    }
+    // A last point a full pitch on from the first is the first one again.
+    if let (Some(f), Some(l)) = (pts.first().copied(), pts.last().copied())
+        && pts.len() > 1
+        && (l.0 - f.0 - p).abs() < 1e-9
+        && (l.1 - f.1).abs() < 1e-9
+    {
+        pts.pop();
+    }
+    let (x0, xn) = (pts.first()?.0, pts.last()?.0);
+    let low = pts.iter().map(|q| q.1).fold(f64::INFINITY, f64::min);
+    let rising = pts.windows(2).all(|w| matches!(w, [a, b] if b.0 > a.0 + 1e-9));
+    if !(pts.len() >= 3 && rising && x0 >= 0.0 && xn - x0 < p - 1e-9) {
+        return None;
+    }
+    Some(pts.into_iter().map(|(x, h)| (x - x0, h - low)).collect())
+}
+
+/// The groove of a thread with a contour of its own: from the end of one crest (an external
+/// thread's) or root (an internal one's) along the contour to the start of the next, closed by
+/// a line at `edge` (outside the major diameter, or inside the hole wall). Neighbouring turns
+/// keep a twentieth of a pitch apart.
+fn contour_groove(s: &ThreadSpec, pts: &[(f64, f64)], internal: bool, edge: f64) -> Vec<(f64, f64)> {
+    let p = s.pitch;
+    let n = pts.len();
+    let r_root = s.major / 2.0 - s.depth;
+    let at = |i: usize| -> (f64, f64) {
+        let q = pts.get(i % n).copied().unwrap_or((0.0, 0.0));
+        (q.0 + p * (i / n) as f64, q.1)
+    };
+    // The run of points on the crest (external) or the root (internal) that the groove leaves
+    // out: the first point of the run is where it starts, after walking back round the contour.
+    let on = |h: f64| if internal { h <= 1e-9 * p } else { h >= s.depth - 1e-9 * p };
+    let run_end = (0..n).find(|i| on(at(*i).1) && !on(at(i + 1).1)).unwrap_or(0);
+    // From the last point of the run, round to the first point of the next run.
+    let mut path = vec![at(run_end)];
+    for i in run_end + 1..=run_end + n {
+        let q = at(i);
+        path.push(q);
+        if on(q.1) {
+            break;
+        }
+    }
+    let (a, b) = (path.first().map(|q| q.0).unwrap_or(0.0), path.last().map(|q| q.0).unwrap_or(p));
+    // Keep a gap between turns.
+    let room = (b - a) - 0.95 * p;
+    let (a2, b2) = if room > 0.0 { (a + room / 2.0, b - room / 2.0) } else { (a, b) };
+    let interp = |x: f64| -> f64 {
+        for w in path.windows(2) {
+            if let [u, v] = w
+                && x >= u.0 - 1e-12
+                && x <= v.0 + 1e-12
+            {
+                let t = if v.0 - u.0 > 1e-12 { (x - u.0) / (v.0 - u.0) } else { 0.0 };
+                return u.1 + (v.1 - u.1) * t;
+            }
+        }
+        path.first().map(|q| q.1).unwrap_or(0.0)
+    };
+    let mid = (a2 + b2) / 2.0;
+    // An internal thread's groove reaches a little past the major diameter.
+    let lift = if internal { 1.0 + 0.02 * p / s.depth.max(1e-9) } else { 1.0 };
+    let r = |h: f64| r_root + h * lift;
+    let mut out = vec![(edge, a2 - mid), (r(interp(a2)), a2 - mid)];
+    out.extend(path.iter().filter(|q| q.0 > a2 + 1e-9 && q.0 < b2 - 1e-9).map(|q| (r(q.1), q.0 - mid)));
+    out.push((r(interp(b2)), b2 - mid));
+    out.push((edge, b2 - mid));
+    // Points on the closing line itself (a contour touching it) are dropped.
+    out.dedup_by(|x, y| (x.0 - y.0).hypot(x.1 - y.1) < 1e-9 * p);
+    // Wound like the standard grooves (counter-clockwise in radius, axial offset).
+    let area: f64 = (0..out.len())
+        .map(|i| {
+            let (a, b) = (out.get(i).copied().unwrap_or_default(), out.get((i + 1) % out.len()).copied().unwrap_or_default());
+            a.0 * b.1 - b.0 * a.1
+        })
+        .sum();
+    if area < 0.0 {
+        out.reverse();
+    }
+    out
 }
 
 /// The thread profiles a picker offers, by label, and the label a designation belongs to.
@@ -537,12 +679,15 @@ pub fn sizes(profile: &str) -> Vec<String> {
 }
 
 /// The designations in a family for a picker (with a size), and how to write the others.
-pub const HELP: &str = "M8, M8x1, MF10x1, 1/4-20 UNC, #10-32 UNF, 1/4 BSW, G1/2, R1/2, Rc1/2, Rp1/2, 1/2 NPT, Tr16x4, Tr16x8(P4), S16x4, Rd16x1/8, Pg13.5, or custom: 20x2.5 60° (included angle), 20x3 3/30° h2.2 (flank angles, depth); add LH for left-handed";
+pub const HELP: &str = "M8, M8x1, MF10x1, 1/4-20 UNC, #10-32 UNF, 1/4 BSW, G1/2, R1/2, Rc1/2, Rp1/2, 1/2 NPT, Tr16x4, Tr16x8(P4), S16x4, Rd16x1/8, Pg13.5, or custom: 20x2.5 60° (triangle, included angle), 20x3 3/30° h2.2 (flank angles, depth), 20x4 30° h1.5 c1.2 (trapezoid: depth, crest width), 20x4 SQ (square), 20x4 P0:0;1:2;2:2;3:0 (own contour: x:h points over one pitch); add LH for left-handed";
 
 /// The groove between two neighbouring threads in the axial section, as (radius, axial offset)
 /// corners in order: cut from a shaft (`internal` false) from below the root out to `outer`, or
 /// from a hole wall from `inner` out to past the major diameter.
 pub fn groove(s: &ThreadSpec, internal: bool, inner: f64, outer: f64) -> Vec<(f64, f64)> {
+    if let Some(pts) = &s.contour {
+        return contour_groove(s, pts, internal, if internal { inner } else { outer.max(s.major / 2.0 + 0.02 * s.pitch) });
+    }
     let (t1, t2) = (s.flanks.0.tan(), s.flanks.1.tan());
     let r_major = s.major / 2.0;
     let r_root = r_major - s.depth;
@@ -681,6 +826,13 @@ mod tests {
             ("Pg13.5", Family::Pg, 20.4, 1.41, "Pg13.5"),
             ("20x2.5 60°", Family::Custom, 20.0, 2.5, "20x2.5 60° h1.624"),
             ("20x3 3/30 h2.2", Family::Custom, 20.0, 3.0, "20x3 3/30° h2.2"),
+            ("20x4 30° h1.5 c1.2", Family::Custom, 20.0, 4.0, "20x4 30° h1.5 c1.2"),
+            ("20x4 30 c1", Family::Custom, 20.0, 4.0, "20x4 30° h3.732 c1"),
+            ("20x4 sq", Family::Custom, 20.0, 4.0, "20x4 SQ h2"),
+            ("20x4 SQ h1.5 LH", Family::Custom, 20.0, 4.0, "20x4 SQ h1.5 LH"),
+            ("20x4 P0:0;1:2;2:2;3:0", Family::Custom, 20.0, 4.0, "20x4 P0:0;1:2;2:2;3:0"),
+            ("20x4 p1:1;2:3;3:3;4:1;5:1", Family::Custom, 20.0, 4.0, "20x4 P0:0;1:2;2:2;3:0"),
+            ("20x4 P0:0;0,5:2;3,5:2", Family::Custom, 20.0, 4.0, "20x4 P0:0;0.5:2;3.5:2"),
         ];
         for (text, family, d, p, shown) in cases {
             let s = parse(text).unwrap_or_else(|| panic!("{text}"));
@@ -700,7 +852,22 @@ mod tests {
             }
         }
         assert_eq!(parse("1/2 NPT").map(|s| s.taper), Some(1.0 / 32.0));
-        for bad in ["", "X", "M", "G9/7", "Pg8", "Tr16x8(P3)", "20x2.5", "20x30 60°", "M8x9"] {
+        for bad in [
+            "",
+            "X",
+            "M",
+            "G9/7",
+            "Pg8",
+            "Tr16x8(P3)",
+            "20x2.5",
+            "20x30 60°",
+            "M8x9",
+            "20x4 P0:0;1:2",
+            "20x4 P0:0;2:2;1:1",
+            "20x4 P0:0;1:2;4:0",
+            "20x4 P0:0;1:0;2:0",
+            "20x4 30° c3",
+        ] {
             assert!(parse(bad).is_none(), "{bad}");
         }
     }
@@ -727,5 +894,49 @@ mod tests {
         assert!(g.len() > 4);
         let r_root = s.major / 2.0 - s.depth;
         assert!(g.iter().all(|(r, _)| *r >= r_root - 1e-9), "{g:?}");
+    }
+
+    #[test]
+    fn contour_grooves_follow_their_contour() {
+        for text in ["20x4 P0:0;1:2;2:2;3:0", "20x4 P0:0;1:2;3:0", "20x4 P0:0;0.2:2;1.8:2;2:0", "20x4 SQ", "20x4 P0:0;1:1.5;2:2;3.5:0.5"] {
+            let s = parse(text).unwrap_or_else(|| panic!("{text}"));
+            let r_major = s.major / 2.0;
+            let r_root = r_major - s.depth;
+            for internal in [false, true] {
+                let g = groove(&s, internal, r_root - 0.5, r_major + 0.5);
+                let ws: Vec<f64> = g.iter().map(|q| q.1).collect();
+                let width = ws.iter().copied().fold(f64::MIN, f64::max) - ws.iter().copied().fold(f64::MAX, f64::min);
+                // Narrower than a pitch (turns never touch), and reaching from the closing line
+                // to the root (external) or the major diameter (internal).
+                assert!(width < 0.96 * s.pitch && width > 0.2 * s.pitch, "{text} {internal}: {g:?}");
+                let lo = g.iter().map(|q| q.0).fold(f64::MAX, f64::min);
+                let hi = g.iter().map(|q| q.0).fold(f64::MIN, f64::max);
+                if internal {
+                    assert!(close(lo, r_root - 0.5) && hi >= r_major - 1e-9, "{text}: {g:?}");
+                } else {
+                    assert!(close(lo, r_root) && close(hi, r_major + 0.5), "{text}: {g:?}");
+                }
+                let n = g.len();
+                let area: f64 = (0..n).map(|i| g[i].0 * g[(i + 1) % n].1 - g[(i + 1) % n].0 * g[i].1).sum();
+                let std = groove(&parse("M20").unwrap(), internal, 8.0, 10.5);
+                let m = std.len();
+                let std_area: f64 = (0..m).map(|i| std[i].0 * std[(i + 1) % m].1 - std[(i + 1) % m].0 * std[i].1).sum();
+                assert!(area * std_area > 0.0, "{text} {internal}: wound the other way: {g:?}");
+                // A simple polygon: no two edges cross.
+                let n = g.len();
+                let seg = |i: usize| (g[i % n], g[(i + 1) % n]);
+                let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+                for i in 0..n {
+                    for j in i + 2..n {
+                        if (j + 1) % n == i {
+                            continue;
+                        }
+                        let ((a, b), (c, d)) = (seg(i), seg(j));
+                        let hit = cross(a, b, c) * cross(a, b, d) < -1e-12 && cross(c, d, a) * cross(c, d, b) < -1e-12;
+                        assert!(!hit, "{text} {internal}: edges {i} and {j} cross: {g:?}");
+                    }
+                }
+            }
+        }
     }
 }

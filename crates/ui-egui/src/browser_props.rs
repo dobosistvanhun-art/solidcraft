@@ -93,7 +93,7 @@ pub fn strip(app: &mut SolveApp, ui: &mut egui::Ui) {
     let total = &value["total"];
     let bodies = value["bodies"].as_array().cloned().unwrap_or_default();
     egui::Grid::new("sc_props_strip_grid").num_columns(2).spacing(vec2(12.0, 2.0)).show(ui, |ui| {
-        let mut row = |ui: &mut egui::Ui, k: &str, v: String| {
+        let row = |ui: &mut egui::Ui, k: &str, v: String| {
             ui.label(RichText::new(crate::i18n::tr_label(k)).color(t.text_dim));
             ui.label(v);
             ui.end_row();

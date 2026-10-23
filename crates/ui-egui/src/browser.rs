@@ -520,7 +520,7 @@ fn browser_panel(app: &mut SolveApp, ui: &mut egui::Ui, timeline_above: bool) {
         .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(6, 6)))
         .show(ui, |ui| {
             // The selected bodies' properties at the foot of the sidebar.
-            egui::Panel::bottom("sc_props_strip").resizable(false).frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(2, 4))).show_inside(
+            egui::Panel::bottom("sc_props_strip").resizable(false).frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(2, 4))).show(
                 ui,
                 |ui| {
                     ui.painter().hline(ui.max_rect().x_range(), ui.max_rect().top(), egui::Stroke::new(1.0, t.border));

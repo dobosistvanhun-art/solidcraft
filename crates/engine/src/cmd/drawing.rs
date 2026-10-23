@@ -115,21 +115,47 @@ fn standard_views(s: &Session, d: &mut Drawing, fixed_scale: bool, cmd: &str) ->
     let m = dv::model(s, d).map_err(|e| bad(cmd, e))?;
     let size = m.bounds.max - m.bounds.min;
     let (sx, sy, sz) = (size.x.max(1e-3), size.y.max(1e-3), size.z.max(1e-3));
+    // The iso view's extent: the bounding box's corners seen from the iso direction.
+    let (ir, iu) = dv::orientation("iso").unwrap_or((solidcraft_geom::Vec3::X, solidcraft_geom::Vec3::Z));
+    let (mut iw, mut ih) = (0.0f64, 0.0f64);
+    let (lo, hi) = (m.bounds.min, m.bounds.max);
+    let corners: Vec<solidcraft_geom::Vec3> = (0..8)
+        .map(|k| {
+            solidcraft_geom::Vec3::new(
+                if k & 1 == 0 { lo.x } else { hi.x },
+                if k & 2 == 0 { lo.y } else { hi.y },
+                if k & 4 == 0 { lo.z } else { hi.z },
+            )
+        })
+        .collect();
+    for a in &corners {
+        for b in &corners {
+            iw = iw.max((*a - *b).dot(ir));
+            ih = ih.max((*a - *b).dot(iu));
+        }
+    }
     let (x0, y0, x1, y1) = area(d);
     let gap = 25.0;
-    let fits = |s: f64| (sx + sy) * s + 2.0 * gap <= (x1 - x0) && (sz + sy) * s + 2.0 * gap <= (y1 - y0);
+    // The right column holds the side view above and the iso view beside the top view.
+    let col = |s: f64| sy.max(iw) * s;
+    let fits = |s: f64| sx * s + col(s) + 2.0 * gap <= (x1 - x0) && sz * s + sy.max(ih) * s + 2.0 * gap <= (y1 - y0);
     if !fixed_scale {
         d.scale = SCALES.iter().find(|t| parse_scale(t).is_some_and(fits)).unwrap_or(&"1:100").to_string();
     }
     let s = d.scale_factor();
     let third = d.projection == Projection::Third;
     // First angle: the top view below the front one, the view from the left to its right.
-    let fx = x0 + gap / 2.0 + sx * s / 2.0;
-    let side_x = fx + sx * s / 2.0 + gap + sy * s / 2.0;
+    // The group of views centred in the free area.
+    let row = sy.max(ih) * s;
+    let (cw, ch) = (sx * s + gap + col(s), sz * s + gap + row);
+    let (left, bottom) = (x0 + ((x1 - x0) - cw).max(0.0) / 2.0, y0 + ((y1 - y0) - ch).max(0.0) / 2.0);
+    let top_edge = bottom + ch;
+    let fx = left + sx * s / 2.0;
+    let side_x = fx + sx * s / 2.0 + gap + col(s) / 2.0;
     let (fy, ty) = if third {
-        (y0 + gap / 2.0 + sz * s / 2.0, y0 + gap / 2.0 + sz * s + gap + sy * s / 2.0)
+        (bottom + sz * s / 2.0, bottom + sz * s + gap + row / 2.0)
     } else {
-        (y1 - gap / 2.0 - sz * s / 2.0, y1 - gap / 2.0 - sz * s - gap - sy * s / 2.0)
+        (top_edge - sz * s / 2.0, top_edge - sz * s - gap - row / 2.0)
     };
     let front = d.take_id();
     d.views.push(DrawView {
@@ -526,7 +552,10 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
     if !circles && kind != DimKind::Angle && refs.first().map(|r| r.point) == refs.get(1).map(|r| r.point) {
         return Err(bad(cmd, "both points are the same"));
     }
-    let offset = num(p, "offset").filter(|o| o.abs() < 1e4).unwrap_or(10.0);
+    let offset = match p.get("offset") {
+        None | Some(Value::Null) => 10.0,
+        Some(_) => num(p, "offset").filter(|o| o.abs() < 1e4).ok_or_else(|| bad(cmd, "`offset` must be a length below 10 m"))?,
+    };
     let text = text_param(p, "text", cmd)?.unwrap_or_default();
     let tolerance = text_param(p, "tolerance", cmd)?.unwrap_or_default();
     change(s, i, |d| {
@@ -575,9 +604,9 @@ fn dimension_delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn note_height(p: &Value, cmd: &str) -> Result<Option<f64>> {
     match num(p, "height") {
-        None => Ok(None),
+        None if p.get("height").is_none_or(Value::is_null) => Ok(None),
         Some(h) if (1.0..=50.0).contains(&h) => Ok(Some(h)),
-        Some(_) => Err(bad(cmd, "`height` must be 1–50 mm")),
+        _ => Err(bad(cmd, "`height` must be 1–50 mm")),
     }
 }
 

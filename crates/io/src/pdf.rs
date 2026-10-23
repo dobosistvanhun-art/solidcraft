@@ -209,8 +209,9 @@ mod tests {
         // The cross-reference table points at each object.
         let xref = text.rfind("startxref\n").map(|i| &text[i + 10..]).and_then(|t| t.lines().next()).and_then(|l| l.parse::<usize>().ok()).unwrap();
         assert!(pdf[xref..].starts_with(b"xref"));
+        let table = String::from_utf8_lossy(&pdf[xref..]).to_string();
         for i in 1..=6 {
-            let line = text[xref..].lines().nth(2 + i).unwrap();
+            let line = table.lines().nth(2 + i).unwrap();
             let off: usize = line[..10].parse().unwrap();
             assert!(pdf[off..].starts_with(format!("{i} 0 obj").as_bytes()), "object {i}");
         }

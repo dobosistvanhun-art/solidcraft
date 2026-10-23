@@ -37,8 +37,8 @@ fn a_standard_drawing_lays_out_four_views_at_a_scale_that_fits() {
     let id = d["drawing"].as_u64().unwrap();
     let dr = s.doc.drawings.first().cloned().unwrap();
     assert_eq!(dr.views.len(), 4);
-    // 100 + 50 mm side by side fit A4 at 1:1 (the views, gaps and margins inside 247 × 124 mm).
-    assert_eq!(dr.scale, "1:1");
+    // With the iso view beside the top view the 100 mm plate fits A4 at 1:2, A3 at 1:1.
+    assert_eq!(dr.scale, "1:2");
     assert_eq!(dr.title.title, s.doc.name);
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));
     assert_eq!((r["width"].as_f64(), r["height"].as_f64()), (Some(297.0), Some(210.0)));
@@ -46,12 +46,12 @@ fn a_standard_drawing_lays_out_four_views_at_a_scale_that_fits() {
     // Front view: 100 wide, 20 tall at 1:1; the top view below it 100 × 50; the side view 50 × 20.
     let ids: Vec<u64> = dr.views.iter().map(|v| v.id).collect();
     let (x0, y0, x1, y1) = view_frame(&r, ids[0]);
-    assert!(((x1 - x0) - 100.0).abs() < 0.01 && ((y1 - y0) - 20.0).abs() < 0.01, "front {x0} {y0} {x1} {y1}");
+    assert!(((x1 - x0) - 50.0).abs() < 0.01 && ((y1 - y0) - 10.0).abs() < 0.01, "front {x0} {y0} {x1} {y1}");
     let (tx0, ty0, tx1, ty1) = view_frame(&r, ids[1]);
-    assert!(((tx1 - tx0) - 100.0).abs() < 0.01 && ((ty1 - ty0) - 50.0).abs() < 0.01, "top");
+    assert!(((tx1 - tx0) - 50.0).abs() < 0.01 && ((ty1 - ty0) - 25.0).abs() < 0.01, "top");
     assert!(ty1 < y0, "first angle: the top view is below the front view");
     let (sx0, _, sx1, _) = view_frame(&r, ids[2]);
-    assert!(((sx1 - sx0) - 50.0).abs() < 0.01 && sx0 > x1, "the side view is to the right");
+    assert!(((sx1 - sx0) - 25.0).abs() < 0.01 && sx0 > x1, "the side view is to the right");
     assert!(count(&r, "visible") > 20 && count(&r, "wide") >= 4);
     // The hole's hidden edges are left out unless asked for.
     assert_eq!(count(&r, "hidden"), 0);
@@ -60,7 +60,17 @@ fn a_standard_drawing_lays_out_four_views_at_a_scale_that_fits() {
     assert!(count(&r, "hidden") >= 2, "the hole's two hidden lines in the front view");
     // The title block names the drawing and the scale.
     let t = texts(&r);
-    assert!(t.iter().any(|x| x == "1:1") && t.iter().any(|x| x.starts_with("A4")), "{t:?}");
+    assert!(t.iter().any(|x| x == "1:2") && t.iter().any(|x| x.starts_with("A4")), "{t:?}");
+    let a3 = run(&mut s, "drawing.create", json!({"name": "A3", "size": "A3"}))["drawing"].as_u64().unwrap();
+    assert_eq!(s.doc.drawings.iter().find(|d| d.id == a3).map(|d| d.scale.as_str()), Some("1:1"));
+    // No two views overlap.
+    let r = run(&mut s, "drawing.render", json!({"drawing": a3}));
+    let frames: Vec<(f64, f64, f64, f64)> = s.doc.drawings.iter().find(|d| d.id == a3).unwrap().views.iter().map(|v| view_frame(&r, v.id)).collect();
+    for (i, a) in frames.iter().enumerate() {
+        for b in frames.iter().skip(i + 1) {
+            assert!(a.2 < b.0 || b.2 < a.0 || a.3 < b.1 || b.3 < a.1, "{a:?} overlaps {b:?}");
+        }
+    }
 }
 
 #[test]
@@ -217,4 +227,42 @@ fn hostile_drawing_parameters_are_refused() {
     }
     let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
     assert!(r["errors"].as_array().is_some_and(|e| !e.is_empty()));
+}
+
+/// Writes a sample sheet for looking at: `SOLIDCRAFT_DRAWING_SAMPLE=/path/sample.pdf cargo test … -- --ignored`.
+#[test]
+#[ignore]
+fn write_a_sample_sheet() {
+    let Ok(path) = std::env::var("SOLIDCRAFT_DRAWING_SAMPLE") else { return };
+    let mut s = plate();
+    run(&mut s, "drawing.create", json!({"name": "Minta", "size": "A3"}));
+    run(
+        &mut s,
+        "drawing.edit",
+        json!({"drawing": "Minta", "title": {"title": "Lemez furattal", "drawn_by": "István", "number": "SC-0001", "company": "Lézer műhely", "tolerances": "ISO 2768-m"}}),
+    );
+    let dr = s.doc.drawings.first().cloned().unwrap();
+    let (front, top) = (dr.views[0].id, dr.views[1].id);
+    run(&mut s, "drawing.view.edit", json!({"drawing": "Minta", "view": front, "hidden": true}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": "Minta"}));
+    let (x0, y0, x1, y1) = view_frame(&r, front);
+    run(&mut s, "drawing.dimension", json!({"drawing": "Minta", "view": front, "kind": "horizontal", "points": [[x0, y1], [x1, y1]]}));
+    run(
+        &mut s,
+        "drawing.dimension",
+        json!({"drawing": "Minta", "view": front, "kind": "vertical", "points": [[x0, y0], [x0, y1]], "offset": -10, "tolerance": "±0.1"}),
+    );
+    let (tx0, ty0, tx1, ty1) = view_frame(&r, top);
+    let c = [(tx0 + tx1) / 2.0, (ty0 + ty1) / 2.0];
+    let k = s.doc.drawings.first().map(|d| d.scale_factor()).unwrap_or(1.0);
+    run(
+        &mut s,
+        "drawing.dimension",
+        json!({"drawing": "Minta", "view": top, "kind": "diameter", "points": [[c[0] + 10.0 * k, c[1]]], "tolerance": "H7"}),
+    );
+    run(&mut s, "drawing.view.section", json!({"drawing": "Minta", "parent": top, "line": [[tx0 - 5.0, c[1]], [tx1 + 5.0, c[1]]], "at": [330, 260]}));
+    run(&mut s, "drawing.note", json!({"drawing": "Minta", "at": [30, 40], "text": "Élek tompítva 0,5×45°\nSorjamentes, őrölt felület"}));
+    run(&mut s, "drawing.export_pdf", json!({"drawing": "Minta", "path": path}));
+    let dxf = path.replace(".pdf", ".dxf");
+    run(&mut s, "drawing.export_dxf", json!({"drawing": "Minta", "path": dxf}));
 }

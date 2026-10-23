@@ -21,6 +21,7 @@ mod legacy_dir;
 #[cfg(test)]
 mod mutate;
 mod native_cad;
+pub mod pdf;
 pub use native_cad::{NATIVE_CAD_EXTS, is_native_cad_path, native_cad_to_step};
 pub mod safe_write;
 mod sketch2d;

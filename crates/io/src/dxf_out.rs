@@ -24,6 +24,8 @@ pub enum DxfLinetype {
     Dashed,
     /// Short 2 mm dashes and 1 mm gaps for hidden edges in millimetre drawings.
     Hidden,
+    /// Chain (long dash, gap, dot, gap) for centre and cutting-plane lines.
+    Center,
 }
 
 impl DxfLinetype {
@@ -32,6 +34,7 @@ impl DxfLinetype {
             DxfLinetype::Continuous => "Continuous",
             DxfLinetype::Dashed => "DASHED",
             DxfLinetype::Hidden => "HIDDEN",
+            DxfLinetype::Center => "CENTER",
         }
     }
 }
@@ -364,6 +367,9 @@ pub fn write_dxf_drawing(layers: &[DxfLayer], entities: &[DxfEntity]) -> String 
     ];
     if layer_list.iter().any(|l| l.linetype == DxfLinetype::Hidden) {
         linetypes.push(("HIDDEN", "Hidden edges", &[2.0, -1.0]));
+    }
+    if layer_list.iter().any(|l| l.linetype == DxfLinetype::Center) {
+        linetypes.push(("CENTER", "Center ____ _ ____ _ ____", &[12.0, -3.0, 0.0, -3.0]));
     }
     let t = o.table("LTYPE", linetypes.len());
     for (name, description, pattern) in linetypes {

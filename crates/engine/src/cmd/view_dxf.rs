@@ -1,6 +1,8 @@
 //! A drawing of the visible bodies from a supplied viewport camera. No screen pixels, grid,
 //! selection highlights or tessellation diagonals are exported.
 
+#[path = "drawing_views.rs"]
+pub(crate) mod drawing_views;
 #[path = "view_dxf_meshes.rs"]
 mod meshes;
 #[path = "view_dxf_progress.rs"]

@@ -2510,6 +2510,9 @@ pub struct Document {
     /// a document in a session leaves this empty; the session puts it back when it saves.
     #[serde(default, skip_serializing_if = "Visibility::is_empty")]
     pub visibility: Visibility,
+    /// The design's drawings (sheets of views of the model).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drawings: Vec<crate::drawing::Drawing>,
 }
 
 /// Items hidden or shown one by one. Saved with the design, but not an undo step.
@@ -2683,12 +2686,23 @@ impl Document {
             browser_order: Default::default(),
             named_views: Vec::new(),
             visibility: Visibility::default(),
+            drawings: Vec::new(),
         }
     }
 
     /// A complete structural proof: no non-render field is allowed to differ. Keeping this
     /// comparison based on the whole Document also includes fields added in future versions.
     /// The clone/comparison is only needed when render intent actually differs.
+    /// Only the drawings changed: the model needs no evaluation.
+    pub fn differs_only_in_drawings(&self, previous: &Document) -> bool {
+        if self.drawings == previous.drawings {
+            return false;
+        }
+        let mut normalized = previous.clone();
+        normalized.drawings = self.drawings.clone();
+        *self == normalized
+    }
+
     pub fn differs_only_in_render(&self, previous: &Document) -> bool {
         if std::sync::Arc::ptr_eq(&self.render, &previous.render) || self.render == previous.render || self.render.validate().is_err() {
             return false;

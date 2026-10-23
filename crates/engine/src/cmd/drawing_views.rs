@@ -97,6 +97,60 @@ pub struct Snap {
     pub r: DimRef,
     /// The circle's radius when it is a circle's centre (diameter and radius dimensions).
     pub radius: Option<f64>,
+    /// A virtual sharp: where the edges beside a rounded corner would meet.
+    pub sharp: bool,
+}
+
+/// What a pick snaps to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickMode {
+    /// Edge ends and circle centres.
+    Points,
+    /// Circles and arcs, by their edge.
+    Circles,
+    /// The corners rounded corners would have without their rounds.
+    Sharps,
+}
+
+/// The edges of a round (an arc edge) and the corner they would make without it: the arc's
+/// two ends and the point where the straight edges meeting them, carried on, cross.
+fn virtual_sharp(body: &solidcraft_kernel::Body, mesh: &Mesh, i: usize) -> Option<(Vec3, Vec3, Vec3)> {
+    let c = solidcraft_kernel::edge_circle(body, i)?;
+    if c.angle >= std::f64::consts::TAU - 1e-6 || c.angle < 1e-6 {
+        return None;
+    }
+    let tol = (c.radius * 1e-4).max(1e-7);
+    // The straight edge leaving `end` (other than the arc): its direction away from it.
+    let away = |end: Vec3| -> Option<Vec3> {
+        mesh.edges.iter().enumerate().filter(|(j, _)| *j != i).find_map(|(_, e)| {
+            let (a, b) = (*e.first()?, *e.last()?);
+            let straight = e.iter().all(|p| p.dist_to_segment(a, b) < tol * 10.0) && a.dist(b) > tol;
+            if !straight {
+                return None;
+            }
+            if a.dist(end) < tol {
+                (b - a).normalized()
+            } else if b.dist(end) < tol {
+                (a - b).normalized()
+            } else {
+                None
+            }
+        })
+    };
+    let (d1, d2) = (away(c.start)?, away(c.end)?);
+    // The lines `start - t·d1` and `end - u·d2` (carried on back past the arc): their closest points.
+    let (p, q) = (c.start, c.end);
+    let (a, b, cc) = (d1.dot(d1), d1.dot(d2), d2.dot(d2));
+    let w = p - q;
+    let (dd, e) = (d1.dot(w), d2.dot(w));
+    let den = a * cc - b * b;
+    if den.abs() < 1e-12 {
+        return None;
+    }
+    let t = (b * e - cc * dd) / den;
+    let u = (a * e - b * dd) / den;
+    let (x1, x2) = (p + d1 * t, q + d2 * u);
+    (x1.dist(x2) < c.radius * 1e-3 + 1e-6).then_some((p, q, (x1 + x2) * 0.5))
 }
 
 /// The sheet drawn.
@@ -342,6 +396,7 @@ fn snaps(m: &Model, basis: &Basis, to_sheet: &dyn Fn(Vec2) -> Vec2) -> Vec<Snap>
                     at: to_sheet(basis.project(p)),
                     r: DimRef { body: name.clone(), edge: Some(i), at: at.into(), point: p },
                     radius: None,
+                    sharp: false,
                 });
             }
             if let Some(c) = circle {
@@ -349,7 +404,16 @@ fn snaps(m: &Model, basis: &Basis, to_sheet: &dyn Fn(Vec2) -> Vec2) -> Vec<Snap>
                     at: to_sheet(basis.project(c.center)),
                     r: DimRef { body: name.clone(), edge: Some(i), at: "center".into(), point: c.center },
                     radius: Some(c.radius),
+                    sharp: false,
                 });
+                if let Some((_, _, x)) = virtual_sharp(body, mesh, i) {
+                    out.push(Snap {
+                        at: to_sheet(basis.project(x)),
+                        r: DimRef { body: name.clone(), edge: Some(i), at: "sharp".into(), point: x },
+                        radius: None,
+                        sharp: true,
+                    });
+                }
             }
         }
     }
@@ -365,6 +429,7 @@ fn resolve(m: &Model, r: &DimRef) -> (Vec3, Option<f64>) {
             "start" => e.first().map(|p| (*p, None)),
             "end" => e.last().map(|p| (*p, None)),
             "center" => solidcraft_kernel::edge_circle(body, i).map(|c| (c.center, Some(c.radius))),
+            "sharp" => virtual_sharp(body, mesh, i).map(|(.., x)| (x, None)),
             _ => None,
         }
     });
@@ -419,10 +484,26 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
     let over = 2.0;
     match d.kind {
         DimKind::Horizontal | DimKind::Vertical | DimKind::Aligned => {
-            let (Some((p1, _, m1)), Some((p2, _, m2))) = (pts.first(), pts.get(1)) else { return };
+            let (Some((c1, r1, m1)), Some((c2, r2, m2))) = (pts.first(), pts.get(1)) else { return };
+            // To the near or far side of the arcs it measures to: each end moves by its radius
+            // along the measuring direction.
+            let axis = match d.kind {
+                DimKind::Horizontal => Vec2::new(1.0, 0.0),
+                DimKind::Vertical => Vec2::new(0.0, 1.0),
+                _ => (*c2 - *c1).normalized().unwrap_or(Vec2::new(1.0, 0.0)),
+            };
+            let sign = if (*c2 - *c1).dot(axis) >= 0.0 { 1.0 } else { -1.0 };
+            let side = match d.arc.as_str() {
+                "max" => 1.0,
+                "min" => -1.0,
+                _ => 0.0,
+            };
+            let (p1, p2) = (&(*c1 - axis * (sign * side * r1.unwrap_or(0.0) * scale)), &(*c2 + axis * (sign * side * r2.unwrap_or(0.0) * scale)));
+            let arcs = side != 0.0 && (r1.is_some() || r2.is_some());
             let (dir, value) = match d.kind {
                 DimKind::Horizontal => (Vec2::new(1.0, 0.0), (p2.x - p1.x).abs() / scale),
                 DimKind::Vertical => (Vec2::new(0.0, 1.0), (p2.y - p1.y).abs() / scale),
+                _ if arcs => (axis, (*p2 - *p1).len() / scale),
                 _ => ((*p2 - *p1).normalized().unwrap_or(Vec2::new(1.0, 0.0)), m1.dist(*m2)),
             };
             let n = Vec2::new(-dir.y, dir.x);
@@ -812,6 +893,20 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                 (at + pv.basis.project(p) * pv.scale, radius, p)
             })
             .collect();
+        // A virtual sharp: thin lines carry the edges on from the round to the corner, and a dot marks it.
+        for r in dim.refs.iter().filter(|r| r.at == "sharp") {
+            let Some((s0, s1, x)) = m.bodies.iter().find(|(n, ..)| *n == r.body).and_then(|(_, b, me)| virtual_sharp(b, me, r.edge?)) else {
+                continue;
+            };
+            let sp = |p: Vec3| at + pv.basis.project(p) * pv.scale;
+            let xs = sp(x);
+            for e in [s0, s1] {
+                let es = sp(e);
+                let past = (xs - es).normalized().map(|u| xs + u * 1.5).unwrap_or(xs);
+                out.line(es, past, Style::Thin);
+            }
+            out.prims.push(Prim::Fill { points: (0..8).map(|k| xs + Vec2::new((k as f64 * 0.785).cos(), (k as f64 * 0.785).sin()) * 0.5).collect() });
+        }
         draw_dim(&mut out, dim, &pts, pv.scale);
     }
     for n in &d.notes {
@@ -830,12 +925,15 @@ pub fn scale_text(s: f64) -> String {
 
 /// The model point nearest to a sheet point in a view (within `reach` mm): for a diameter or
 /// radius only circle centres, measured to their circle.
-pub(crate) fn pick(view: &ViewPlaced, at: Vec2, reach: f64, circles: bool) -> Option<Snap> {
+pub(crate) fn pick(view: &ViewPlaced, at: Vec2, reach: f64, mode: PickMode) -> Option<Snap> {
     let dist = |s: &Snap| -> f64 {
-        match (circles, s.radius) {
-            (true, Some(r)) => ((s.at - at).len() - r * view.scale).abs(),
-            (true, None) => f64::INFINITY,
-            (false, _) => (s.at - at).len(),
+        match (mode, s.radius, s.sharp) {
+            (PickMode::Circles, Some(r), _) => ((s.at - at).len() - r * view.scale).abs(),
+            (PickMode::Circles, None, _) => f64::INFINITY,
+            (PickMode::Sharps, _, true) => (s.at - at).len(),
+            (PickMode::Sharps, _, false) => f64::INFINITY,
+            (PickMode::Points, _, false) => (s.at - at).len(),
+            (PickMode::Points, _, true) => f64::INFINITY,
         }
     };
     view.snaps.iter().filter(|s| dist(s) <= reach).min_by(|a, b| dist(a).total_cmp(&dist(b))).cloned()

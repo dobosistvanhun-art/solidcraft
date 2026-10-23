@@ -21,6 +21,11 @@ const SIDES: [&str; 5] = ["right", "left", "above", "below", "iso"];
 const SIDE_LABELS: [&str; 5] = ["Right", "Left", "Above", "Below", "Iso"];
 const DIM_KINDS: [&str; 6] = ["horizontal", "vertical", "aligned", "diameter", "radius", "angle"];
 const DIM_LABELS: [&str; 6] = ["Horizontal", "Vertical", "Aligned", "Diameter", "Radius", "Angle"];
+/// Where a linear dimension meets the arcs it measures to.
+/// What a linear dimension's points snap to: edge ends, or circles and arcs (their centres, near
+/// or far sides), or virtual sharps (the corners rounds took away). Index 0 sends no `arc`.
+const ARCS: [&str; 5] = ["", "center", "min", "max", "sharp"];
+const ARC_LABELS: [&str; 5] = ["Edge ends", "Circle centres", "Near sides (min)", "Far sides (max)", "Virtual sharp (no round)"];
 const TITLE_FIELDS: [(&str, &str); 9] = [
     ("title", "Title"),
     ("number", "Drawing no."),
@@ -54,6 +59,8 @@ pub struct DrawUi {
     pub orientation: usize,
     pub side: usize,
     pub dim_kind: usize,
+    /// Index into `ARCS`.
+    pub arc: usize,
     pub tolerance: String,
     pub note: String,
     /// The title block's fields as edited (written when a field is left).
@@ -75,6 +82,7 @@ impl DrawUi {
             orientation: 0,
             side: 0,
             dim_kind: 0,
+            arc: 0,
             tolerance: String::new(),
             note: String::new(),
             title: Vec::new(),
@@ -93,11 +101,23 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<crate::selection::S
         }
         "drawing.view.section" => Tool::Section,
         "drawing.view.detail" => Tool::Detail,
-        "drawing.dimension" => Tool::Dimension,
         "drawing.note" => Tool::Note,
+        _ if id.starts_with("drawing.dimension") => Tool::Dimension,
         _ => return None,
     };
     let mut ui = DrawUi::new(tool);
+    // The ribbon's dimension kinds: the kind (and for Arc to Arc, the far sides of two arcs).
+    let (kind, arc) = match id {
+        "drawing.dimension.vertical" => (1, 0),
+        "drawing.dimension.aligned" => (2, 0),
+        "drawing.dimension.diameter" => (3, 0),
+        "drawing.dimension.radius" => (4, 0),
+        "drawing.dimension.angle" => (5, 0),
+        "drawing.dimension.arcs" => (0, 3),
+        _ => (0, 0),
+    };
+    ui.dim_kind = kind;
+    ui.arc = arc;
     ui.status = Some(if id == "drawing.create" { "new".into() } else { String::new() });
     Some((Kind::Drawing(Box::new(ui)), vec![]))
 }
@@ -303,6 +323,14 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
             row_label(ui, "Kind");
             combo(ui, "drw_dim", &DIM_LABELS, &mut k.dim_kind);
             ui.end_row();
+            if k.dim_kind <= 2 {
+                // To circles and arcs: their centres, or their near or far sides.
+                row_label(ui, "Points on");
+                combo(ui, "drw_arc", &ARC_LABELS, &mut k.arc);
+                ui.end_row();
+            } else {
+                k.arc = 0;
+            }
             row_label(ui, "Tolerance");
             ui.add(egui::TextEdit::singleline(&mut k.tolerance).hint_text("±0.1, +0.2/-0.1, H7"));
             ui.end_row();
@@ -352,6 +380,8 @@ fn hint(k: &DrawUi) -> &'static str {
         (Tool::Section, _) => "Click the cutting line's end",
         (Tool::Detail, 0) => "Click the centre of the detail in a view",
         (Tool::Detail, _) => "Click a point on the detail's circle",
+        (Tool::Dimension, _) if k.arc == 4 && k.dim_kind <= 2 => "Click where the rounded corner would be without its round",
+        (Tool::Dimension, _) if k.arc != 0 && k.dim_kind <= 2 => "Click the edge of a circle or arc",
         (Tool::Dimension, 0) => match k.dim_kind {
             3 | 4 => "Click a circle's edge",
             5 => "Click the angle's corner",
@@ -595,6 +625,9 @@ fn press(app: &mut SolveApp, k: &mut DrawUi, v: &Value, at: [f64; 2]) {
                         if !k.tolerance.trim().is_empty() {
                             p["tolerance"] = json!(k.tolerance.trim());
                         }
+                        if k.arc != 0 && need == 2 {
+                            p["arc"] = json!(ARCS.get(k.arc).copied().unwrap_or(""));
+                        }
                         run(app, k, "drawing.dimension", p);
                     }
                 }
@@ -692,5 +725,18 @@ mod tests {
         assert_eq!(d.views.len(), 5, "{:?}", ui(&h).status);
         assert!(matches!(d.views.last().map(|v| &v.kind), Some(solidcraft_engine::doc::drawing::ViewKind::Section { .. })));
         assert_eq!(ui(&h).tool, Tool::Select);
+    }
+
+    #[test]
+    fn the_ribbon_dimension_kinds_open_the_tool_with_their_kind() {
+        let mut h = editor();
+        for (id, kind, arc) in [("drawing.dimension.vertical", 1, 0), ("drawing.dimension.diameter", 3, 0), ("drawing.dimension.arcs", 0, 3)] {
+            h.app.dialog = None;
+            h.step(&json!({"start": id})).unwrap();
+            h.frames(2);
+            let k = ui(&h);
+            assert_eq!((k.tool, k.dim_kind, k.arc), (Tool::Dimension, kind, arc), "{id}");
+            assert_eq!(h.app.session.doc.drawings.len(), 1, "{id}: no new drawing");
+        }
     }
 }

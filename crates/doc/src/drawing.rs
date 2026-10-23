@@ -199,6 +199,10 @@ pub struct DrawDim {
     /// A tolerance after the value: `±0.1`, `+0.2/-0.1`, or a fit such as `H7`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tolerance: String,
+    /// Where a linear dimension meets a circle or arc it measures to: its centre (empty), the
+    /// near side of it (`min`: between the arcs) or the far side (`max`: over them).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arc: String,
 }
 
 /// A note on the sheet.

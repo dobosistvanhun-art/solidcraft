@@ -266,3 +266,61 @@ fn write_a_sample_sheet() {
     let dxf = path.replace(".pdf", ".dxf");
     run(&mut s, "drawing.export_dxf", json!({"drawing": "Minta", "path": dxf}));
 }
+
+#[test]
+fn a_dimension_between_two_arcs_measures_to_their_centres_near_or_far_sides() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 100, "width": 50, "height": 10}));
+    for x in [30, 70] {
+        run(&mut s, "solid.cylinder", json!({"diameter": 20, "height": 30, "base": [x, 25, -5], "operation": "cut"}));
+    }
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [200, 150]}))["view"].as_u64().unwrap();
+    // The holes' centres on the sheet: (180, 150) and (220, 150); a point on each circle's edge.
+    let (a, b) = ([180.0, 160.0], [220.0, 140.0]);
+    for (arc, want) in [("max", "60"), ("min", "20"), ("center", "40")] {
+        let id =
+            run(&mut s, "drawing.dimension.arcs", json!({"drawing": "D", "view": top, "points": [a, b], "arc": arc}))["dimension"].as_u64().unwrap();
+        let t = texts(&run(&mut s, "drawing.render", json!({"drawing": "D"})));
+        assert!(t.iter().any(|x| x == want), "{arc}: {t:?}");
+        run(&mut s, "drawing.dimension.delete", json!({"drawing": "D", "dimension": id}));
+    }
+    // Arc to Arc measures over the far sides unless told; switching the side is an edit.
+    let id = run(&mut s, "drawing.dimension.arcs", json!({"drawing": "D", "view": top, "points": [a, b]}))["dimension"].as_u64().unwrap();
+    assert_eq!(s.doc.drawings[0].dims[0].arc, "max");
+    run(&mut s, "drawing.dimension.edit", json!({"drawing": "D", "dimension": id, "arc": "min"}));
+    assert!(texts(&run(&mut s, "drawing.render", json!({"drawing": "D"}))).iter().any(|x| x == "20"));
+    assert!(s.execute("drawing.dimension", &json!({"drawing": "D", "view": top, "kind": "diameter", "points": [a], "arc": "max"})).is_err());
+    assert!(s.execute("drawing.dimension.arcs", &json!({"drawing": "D", "view": top, "points": [a, b], "arc": "outside"})).is_err());
+    for (cmd, kind) in [("drawing.dimension.vertical", "vertical"), ("drawing.dimension.aligned", "aligned")] {
+        run(&mut s, cmd, json!({"drawing": "D", "view": top, "points": [[150, 125], [150, 175]]}));
+        let last = s.doc.drawings[0].dims.last().map(|d| serde_json::to_value(d.kind).unwrap()).unwrap();
+        assert_eq!(last, kind);
+    }
+}
+
+#[test]
+fn a_dimension_to_virtual_sharps_measures_the_corners_as_if_they_werent_rounded() {
+    let mut s = Session::default();
+    // A 100 × 50 × 10 plate with its four vertical edges rounded R10.
+    run(&mut s, "solid.box", json!({"length": 100, "width": 50, "height": 10}));
+    let corners: Vec<[f64; 3]> = vec![[0.0, 0.0, 5.0], [100.0, 0.0, 5.0], [100.0, 50.0, 5.0], [0.0, 50.0, 5.0]];
+    run(&mut s, "solid.fillet", json!({"edges": corners, "radius": 10}));
+    assert!(s.model.results.iter().all(|r| r.error.is_none()), "{:?}", s.model.results);
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [200, 150]}))["view"].as_u64().unwrap();
+    // The top view spans x 150…250, y 125…175 on the sheet; the sharp corners are its corners.
+    let len =
+        run(&mut s, "drawing.dimension.horizontal", json!({"drawing": "D", "view": top, "points": [[150.5, 175.5], [249.5, 175.5]], "arc": "sharp"}));
+    assert!(len["dimension"].as_u64().is_some());
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    assert!(texts(&r).iter().any(|x| x == "100"), "{:?}", texts(&r));
+    // An aligned one between diagonal corners: √(100² + 50²).
+    run(&mut s, "drawing.dimension.aligned", json!({"drawing": "D", "view": top, "points": [[150, 125], [250, 175]], "arc": "sharp"}));
+    let t = texts(&run(&mut s, "drawing.render", json!({"drawing": "D"})));
+    assert!(t.iter().any(|x| x == "111,8"), "{t:?}");
+    // Points not at a rounded corner are refused.
+    assert!(
+        s.execute("drawing.dimension.horizontal", &json!({"drawing": "D", "view": top, "points": [[200, 150], [210, 150]], "arc": "sharp"})).is_err()
+    );
+}

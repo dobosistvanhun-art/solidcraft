@@ -45,11 +45,22 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("drawing.dimension", "Dimension", dimension).at(TAB, "ANNOTATE").icon("dimension").params(
         "drawing; view; kind: horizontal|vertical|aligned|diameter|radius|angle; points: [[x, y], …] on the sheet, each snapped to the nearest \
          edge end or circle centre of the model in that view (diameter, radius: one point on the circle; angle: the vertex, then a point on each side); \
-         offset?: sheet mm (default 10); text? (`<>` is the value); tolerance? (±0.1, +0.2/-0.1, H7) → dimension id",
+         offset?: sheet mm (default 10); text? (`<>` is the value); tolerance? (±0.1, +0.2/-0.1, H7); \
+         arc?: center (default) | min | max — a linear dimension to circles or arcs (its points on them) measures between their centres, near sides or far sides; \
+         sharp — its points are virtual sharps (click at the corner a round took away): the corner as if it weren't rounded → dimension id",
     ),
-    CommandSpec::new("drawing.dimension.edit", "Edit Dimension", dimension_edit).icon("edit").params("drawing; dimension; offset?; text?; tolerance?"),
-    CommandSpec::new("drawing.dimension.delete", "Delete Dimension", dimension_delete).icon("delete").params("drawing; dimension"),
     CommandSpec::new("drawing.note", "Note", note).at(TAB, "ANNOTATE").icon("text").params("drawing; at: [x, y]; text (lines); height? (mm, default 3.5) → note id"),
+    CommandSpec::new("drawing.dimension.horizontal", "Horizontal Dimension", dim_horizontal).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind horizontal"),
+    CommandSpec::new("drawing.dimension.vertical", "Vertical Dimension", dim_vertical).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind vertical"),
+    CommandSpec::new("drawing.dimension.aligned", "Aligned Dimension", dim_aligned).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind aligned"),
+    CommandSpec::new("drawing.dimension.radius", "Radius Dimension", dim_radius).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind radius: one point on the arc"),
+    CommandSpec::new("drawing.dimension.diameter", "Diameter Dimension", dim_diameter).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind diameter: one point on the circle"),
+    CommandSpec::new("drawing.dimension.angle", "Angle Dimension", dim_angle).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind angle: the corner, then a point on each side"),
+    CommandSpec::new("drawing.dimension.arcs", "Arc to Arc Dimension", dim_arcs).at(TAB, "ANNOTATE").icon("dimension").params(
+        "as drawing.dimension between two circles or arcs (a point on each): kind? horizontal (default) | vertical | aligned; arc?: max (over their far sides, default) | min (between their near sides) | center",
+    ),
+    CommandSpec::new("drawing.dimension.edit", "Edit Dimension", dimension_edit).icon("edit").params("drawing; dimension; offset?; text?; tolerance?; arc?: center|min|max"),
+    CommandSpec::new("drawing.dimension.delete", "Delete Dimension", dimension_delete).icon("delete").params("drawing; dimension"),
     CommandSpec::new("drawing.note.edit", "Edit Note", note_edit).icon("edit").params("drawing; note; at?; text?; height?"),
     CommandSpec::new("drawing.note.delete", "Delete Note", note_delete).icon("delete").params("drawing; note"),
     CommandSpec::new("drawing.render", "Draw Sheet", render).noundo().icon("flat").params(
@@ -541,15 +552,38 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let drawn = dv::draw(s, &d);
     let pv = drawn.views.iter().find(|v| v.id == view).ok_or_else(|| bad(cmd, "no such view (or it couldn't be drawn)"))?;
-    let circles = matches!(kind, DimKind::Diameter | DimKind::Radius);
+    let arc_given = arc_param(p, cmd)?;
+    let arc = arc_given.clone().unwrap_or_default();
+    if arc_given.is_some() && !matches!(kind, DimKind::Horizontal | DimKind::Vertical | DimKind::Aligned) {
+        return Err(bad(cmd, "`arc` is for horizontal, vertical and aligned dimensions"));
+    }
+    // A diameter or radius, and a dimension to the sides of arcs, take their points on circles;
+    // one to virtual sharps, at the corners rounds would leave without them.
+    let sharps = arc == "sharp";
+    let on_arcs = arc_given.is_some() && !sharps;
+    let circles = matches!(kind, DimKind::Diameter | DimKind::Radius) || on_arcs;
     let mut refs: Vec<DimRef> = Vec::new();
     for (k, at) in pts.iter().enumerate() {
-        let snap = dv::pick(pv, Vec2::new(at[0], at[1]), 6.0, circles && k == 0).ok_or_else(|| {
-            bad(cmd, if circles { "no circle edge there".to_string() } else { format!("no model point near ({:.1}, {:.1})", at[0], at[1]) })
+        let mode = if sharps {
+            dv::PickMode::Sharps
+        } else if circles && (k == 0 || on_arcs) {
+            dv::PickMode::Circles
+        } else {
+            dv::PickMode::Points
+        };
+        let snap = dv::pick(pv, Vec2::new(at[0], at[1]), 6.0, mode).ok_or_else(|| {
+            bad(
+                cmd,
+                match mode {
+                    dv::PickMode::Circles => "no circle edge there".to_string(),
+                    dv::PickMode::Sharps => format!("no rounded corner near ({:.1}, {:.1})", at[0], at[1]),
+                    dv::PickMode::Points => format!("no model point near ({:.1}, {:.1})", at[0], at[1]),
+                },
+            )
         })?;
         refs.push(snap.r);
     }
-    if !circles && kind != DimKind::Angle && refs.first().map(|r| r.point) == refs.get(1).map(|r| r.point) {
+    if (!circles || on_arcs) && kind != DimKind::Angle && refs.first().map(|r| r.point) == refs.get(1).map(|r| r.point) {
         return Err(bad(cmd, "both points are the same"));
     }
     let offset = match p.get("offset") {
@@ -560,14 +594,62 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
     let tolerance = text_param(p, "tolerance", cmd)?.unwrap_or_default();
     change(s, i, |d| {
         let id = d.take_id();
-        d.dims.push(DrawDim { id, view, kind, refs, offset, text, tolerance });
+        d.dims.push(DrawDim { id, view, kind, refs, offset, text, tolerance, arc });
         Ok(json!({"dimension": id}))
     })
+}
+
+/// `arc`: center (none), min (the near sides of the arcs) or max (their far sides).
+fn arc_param(p: &Value, cmd: &str) -> Result<Option<String>> {
+    match p.get("arc") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_str().map(|s| s.trim().to_ascii_lowercase()) {
+            Some(s) if s == "center" || s == "centre" || s.is_empty() => Ok(Some(String::new())),
+            Some(s) if s == "min" || s == "max" || s == "sharp" => Ok(Some(s)),
+            _ => Err(bad(cmd, "`arc` must be center, min, max or sharp")),
+        },
+    }
 }
 
 fn dim_index(d: &Drawing, p: &Value, cmd: &str) -> Result<usize> {
     let id = id_of(p, "dimension", cmd)?;
     d.dims.iter().position(|x| x.id == id).ok_or_else(|| bad(cmd, "no such dimension"))
+}
+
+/// `drawing.dimension` with its kind (and arc side) set.
+fn dim_as(s: &mut Session, p: &Value, kind: &str, arc: Option<&str>) -> Result<Value> {
+    let mut q = p.clone();
+    if let Value::Object(m) = &mut q {
+        if arc.is_none() || !m.contains_key("kind") {
+            m.insert("kind".into(), json!(kind));
+        }
+        if let Some(a) = arc {
+            m.entry("arc").or_insert_with(|| json!(a));
+        }
+    }
+    dimension(s, &q)
+}
+
+fn dim_horizontal(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "horizontal", None)
+}
+fn dim_vertical(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "vertical", None)
+}
+fn dim_aligned(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "aligned", None)
+}
+fn dim_radius(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "radius", None)
+}
+fn dim_diameter(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "diameter", None)
+}
+fn dim_angle(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "angle", None)
+}
+fn dim_arcs(s: &mut Session, p: &Value) -> Result<Value> {
+    dim_as(s, p, "horizontal", Some("max"))
 }
 
 fn dimension_edit(s: &mut Session, p: &Value) -> Result<Value> {
@@ -587,6 +669,9 @@ fn dimension_edit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(t) = text_param(p, "tolerance", cmd)? {
             x.tolerance = t;
+        }
+        if let Some(a) = arc_param(p, cmd)? {
+            x.arc = a;
         }
         Ok(json!({"dimension": x.id}))
     })

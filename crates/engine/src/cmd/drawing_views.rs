@@ -160,6 +160,8 @@ pub struct SheetDrawn {
     pub height: f64,
     pub prims: Vec<Prim>,
     pub views: Vec<ViewPlaced>,
+    /// Where each dimension's text sits (sheet mm), for picking it.
+    pub dims: Vec<(u64, Vec2)>,
     /// Views that couldn't be drawn, with why.
     pub errors: Vec<(u64, String)>,
 }
@@ -808,6 +810,26 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     max = Vec2::new(max.x.max(a.x).max(b.x), max.y.max(a.y).max(b.y));
                     out.line(a, b, style);
                 }
+                // Centre marks on the circles seen face on (holes, bosses): two chain lines across.
+                if !matches!(v.kind, ViewKind::Detail { .. }) {
+                    let mut seen: Vec<Vec2> = Vec::new();
+                    for (_, body, mesh) in &m.bodies {
+                        for i in 0..mesh.edges.len().min(20_000) {
+                            let Some(c) = solidcraft_kernel::edge_circle(body, i) else { continue };
+                            if c.axis.dot(basis.b).abs() < 0.999 || c.radius * scale < 1.0 {
+                                continue;
+                            }
+                            let p = to_sheet(basis.project(c.center));
+                            if seen.iter().any(|q| q.dist(p) < 0.1) {
+                                continue;
+                            }
+                            seen.push(p);
+                            let reach = c.radius * scale + 3.0;
+                            out.line(p - Vec2::new(reach, 0.0), p + Vec2::new(reach, 0.0), Style::Chain);
+                            out.line(p - Vec2::new(0.0, reach), p + Vec2::new(0.0, reach), Style::Chain);
+                        }
+                    }
+                }
                 if !min.is_finite() {
                     min = at - Vec2::new(5.0, 5.0);
                     max = at + Vec2::new(5.0, 5.0);
@@ -907,7 +929,11 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
             }
             out.prims.push(Prim::Fill { points: (0..8).map(|k| xs + Vec2::new((k as f64 * 0.785).cos(), (k as f64 * 0.785).sin()) * 0.5).collect() });
         }
+        let before = out.prims.len();
         draw_dim(&mut out, dim, &pts, pv.scale);
+        if let Some(Prim::Text { at, .. }) = out.prims.get(before..).and_then(|ps| ps.iter().rev().find(|p| matches!(p, Prim::Text { .. }))) {
+            drawn.dims.push((dim.id, *at));
+        }
     }
     for n in &d.notes {
         for (i, line) in n.text.lines().enumerate().take(200) {

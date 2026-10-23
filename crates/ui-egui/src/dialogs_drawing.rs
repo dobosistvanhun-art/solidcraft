@@ -56,6 +56,8 @@ pub struct DrawUi {
     /// Sheet points the tool has taken so far.
     pub picks: Vec<[f64; 2]>,
     pub selected: Option<u64>,
+    /// The dimension selected (by its text), and its text and tolerance as edited.
+    pub dim: Option<(u64, String, String)>,
     pub orientation: usize,
     pub side: usize,
     pub dim_kind: usize,
@@ -79,6 +81,7 @@ impl DrawUi {
             tool,
             picks: Vec::new(),
             selected: None,
+            dim: None,
             orientation: 0,
             side: 0,
             dim_kind: 0,
@@ -300,6 +303,61 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
         row_label(ui, "");
         ui.label(RichText::new(crate::i18n::tr_label("Click a view to select it, drag it to move it")).weak());
         ui.end_row();
+    }
+
+    // ---- the selected dimension ----
+    if let Some((dim_id, text, tol)) = k.dim.as_mut()
+        && let Some(x) = d.dims.iter().find(|x| x.id == *dim_id).cloned()
+    {
+        let dim_id = *dim_id;
+        section(ui, "DIMENSION");
+        let mut edit: Option<Value> = None;
+        let mut offset = x.offset;
+        row_label(ui, "Offset");
+        if ui.add(egui::DragValue::new(&mut offset).speed(0.5).range(-500.0..=500.0).suffix(" mm")).changed() {
+            edit = Some(json!({"offset": offset}));
+        }
+        ui.end_row();
+        row_label(ui, "Text");
+        let r = ui.add(egui::TextEdit::singleline(text).hint_text(crate::i18n::tr_label("<> is the value")));
+        if r.lost_focus() && *text != x.text {
+            edit = Some(json!({"text": text.clone()}));
+        }
+        ui.end_row();
+        row_label(ui, "Tolerance");
+        let r = ui.add(egui::TextEdit::singleline(tol).hint_text("±0.1, +0.2/-0.1, H7"));
+        if r.lost_focus() && *tol != x.tolerance {
+            edit = Some(json!({"tolerance": tol.clone()}));
+        }
+        ui.end_row();
+        use solidcraft_engine::doc::drawing::DimKind;
+        if matches!(x.kind, DimKind::Horizontal | DimKind::Vertical | DimKind::Aligned) && !x.arc.is_empty() {
+            // Between the arcs' centres, near or far sides (a virtual sharp stays one).
+            let mut side = ["center", "min", "max"].iter().position(|a| *a == x.arc.as_str()).unwrap_or(0);
+            if x.arc != "sharp" {
+                let b = side;
+                row_label(ui, "Points on");
+                combo(ui, "drw_dim_arc", &ARC_LABELS[1..4], &mut side);
+                ui.end_row();
+                if side != b {
+                    let arc = ["center", "min", "max"].get(side).copied().unwrap_or("center");
+                    edit = Some(json!({ "arc": arc }));
+                }
+            }
+        }
+        row_label(ui, "");
+        let mut gone = false;
+        if ui.button(crate::i18n::tr_label("Delete dimension")).clicked() {
+            gone = run(app, k, "drawing.dimension.delete", json!({"drawing": id, "dimension": dim_id})).is_some();
+        }
+        ui.end_row();
+        if gone {
+            k.dim = None;
+        } else if let Some(Value::Object(mut p)) = edit {
+            p.insert("drawing".into(), json!(id));
+            p.insert("dimension".into(), json!(dim_id));
+            run(app, k, "drawing.dimension.edit", Value::Object(p));
+        }
     }
 
     // ---- tools ----
@@ -527,6 +585,14 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
             painter.text(paper.left_top() + vec2(8.0, -18.0), Align2::LEFT_BOTTOM, msg, FontId::proportional(12.0), t.error);
         }
     }
+    // The selected dimension: a ring round its text.
+    for x in v["dims"].as_array().into_iter().flatten() {
+        let (Some(dim), Some(p)) = (x.get(0).and_then(Value::as_u64), x.get(1).and_then(read2)) else { continue };
+        crate::scenario::publish_handle(&format!("drawing:dim:{dim}"), to(p));
+        if k.dim.as_ref().is_some_and(|(s, ..)| *s == dim) {
+            painter.circle_stroke(to(p), px(5.0), Stroke::new(1.5, t.accent));
+        }
+    }
     // The tool's points so far.
     for p in &k.picks {
         painter.circle_filled(to(*p), 4.0, t.accent);
@@ -569,6 +635,22 @@ fn press(app: &mut SolveApp, k: &mut DrawUi, v: &Value, at: [f64; 2]) {
     let Some(id) = k.drawing else { return };
     match k.tool {
         Tool::Select => {
+            // A dimension's text first (within 5 mm), else a view.
+            let near = v["dims"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| Some((x.get(0)?.as_u64()?, read2(x.get(1)?)?)))
+                .map(|(id, p)| (id, (p[0] - at[0]).hypot(p[1] - at[1])))
+                .filter(|(_, dist)| *dist < 5.0)
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((dim, _)) = near {
+                let x = drawing(app, k).and_then(|d| d.dims.iter().find(|x| x.id == dim)).cloned();
+                k.dim = x.map(|x| (dim, x.text, x.tolerance));
+                k.selected = None;
+                return;
+            }
+            k.dim = None;
             k.selected = view_at(v, at);
             if let Some(view) = k.selected
                 && let Some(place) = drawing(app, k).and_then(|d| d.view(view)).map(|x| x.at)
@@ -738,5 +820,26 @@ mod tests {
             assert_eq!((k.tool, k.dim_kind, k.arc), (Tool::Dimension, kind, arc), "{id}");
             assert_eq!(h.app.session.doc.drawings.len(), 1, "{id}: no new drawing");
         }
+    }
+
+    #[test]
+    fn a_dimension_is_selected_by_its_text_and_edited_in_the_panel() {
+        let mut h = editor();
+        let d = h.app.session.doc.drawings.first().cloned().unwrap();
+        let top = d.views.get(1).cloned().unwrap();
+        // The hole's diameter in the top view (a point on its circle, 10 mm from its centre at the drawing's scale).
+        let k = d.scale_factor();
+        let p = [top.at[0] + 10.0 * k, top.at[1]];
+        h.app.run("drawing.dimension", json!({"drawing": d.id, "view": top.id, "kind": "diameter", "points": [p]})).unwrap();
+        h.frames(3);
+        let dim = h.app.session.doc.drawings[0].dims[0].id;
+        let at = crate::scenario::handle_at(&format!("drawing:dim:{dim}")).unwrap();
+        h.step(&json!({"click": [at.x, at.y]})).unwrap();
+        h.frames(2);
+        assert_eq!(ui(&h).dim.map(|x| x.0), Some(dim));
+        assert_eq!(ui(&h).selected, None);
+        // Centre marks on the hole: chain lines in the top view.
+        let drawn = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
+        assert!(drawn["prims"].as_array().is_some_and(|a| a.iter().filter(|p| p["style"] == "chain").count() >= 2));
     }
 }

@@ -2730,6 +2730,21 @@ impl Document {
         self.materials.get(body).and_then(|m| self.material_density(m)).unwrap_or(DEFAULT_DENSITY)
     }
 
+    /// A body's physical material: the one assigned to it, else, for a sheet metal body, the
+    /// material its rule names (`sheets`: the model's sheet bodies). None: the default.
+    pub fn body_material(&self, body: &str, sheets: &[crate::sheet::SheetBody]) -> Option<String> {
+        self.materials.get(body).cloned().or_else(|| {
+            let sh = sheets.iter().find(|s| s.body == body)?;
+            let rule = self.sheet_rule(Some(&sh.rule));
+            crate::sheet::material(&rule.material).map(|m| m.physical.to_string())
+        })
+    }
+
+    /// Density of a body's material (g/cm³), a sheet metal body's rule material included.
+    pub fn body_density(&self, body: &str, sheets: &[crate::sheet::SheetBody]) -> f64 {
+        self.body_material(body, sheets).and_then(|m| self.material_density(&m)).unwrap_or(DEFAULT_DENSITY)
+    }
+
     /// A material defined in this design, by name (case-insensitive).
     pub fn user_material(&self, name: &str) -> Option<&UserMaterial> {
         let name = name.trim();

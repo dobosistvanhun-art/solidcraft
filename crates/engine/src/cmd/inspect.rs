@@ -75,12 +75,13 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
         .zip(&selected)
         .map(|(m, b)| m.unwrap_or_else(|| json!({"name": b.name, "error": "measuring this body failed"})))
         .collect();
-    // Mass from each body's material.
+    // Mass from each body's material (a sheet metal body's rule material when none is assigned).
+    let sheets = s.model.state().sheets.clone();
     for (b, body) in bodies.iter_mut().zip(selected) {
         if let Some(v) = b["volume_mm3"].as_f64() {
             let source = body.definition_name();
-            let rho = s.doc.density(source);
-            b["material"] = json!(s.doc.materials.get(source).cloned().unwrap_or_else(|| "Default".into()));
+            let rho = s.doc.body_density(source, &sheets);
+            b["material"] = json!(s.doc.body_material(source, &sheets).unwrap_or_else(|| "Default".into()));
             b["density_g_cm3"] = json!(rho);
             b["mass_g"] = json!(v * rho / 1000.0);
         }
@@ -90,7 +91,6 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Sheet metal keeps the edges where bends meet flat faces (so bends stay visible): count its
     // B-rep faces as they are, without merging coplanar neighbours.
-    let sheets = s.model.state().sheets.clone();
     for b in &mut bodies {
         if let Some(sh) = sheets.iter().find(|x| b["name"].as_str() == Some(x.body.as_str())) {
             let (df, de, dv) = sh.round_hole_correction();

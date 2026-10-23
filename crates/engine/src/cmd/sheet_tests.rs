@@ -4677,3 +4677,42 @@ fn a_rule_names_its_material_and_an_auto_k_factor_follows_it() {
     let r = run(&mut s, "sheet.manage_rules", json!({"name": "AL", "material": ""}));
     assert!(r["rule"].get("material").is_none(), "no material: none saved: {r}");
 }
+
+#[test]
+fn a_sheet_weighs_as_its_rule_material_unless_it_has_a_physical_material_of_its_own() {
+    let mut s = Session::default();
+    run(&mut s, "sheet.manage_rules", json!({"name": "INOX2", "thickness": "2 mm", "material": "1.4301", "active": true}));
+    base(&mut s, 100.0, 50.0);
+    let m = run(&mut s, "inspect.measure", json!({}));
+    let b = &m["bodies"][0];
+    assert_eq!(b["material"], "Stainless 1.4301 (304)");
+    // 100 × 50 × 2 mm = 10 cm³ at 7.93 g/cm³.
+    assert!((b["mass_g"].as_f64().unwrap_or(0.0) - 79.3).abs() < 1e-6, "{b}");
+    // Its own physical material wins; a rule without a material leaves the default.
+    let name = b["name"].as_str().unwrap_or_default().to_string();
+    run(&mut s, "material.assign", json!({"bodies": [name], "material": "Aluminium AlMgSi1 (6082)"}));
+    let m = run(&mut s, "inspect.measure", json!({}));
+    assert!((m["bodies"][0]["mass_g"].as_f64().unwrap_or(0.0) - 27.0).abs() < 1e-6, "{m}");
+    let mut plain = Session::default();
+    base(&mut plain, 100.0, 50.0);
+    assert_eq!(run(&mut plain, "inspect.measure", json!({}))["bodies"][0]["material"], "Default");
+}
+
+#[test]
+fn the_library_names_steel_aluminium_copper_and_bronze_grades() {
+    for (name, rho) in [
+        ("Steel S235JR", 7.85),
+        ("Steel C45", 7.85),
+        ("Aluminium AlMgSi1 (6082)", 2.70),
+        ("Copper Cu-ETP", 8.93),
+        ("Bronze CuSn8", 8.80),
+        ("Bronze CuSn12", 8.70),
+    ] {
+        assert_eq!(solidcraft_doc::material_density(name), Some(rho), "{name}");
+        assert!(solidcraft_doc::material_color(name).is_some(), "{name}");
+    }
+    // Every sheet material weighs as a library material.
+    for m in solidcraft_doc::sheet::MATERIALS {
+        assert!(solidcraft_doc::material_density(m.physical).is_some(), "{}", m.id);
+    }
+}

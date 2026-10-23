@@ -332,23 +332,25 @@ pub struct Material {
     pub id: &'static str,
     pub label: &'static str,
     pub class: MaterialClass,
+    /// The physical material (library name) a sheet of it weighs as.
+    pub physical: &'static str,
 }
 
 /// The materials a rule may name.
 pub const MATERIALS: &[Material] = &[
-    Material { id: "dc01", label: "Steel DC01 (cold rolled)", class: MaterialClass::Medium },
-    Material { id: "s235", label: "Steel S235JR", class: MaterialClass::Medium },
-    Material { id: "s355", label: "Steel S355", class: MaterialClass::Hard },
-    Material { id: "dx51d", label: "Galvanised steel DX51D", class: MaterialClass::Medium },
-    Material { id: "1.4301", label: "Stainless 1.4301 (304)", class: MaterialClass::Hard },
-    Material { id: "1.4404", label: "Stainless 1.4404 (316L)", class: MaterialClass::Hard },
-    Material { id: "1.4016", label: "Stainless 1.4016 (430)", class: MaterialClass::Hard },
-    Material { id: "al99.5", label: "Aluminium Al99.5 (1050)", class: MaterialClass::Soft },
-    Material { id: "almg1", label: "Aluminium AlMg1 (5005)", class: MaterialClass::Soft },
-    Material { id: "almg3", label: "Aluminium AlMg3 (5754)", class: MaterialClass::Soft },
-    Material { id: "almg4.5mn", label: "Aluminium AlMg4.5Mn (5083)", class: MaterialClass::Medium },
-    Material { id: "cu-etp", label: "Copper Cu-ETP", class: MaterialClass::Soft },
-    Material { id: "cuzn37", label: "Brass CuZn37", class: MaterialClass::Medium },
+    Material { id: "dc01", label: "Steel DC01 (cold rolled)", class: MaterialClass::Medium, physical: "Steel DC01" },
+    Material { id: "s235", label: "Steel S235JR", class: MaterialClass::Medium, physical: "Steel S235JR" },
+    Material { id: "s355", label: "Steel S355", class: MaterialClass::Hard, physical: "Steel S355J2" },
+    Material { id: "dx51d", label: "Galvanised steel DX51D", class: MaterialClass::Medium, physical: "Galvanised Steel DX51D" },
+    Material { id: "1.4301", label: "Stainless 1.4301 (304)", class: MaterialClass::Hard, physical: "Stainless 1.4301 (304)" },
+    Material { id: "1.4404", label: "Stainless 1.4404 (316L)", class: MaterialClass::Hard, physical: "Stainless 1.4404 (316L)" },
+    Material { id: "1.4016", label: "Stainless 1.4016 (430)", class: MaterialClass::Hard, physical: "Stainless 1.4016 (430)" },
+    Material { id: "al99.5", label: "Aluminium Al99.5 (1050)", class: MaterialClass::Soft, physical: "Aluminium Al99.5 (1050)" },
+    Material { id: "almg1", label: "Aluminium AlMg1 (5005)", class: MaterialClass::Soft, physical: "Aluminium AlMg3 (5754)" },
+    Material { id: "almg3", label: "Aluminium AlMg3 (5754)", class: MaterialClass::Soft, physical: "Aluminium AlMg3 (5754)" },
+    Material { id: "almg4.5mn", label: "Aluminium AlMg4.5Mn (5083)", class: MaterialClass::Medium, physical: "Aluminium AlMg4.5Mn (5083)" },
+    Material { id: "cu-etp", label: "Copper Cu-ETP", class: MaterialClass::Soft, physical: "Copper Cu-ETP" },
+    Material { id: "cuzn37", label: "Brass CuZn37", class: MaterialClass::Medium, physical: "Brass CuZn37" },
 ];
 
 /// A material by id (case does not matter).

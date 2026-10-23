@@ -817,3 +817,23 @@ fn rules_dialog_names_a_material_and_an_automatic_k_factor() {
     };
     assert_eq!(shown, Some((1 + MATERIALS.iter().position(|m| m.id == "1.4301").unwrap(), Some("auto".to_string()))));
 }
+
+/// The Properties strip at the foot of the sidebar shows the selected body's material and mass
+/// (a sheet weighs as its rule's material).
+#[test]
+fn the_sidebar_shows_the_properties_of_the_selected_body() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("sheet.manage_rules", json!({"name": "AL", "thickness": "2 mm", "material": "almg3", "active": true})).unwrap();
+    h.app.run("sketch.create", json!({"plane": "XY", "name": "Base"})).unwrap();
+    h.app.run("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 50]})).unwrap();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    h.app.run("sheet.flange", json!({"sketch": "Base"})).unwrap();
+    let body = h.app.session.world_state().bodies.first().map(|b| b.name.clone()).unwrap();
+    h.app.session.selection = vec![Sel::Body { name: body.clone() }];
+    h.frames(3);
+    assert_eq!(crate::browser_props::selected_bodies(&h.app), vec![body]);
+    assert!(crate::scenario::handle_at("browser-properties-toggle").is_some(), "the strip is drawn");
+    let m = h.app.session.execute("inspect.measure", &json!({})).unwrap();
+    assert_eq!(m["bodies"][0]["material"], "Aluminium AlMg3 (5754)");
+    assert!((m["bodies"][0]["mass_g"].as_f64().unwrap_or(0.0) - 26.7).abs() < 1e-6, "{m}");
+}

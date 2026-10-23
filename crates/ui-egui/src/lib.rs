@@ -12,6 +12,7 @@ pub mod access;
 pub mod agent_chat;
 pub mod agent_cursor;
 pub mod browser;
+pub mod browser_props;
 pub mod canvas;
 #[cfg(test)]
 mod colour_tokens_tests;

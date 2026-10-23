@@ -148,22 +148,6 @@ pub fn show(app: &SolveApp, ui: &egui::Ui, painter: &egui::Painter, proj: &Proj)
     }
 }
 
-#[cfg(test)]
-mod codec_tests {
-    use super::decode_reference;
-
-    #[test]
-    fn hdr_feature_does_not_enable_synchronous_canvas_hdr_decoding() {
-        let mut hdr = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n".to_vec();
-        hdr.extend_from_slice(&[128, 64, 32, 129]);
-        assert!(image::load_from_memory(&hdr).is_ok());
-        assert!(decode_reference(&hdr).is_none());
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgba8(1, 1).write_to(&mut png, image::ImageFormat::Png).unwrap();
-        assert!(decode_reference(png.get_ref()).is_some());
-    }
-}
-
 /// The visible canvas under the screen point `pos` (the nearest along the view ray), for picking
 /// a canvas in the viewport: a click selects it (Delete removes it), a right-click opens its menu.
 pub fn canvas_at(app: &SolveApp, proj: &Proj, pos: egui::Pos2) -> Option<u64> {
@@ -207,5 +191,21 @@ pub fn outline_picked(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
             }
             painter.add(egui::Shape::line(pts, egui::Stroke::new(2.0, col)));
         }
+    }
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::decode_reference;
+
+    #[test]
+    fn hdr_feature_does_not_enable_synchronous_canvas_hdr_decoding() {
+        let mut hdr = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n".to_vec();
+        hdr.extend_from_slice(&[128, 64, 32, 129]);
+        assert!(image::load_from_memory(&hdr).is_ok());
+        assert!(decode_reference(&hdr).is_none());
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(1, 1).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        assert!(decode_reference(png.get_ref()).is_some());
     }
 }

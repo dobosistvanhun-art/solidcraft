@@ -99,7 +99,7 @@ fn unique(base: &str, used: &mut BTreeSet<String>) -> String {
 /// name is built as stored, or as `stored (n)` when a body of that name exists already: the solids
 /// of a STEP file that share a label are stored as `X`, `X`, `X` and built as `X`, `X (2)`, `X (3)`,
 /// and a second import of a file builds `Aa (2)` for the stored `Aa`.
-fn named_by(stored: &[String], built: &[String]) -> bool {
+pub(super) fn named_by(stored: &[String], built: &[String]) -> bool {
     !stored.is_empty()
         && stored.len() == built.len()
         && stored.iter().zip(built).all(|(stored, built)| {
@@ -253,6 +253,11 @@ pub(super) fn paste(
         };
         let name = unique(&c.name, &mut used);
         let new = scratch.doc_mut().add_component(Some(&name), mapped_parent)?;
+        // A copy keeps the definition's part properties.
+        if let Some(added) = scratch.doc_mut().components.iter_mut().find(|x| x.id == new) {
+            added.metadata = c.metadata.clone();
+            added.properties = c.properties.clone();
+        }
         components.insert(*old, new);
         if *old != component {
             scratch.doc_mut().occurrences.retain(|o| o.component != new);

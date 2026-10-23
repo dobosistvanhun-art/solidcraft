@@ -56,28 +56,22 @@ fn measured(app: &mut SolveApp, ui: &egui::Ui) -> Option<Result<Value, String>> 
 /// The strip (header and, open, the values). Drawn at the bottom of the sidebar.
 pub fn strip(app: &mut SolveApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
-    let open_id = egui::Id::new("sc_props_strip_open");
-    let open: bool = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(open_id, true));
     let picked = selected_bodies(app);
     let what = match picked.as_slice() {
         [] => crate::i18n::tr_label("all bodies").to_string(),
         [one] => one.clone(),
         many => format!("{} {}", many.len(), crate::i18n::tr_label("bodies")),
     };
-    let arrow = if open { "▼" } else { "▶" };
-    let header = ui.add(
-        egui::Button::new(
-            RichText::new(format!("{arrow}  {}  ·  {what}", crate::i18n::tr_label("PROPERTIES"))).size(11.0).strong().color(t.text_dim),
-        )
-        .frame(false),
-    );
-    crate::scenario::publish_handle("browser-properties-toggle", header.rect.center());
-    if header.clicked() {
-        ui.ctx().data_mut(|d| d.insert_persisted(open_id, !open));
-    }
-    if !open {
-        return;
-    }
+    let title = format!("{} · {what}", crate::i18n::tr_label("Properties"));
+    // Where the section's header is drawn: for scenarios and the control channel.
+    let header = ui.cursor().left_top() + vec2(t.space_10, t.space_10);
+    crate::scenario::publish_handle("browser-properties-toggle", header);
+    crate::ui_kit::section(ui, "sc_props_strip", &title, true, |ui| values(app, ui));
+}
+
+/// The strip's values: material, density (one body), mass, volume and area.
+fn values(app: &mut SolveApp, ui: &mut egui::Ui) {
+    let t = Tokens::get();
     let value = match measured(app, ui) {
         None => {
             ui.label(RichText::new(crate::i18n::tr_label("No bodies yet")).weak());

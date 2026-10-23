@@ -339,6 +339,58 @@ mod tests {
     }
 
     #[test]
+    fn round_rim_lips_and_grooves_keep_curved_walls() {
+        for (obround, tilted) in [(false, false), (true, false), (true, true)] {
+            for outside in [false, true] {
+                for groove in [false, true] {
+                    let mut s = Session::default();
+                    let plane = if tilted {
+                        solidcraft_geom::Plane::new(Vec3::new(7., -3., 5.), Vec3::new(1., -1., 0.), Vec3::new(1., 1., -2.)).unwrap()
+                    } else {
+                        solidcraft_geom::Plane::XY
+                    };
+                    if obround {
+                        run(&mut s, "sketch.create", json!({"plane": plane, "name": "Rim"}));
+                        run(&mut s, "sketch.slot.center_to_center", json!({"p0": [-20, 0], "p1": [20, 0], "width": 40}));
+                        run(&mut s, "sketch.finish", json!({}));
+                        run(&mut s, "solid.extrude", json!({"sketch": "Rim", "distance": 12, "body_name": "Case"}));
+                    } else {
+                        run(&mut s, "solid.cylinder", json!({"radius": 20, "height": 12, "body_name": "Case"}));
+                    }
+                    let top = plane.origin + plane.normal() * 12.0;
+                    run(&mut s, "solid.shell", json!({"faces": [top], "thickness": 2}));
+                    let before = volume(&mut s);
+                    run(
+                        &mut s,
+                        "plastic.lip",
+                        json!({"face": top + plane.y * 19.0, "width": 0.8, "height": 1.5,
+                        "side": if outside { "outside" } else { "inside" }, "type": if groove { "groove" } else { "lip" }, "gap": 0.2}),
+                    );
+                    let width = if groove { 1.0 } else { 0.8 };
+                    let area = if outside { PI * (400.0 - (20.0_f64 - width).powi(2)) } else { PI * ((18.0_f64 + width).powi(2) - 324.0) };
+                    let area = area + if obround { 80.0 * width } else { 0.0 };
+                    let want = before + if groove { -area * 1.7 } else { area * 1.5 };
+                    let check = |s: &Session| {
+                        let st = s.model.state();
+                        let body = &st.body("Case").unwrap().body;
+                        let m = solidcraft_kernel::measure(body).unwrap();
+                        assert!(
+                            (m.volume - want).abs() < 0.1,
+                            "obround={obround} tilted={tilted} outside={outside} groove={groove}: {} vs {want}",
+                            m.volume
+                        );
+                        assert!(m.faces < 32, "obround={obround} tilted={tilted} outside={outside} groove={groove}: polygonal walls: {m:?}");
+                        assert!(m.merged.face_types.get("cylinder").copied().unwrap_or(0) >= 3, "{m:?}");
+                        assert!(body.validity().is_empty());
+                    };
+                    check(&s);
+                    check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn lip_on_a_face_that_is_not_a_rim_says_so() {
         // The Sample Plate's top face (#892): two holes through it and the boss standing on it.
         // The lip used to run round the boss's foot, against its wall, and the join failed in
@@ -371,6 +423,40 @@ mod tests {
         let m = run(&mut s, "inspect.measure", json!({}));
         assert!((m["bodies"][0]["bbox"]["max"][0].as_f64().unwrap_or(0.0) - 40.0).abs() < 1e-9);
         assert!(s.execute("plastic.snap_fit", &json!({"position": [5, 5, 4], "direction": [0, 0, 1], "hook": [0, 0, 1], "length": 15, "thickness": 1.5, "width": 6, "catch_depth": 1, "catch_length": 3})).is_err());
+    }
+
+    #[test]
+    fn plastic_sizes_below_the_minimum_are_refused_by_name() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 40, "width": 40, "height": 4}));
+        let v0 = volume(&mut s);
+        let snap =
+            json!({"position": [20, 20, 4], "hook": [1, 0, 0], "length": 15, "thickness": 1.5, "width": 6, "catch_depth": 1, "catch_length": 3});
+        for (key, tiny) in
+            [("thickness", 1e-9), ("thickness", 1e-320), ("length", 1e-5), ("width", 0.005), ("catch_depth", 1e-9), ("catch_length", 1e-9)]
+        {
+            let mut p = snap.clone();
+            p[key] = json!(tiny);
+            let e = s.execute("plastic.snap_fit", &p).unwrap_err().to_string();
+            assert!(e.contains(&format!("snap fit's {key} must be at least 0.01 mm")), "{key}={tiny}: {e}");
+        }
+        let boss = json!({"position": [20, 20, 4], "diameter": 6, "height": 5});
+        for (key, tiny) in [("diameter", 1e-9), ("height", 1e-9), ("hole_diameter", 1e-9), ("rib_thickness", 1e-9)] {
+            let mut p = boss.clone();
+            p[key] = json!(tiny);
+            if key == "rib_thickness" {
+                p["ribs"] = json!(4);
+            }
+            let e = s.execute("plastic.boss", &p).unwrap_err().to_string();
+            assert!(e.contains(&format!("boss's {key} must be at least 0.01 mm")), "{key}={tiny}: {e}");
+        }
+        let e = s.execute("plastic.rest", &json!({"position": [20, 20, 4], "width": 6, "height": 1e-9})).unwrap_err().to_string();
+        assert!(e.contains("rest's height must be at least 0.01 mm"), "{e}");
+        assert!(rel(volume(&mut s), v0) < 1e-9, "the refused features changed nothing");
+        // The minimum itself still builds.
+        let mut p = snap.clone();
+        p["thickness"] = json!(0.01);
+        run(&mut s, "plastic.snap_fit", p);
     }
 
     #[test]

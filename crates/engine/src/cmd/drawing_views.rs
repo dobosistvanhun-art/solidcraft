@@ -308,7 +308,7 @@ fn scene(meshes: Vec<Arc<Mesh>>) -> Scene {
 fn lines(meshes: Vec<Arc<Mesh>>, basis: &Basis, radius: f64) -> Result<Vec<(Vec2, Vec2, bool)>, String> {
     let sc = scene(meshes);
     let cam = basis.camera(radius);
-    let drawn = projection::drawing(&sc, &cam).map_err(str::to_string)?;
+    let drawn = projection::drawing(&sc, &[], &cam).map_err(str::to_string)?;
     // The camera's own axes may differ from the basis by the roll's rounding: re-express.
     let (cr, cu, _) = cam.basis();
     let (rr, ru) = (Vec2::new(cr.dot(basis.r), cr.dot(basis.u)), Vec2::new(cu.dot(basis.r), cu.dot(basis.u)));

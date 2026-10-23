@@ -7,13 +7,14 @@
 //! a dimension: its points, snapped to the model; a note: where it goes). The camera is the
 //! shared flat navigation (pan and zoom, no orbit).
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Stroke, pos2, vec2};
+use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, pos2, vec2};
 use serde_json::{Value, json};
 use solidcraft_engine::doc::drawing::{SCALES, SHEET_SIZES};
 
 use crate::SolveApp;
-use crate::dialogs::{Dialog, Kind, combo, row_label};
+use crate::dialogs::{Dialog, Kind};
 use crate::theme::Tokens;
+use crate::ui_kit::{self, choice_row, text_row};
 
 const ORIENTATIONS: [&str; 7] = ["front", "back", "top", "bottom", "left", "right", "iso"];
 const ORIENTATION_LABELS: [&str; 7] = ["Front", "Back", "Top", "Bottom", "Left", "Right", "Iso"];
@@ -150,7 +151,6 @@ fn run(app: &mut SolveApp, k: &mut DrawUi, cmd: &str, p: Value) -> Option<Value>
 
 /// The panel's rows.
 pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
-    let t = Tokens::get();
     // The drawing: a new one when the editor was opened for one (or there is none yet).
     let wants_new = k.status.as_deref() == Some("new");
     if wants_new {
@@ -173,9 +173,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut pick = app.session.doc.drawings.iter().position(|d| Some(d.id) == k.drawing).unwrap_or(0);
     let before = pick;
-    row_label(ui, "Drawing");
-    combo(ui, "drw_pick", &refs, &mut pick);
-    ui.end_row();
+    choice_row(ui, "Drawing", "drw_pick", &mut pick, &refs);
     if pick != before {
         k.drawing = match app.session.doc.drawings.get(pick) {
             Some(d) => Some(d.id),
@@ -186,248 +184,216 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
     }
     let Some(d) = drawing(app, k).cloned() else {
         if let Some(s) = &k.status {
-            row_label(ui, "");
-            ui.label(RichText::new(s).color(t.error));
-            ui.end_row();
+            ui_kit::text(ui, s, ui_kit::Text::Report("drawing_status", true));
         }
         return false;
     };
     let id = d.id;
 
     // ---- sheet ----
-    section(ui, "SHEET");
-    let sizes: Vec<&str> = SHEET_SIZES.iter().map(|(n, ..)| *n).collect();
-    let mut size = sizes.iter().position(|s| s.eq_ignore_ascii_case(&d.sheet.size)).unwrap_or(1);
-    let b = size;
-    row_label(ui, "Size");
-    combo(ui, "drw_size", &sizes, &mut size);
-    ui.end_row();
-    if size != b {
-        run(app, k, "drawing.edit", json!({"drawing": id, "size": sizes.get(size)}));
-    }
-    let mut landscape = d.sheet.landscape;
-    row_label(ui, "Landscape");
-    if ui.checkbox(&mut landscape, "").changed() {
-        run(app, k, "drawing.edit", json!({"drawing": id, "landscape": landscape}));
-    }
-    ui.end_row();
-    let mut scale = SCALES.iter().position(|s| *s == d.scale).unwrap_or(3);
-    let b = scale;
-    row_label(ui, "Scale");
-    combo(ui, "drw_scale", SCALES, &mut scale);
-    ui.end_row();
-    if scale != b {
-        run(app, k, "drawing.edit", json!({"drawing": id, "scale": SCALES.get(scale)}));
-    }
-    let projections = ["First angle (ISO E)", "Third angle (ISO A)"];
-    let mut proj = usize::from(d.projection == solidcraft_engine::doc::drawing::Projection::Third);
-    let b = proj;
-    row_label(ui, "Projection");
-    combo(ui, "drw_proj", &projections, &mut proj);
-    ui.end_row();
-    if proj != b {
-        run(app, k, "drawing.edit", json!({"drawing": id, "projection": if proj == 1 { "third" } else { "first" }}));
-    }
-
-    // ---- title block ----
-    section(ui, "TITLE BLOCK");
-    if k.title.len() != TITLE_FIELDS.len() {
-        let mut tb = d.title.clone();
-        k.title = tb.fields_mut().iter().map(|(_, v)| v.to_string()).collect();
-    }
-    let mut changed: Option<(&str, String)> = None;
-    for ((key, label), value) in TITLE_FIELDS.iter().zip(k.title.iter_mut()) {
-        row_label(ui, label);
-        let r = ui.add(egui::TextEdit::singleline(value).hint_text(if *key == "material" { crate::i18n::tr_label("from the part") } else { "" }));
-        crate::scenario::publish_handle(&format!("dialog:title:{key}"), r.rect.center());
-        if r.lost_focus() {
-            changed = Some((key, value.clone()));
+    ui_kit::section(ui, "drw_sheet", "Sheet", true, |ui| {
+        let sizes: Vec<&str> = SHEET_SIZES.iter().map(|(n, ..)| *n).collect();
+        let mut size = sizes.iter().position(|s| s.eq_ignore_ascii_case(&d.sheet.size)).unwrap_or(1);
+        let b = size;
+        choice_row(ui, "Size", "drw_size", &mut size, &sizes);
+        if size != b {
+            run(app, k, "drawing.edit", json!({"drawing": id, "size": sizes.get(size)}));
         }
-        ui.end_row();
-    }
-    if let Some((key, value)) = changed {
-        let mut title = serde_json::Map::new();
-        title.insert(key.into(), json!(value));
-        run(app, k, "drawing.edit", json!({"drawing": id, "title": title}));
-    }
-
-    // ---- views ----
-    section(ui, "VIEWS");
-    row_label(ui, "Base view");
-    ui.horizontal(|ui| {
-        combo(ui, "drw_orient", &ORIENTATION_LABELS, &mut k.orientation);
-        if ui.button(crate::i18n::tr_label("Add")).clicked() {
-            let o = ORIENTATIONS.get(k.orientation).copied().unwrap_or("front");
-            if let Some(v) = run(app, k, "drawing.view.base", json!({"drawing": id, "orientation": o})) {
-                k.selected = v["view"].as_u64();
-            }
+        let mut landscape = d.sheet.landscape;
+        if ui_kit::checkbox(ui, "Landscape", &mut landscape).changed() {
+            run(app, k, "drawing.edit", json!({"drawing": id, "landscape": landscape}));
+        }
+        let mut scale = SCALES.iter().position(|s| *s == d.scale).unwrap_or(3);
+        let b = scale;
+        choice_row(ui, "Scale", "drw_scale", &mut scale, SCALES);
+        if scale != b {
+            run(app, k, "drawing.edit", json!({"drawing": id, "scale": SCALES.get(scale)}));
+        }
+        let projections = ["First angle (ISO E)", "Third angle (ISO A)"];
+        let mut proj = usize::from(d.projection == solidcraft_engine::doc::drawing::Projection::Third);
+        let b = proj;
+        choice_row(ui, "Projection", "drw_proj", &mut proj, &projections);
+        if proj != b {
+            run(app, k, "drawing.edit", json!({"drawing": id, "projection": if proj == 1 { "third" } else { "first" }}));
         }
     });
-    ui.end_row();
-    let selected = k.selected.and_then(|v| d.view(v)).cloned();
-    if let Some(v) = &selected {
-        row_label(ui, "Projected from it");
-        ui.horizontal(|ui| {
-            combo(ui, "drw_side", &SIDE_LABELS, &mut k.side);
-            if ui.button(crate::i18n::tr_label("Add")).clicked() {
-                let side = SIDES.get(k.side).copied().unwrap_or("right");
-                if let Some(r) = run(app, k, "drawing.view.projected", json!({"drawing": id, "parent": v.id, "side": side})) {
-                    k.selected = r["view"].as_u64();
-                }
+
+    // ---- title block ----
+    ui_kit::section(ui, "drw_title", "Title Block", false, |ui| {
+        if k.title.len() != TITLE_FIELDS.len() {
+            let mut tb = d.title.clone();
+            k.title = tb.fields_mut().iter().map(|(_, v)| v.to_string()).collect();
+        }
+        let mut tb = d.title.clone();
+        let stored: Vec<String> = tb.fields_mut().iter().map(|(_, v)| v.to_string()).collect();
+        let mut changed: Option<(&str, String)> = None;
+        for (((key, label), value), stored) in TITLE_FIELDS.iter().zip(k.title.iter_mut()).zip(&stored) {
+            let (enter, _) = text_row(ui, label, value, if *key == "material" { crate::i18n::tr_label("from the part") } else { "" });
+            if let Some(at) = crate::scenario::handle_at(&format!("dialog:{label}")) {
+                crate::scenario::publish_handle(&format!("dialog:title:{key}"), at);
             }
+            // Saved on Enter, or once the field is left.
+            let idle = !ui.ctx().memory(|m| m.focused().is_some());
+            if (enter || idle) && value != stored {
+                changed = Some((key, value.clone()));
+            }
+        }
+        if let Some((key, value)) = changed {
+            let mut title = serde_json::Map::new();
+            title.insert(key.into(), json!(value));
+            run(app, k, "drawing.edit", json!({"drawing": id, "title": title}));
+        }
+    });
+
+    // ---- views ----
+    ui_kit::section(ui, "drw_views", "Views", true, |ui| {
+        ui_kit::row(ui, "Base view", |ui| {
+            ui.horizontal(|ui| {
+                ui_kit::dropdown(ui, "drw_orient", &mut k.orientation, &ORIENTATION_LABELS);
+                if ui_kit::button(ui, crate::i18n::tr_label("Add"), ui_kit::Button::Small).clicked() {
+                    let o = ORIENTATIONS.get(k.orientation).copied().unwrap_or("front");
+                    if let Some(v) = run(app, k, "drawing.view.base", json!({"drawing": id, "orientation": o})) {
+                        k.selected = v["view"].as_u64();
+                    }
+                }
+            });
         });
-        ui.end_row();
-        let mut hidden = v.hidden;
-        row_label(ui, "Hidden edges");
-        if ui.checkbox(&mut hidden, "").changed() {
-            run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "hidden": hidden}));
+        let selected = k.selected.and_then(|v| d.view(v)).cloned();
+        if let Some(v) = &selected {
+            ui_kit::row(ui, "Projected from it", |ui| {
+                ui.horizontal(|ui| {
+                    ui_kit::dropdown(ui, "drw_side", &mut k.side, &SIDE_LABELS);
+                    if ui_kit::button(ui, crate::i18n::tr_label("Add"), ui_kit::Button::Small).clicked() {
+                        let side = SIDES.get(k.side).copied().unwrap_or("right");
+                        if let Some(r) = run(app, k, "drawing.view.projected", json!({"drawing": id, "parent": v.id, "side": side})) {
+                            k.selected = r["view"].as_u64();
+                        }
+                    }
+                });
+            });
+            let mut hidden = v.hidden;
+            if ui_kit::checkbox(ui, "Hidden edges", &mut hidden).changed() {
+                run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "hidden": hidden}));
+            }
+            let own: Vec<&str> = std::iter::once("Sheet's").chain(SCALES.iter().copied()).collect();
+            let mut sc = v.scale.as_deref().and_then(|s| SCALES.iter().position(|x| *x == s)).map_or(0, |i| i + 1);
+            let b = sc;
+            choice_row(ui, "View scale", "drw_vscale", &mut sc, &own);
+            if sc != b {
+                let text = sc.checked_sub(1).and_then(|i| SCALES.get(i)).copied().unwrap_or("");
+                run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "scale": text}));
+            }
+            if ui_kit::button(ui, crate::i18n::tr_label("Delete view"), ui_kit::Button::Normal).clicked() {
+                run(app, k, "drawing.view.delete", json!({"drawing": id, "view": v.id}));
+                k.selected = None;
+            }
+        } else {
+            ui_kit::text(ui, crate::i18n::tr_label("Click a view to select it, drag it to move it"), ui_kit::Text::Hint("drw_views"));
         }
-        ui.end_row();
-        let own: Vec<&str> = std::iter::once("Sheet's").chain(SCALES.iter().copied()).collect();
-        let mut sc = v.scale.as_deref().and_then(|s| SCALES.iter().position(|x| *x == s)).map_or(0, |i| i + 1);
-        let b = sc;
-        row_label(ui, "View scale");
-        combo(ui, "drw_vscale", &own, &mut sc);
-        ui.end_row();
-        if sc != b {
-            let text = sc.checked_sub(1).and_then(|i| SCALES.get(i)).copied().unwrap_or("");
-            run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "scale": text}));
-        }
-        row_label(ui, "");
-        if ui.button(crate::i18n::tr_label("Delete view")).clicked() {
-            run(app, k, "drawing.view.delete", json!({"drawing": id, "view": v.id}));
-            k.selected = None;
-        }
-        ui.end_row();
-    } else {
-        row_label(ui, "");
-        ui.label(RichText::new(crate::i18n::tr_label("Click a view to select it, drag it to move it")).weak());
-        ui.end_row();
-    }
+    });
 
     // ---- the selected dimension ----
-    if let Some((dim_id, text, tol)) = k.dim.as_mut()
-        && let Some(x) = d.dims.iter().find(|x| x.id == *dim_id).cloned()
+    if let Some((dim_id, text, tol)) = k.dim.clone()
+        && let Some(x) = d.dims.iter().find(|x| x.id == dim_id).cloned()
     {
-        let dim_id = *dim_id;
-        section(ui, "DIMENSION");
+        let (mut text, mut tol) = (text, tol);
         let mut edit: Option<Value> = None;
-        let mut offset = x.offset;
-        row_label(ui, "Offset");
-        if ui.add(egui::DragValue::new(&mut offset).speed(0.5).range(-500.0..=500.0).suffix(" mm")).changed() {
-            edit = Some(json!({"offset": offset}));
-        }
-        ui.end_row();
-        row_label(ui, "Text");
-        let r = ui.add(egui::TextEdit::singleline(text).hint_text(crate::i18n::tr_label("<> is the value")));
-        if r.lost_focus() && *text != x.text {
-            edit = Some(json!({"text": text.clone()}));
-        }
-        ui.end_row();
-        row_label(ui, "Tolerance");
-        let r = ui.add(egui::TextEdit::singleline(tol).hint_text("±0.1, +0.2/-0.1, H7"));
-        if r.lost_focus() && *tol != x.tolerance {
-            edit = Some(json!({"tolerance": tol.clone()}));
-        }
-        ui.end_row();
-        use solidcraft_engine::doc::drawing::DimKind;
-        if matches!(x.kind, DimKind::Horizontal | DimKind::Vertical | DimKind::Aligned) && !x.arc.is_empty() {
-            // Between the arcs' centres, near or far sides (a virtual sharp stays one).
-            let mut side = ["center", "min", "max"].iter().position(|a| *a == x.arc.as_str()).unwrap_or(0);
-            if x.arc != "sharp" {
+        let mut gone = false;
+        ui_kit::section(ui, "drw_dimension", "Dimension", true, |ui| {
+            let mut offset = x.offset;
+            if ui_kit::row(ui, "Offset", |ui| ui_kit::scalar_field(ui, &mut offset, -500.0..=500.0)).changed() {
+                edit = Some(json!({"offset": offset}));
+            }
+            let (enter, _) = text_row(ui, "Text", &mut text, crate::i18n::tr_label("<> is the value"));
+            let idle = !ui.ctx().memory(|m| m.focused().is_some());
+            if (enter || idle) && text != x.text {
+                edit = Some(json!({"text": text.clone()}));
+            }
+            let (enter, _) = text_row(ui, "Tolerance", &mut tol, "±0.1, +0.2/-0.1, H7");
+            if (enter || idle) && tol != x.tolerance {
+                edit = Some(json!({"tolerance": tol.clone()}));
+            }
+            use solidcraft_engine::doc::drawing::DimKind;
+            if matches!(x.kind, DimKind::Horizontal | DimKind::Vertical | DimKind::Aligned) && !x.arc.is_empty() && x.arc != "sharp" {
+                // Between the arcs' centres, near or far sides (a virtual sharp stays one).
+                let mut side = ["center", "min", "max"].iter().position(|a| *a == x.arc.as_str()).unwrap_or(0);
                 let b = side;
-                row_label(ui, "Points on");
-                combo(ui, "drw_dim_arc", &ARC_LABELS[1..4], &mut side);
-                ui.end_row();
+                choice_row(ui, "Points on", "drw_dim_arc", &mut side, &ARC_LABELS[1..4]);
                 if side != b {
                     let arc = ["center", "min", "max"].get(side).copied().unwrap_or("center");
                     edit = Some(json!({ "arc": arc }));
                 }
             }
-        }
-        row_label(ui, "");
-        let mut gone = false;
-        if ui.button(crate::i18n::tr_label("Delete dimension")).clicked() {
-            gone = run(app, k, "drawing.dimension.delete", json!({"drawing": id, "dimension": dim_id})).is_some();
-        }
-        ui.end_row();
+            if ui_kit::button(ui, crate::i18n::tr_label("Delete dimension"), ui_kit::Button::Normal).clicked() {
+                gone = true;
+            }
+        });
         if gone {
+            run(app, k, "drawing.dimension.delete", json!({"drawing": id, "dimension": dim_id}));
             k.dim = None;
-        } else if let Some(Value::Object(mut p)) = edit {
-            p.insert("drawing".into(), json!(id));
-            p.insert("dimension".into(), json!(dim_id));
-            run(app, k, "drawing.dimension.edit", Value::Object(p));
+        } else {
+            k.dim = Some((dim_id, text, tol));
+            if let Some(Value::Object(mut p)) = edit {
+                p.insert("drawing".into(), json!(id));
+                p.insert("dimension".into(), json!(dim_id));
+                run(app, k, "drawing.dimension.edit", Value::Object(p));
+            }
         }
     }
 
     // ---- tools ----
-    section(ui, "TOOLS");
-    row_label(ui, "On the sheet");
-    ui.horizontal_wrapped(|ui| {
-        for (tool, label) in
-            [(Tool::Select, "Select"), (Tool::Section, "Section"), (Tool::Detail, "Detail"), (Tool::Dimension, "Dimension"), (Tool::Note, "Note")]
+    ui_kit::section(ui, "drw_tools", "Tools", true, |ui| {
+        const TOOLS: [(Tool, &str); 5] =
+            [(Tool::Select, "Select"), (Tool::Section, "Section"), (Tool::Detail, "Detail"), (Tool::Dimension, "Dimension"), (Tool::Note, "Note")];
+        let labels: Vec<&str> = TOOLS.iter().map(|(_, l)| *l).collect();
+        let mut at = TOOLS.iter().position(|(t, _)| *t == k.tool).unwrap_or(0);
+        let before = at;
+        ui_kit::row(ui, "On the sheet", |ui| ui_kit::dropdown(ui, "drw_tool", &mut at, &labels));
+        // For scenarios and the control channel: `dialog:tool:Section` picks that tool.
+        if let Some(at) = crate::scenario::handle_at("dialog:On the sheet") {
+            for (_, label) in TOOLS {
+                crate::scenario::publish_handle(&format!("dialog:tool:{label}"), at);
+            }
+        }
+        if at != before
+            && let Some((tool, _)) = TOOLS.get(at)
         {
-            let r = ui.selectable_label(k.tool == tool, crate::i18n::tr_label(label));
-            crate::scenario::publish_handle(&format!("dialog:tool:{label}"), r.rect.center());
-            if r.clicked() {
-                k.tool = tool;
-                k.picks.clear();
-            }
+            k.tool = *tool;
+            k.picks.clear();
         }
+        match k.tool {
+            Tool::Dimension => {
+                choice_row(ui, "Kind", "drw_dim", &mut k.dim_kind, &DIM_LABELS);
+                if k.dim_kind <= 2 {
+                    // To circles and arcs: their centres, or their near or far sides.
+                    choice_row(ui, "Points on", "drw_arc", &mut k.arc, &ARC_LABELS);
+                } else {
+                    k.arc = 0;
+                }
+                text_row(ui, "Tolerance", &mut k.tolerance, "±0.1, +0.2/-0.1, H7");
+            }
+            Tool::Note => {
+                text_row(ui, "Text", &mut k.note, "");
+            }
+            _ => {}
+        }
+        ui_kit::text(ui, crate::i18n::tr_label(hint(k)), ui_kit::Text::Hint("drw_tool_hint"));
     });
-    ui.end_row();
-    match k.tool {
-        Tool::Dimension => {
-            row_label(ui, "Kind");
-            combo(ui, "drw_dim", &DIM_LABELS, &mut k.dim_kind);
-            ui.end_row();
-            if k.dim_kind <= 2 {
-                // To circles and arcs: their centres, or their near or far sides.
-                row_label(ui, "Points on");
-                combo(ui, "drw_arc", &ARC_LABELS, &mut k.arc);
-                ui.end_row();
-            } else {
-                k.arc = 0;
-            }
-            row_label(ui, "Tolerance");
-            ui.add(egui::TextEdit::singleline(&mut k.tolerance).hint_text("±0.1, +0.2/-0.1, H7"));
-            ui.end_row();
-        }
-        Tool::Note => {
-            row_label(ui, "Text");
-            ui.add(egui::TextEdit::multiline(&mut k.note).desired_rows(2));
-            ui.end_row();
-        }
-        _ => {}
-    }
-    row_label(ui, "");
-    ui.label(RichText::new(crate::i18n::tr_label(hint(k))).weak());
-    ui.end_row();
 
     // ---- export ----
-    section(ui, "EXPORT");
-    row_label(ui, "");
-    ui.horizontal(|ui| {
-        for (ext, cmd) in [("pdf", "drawing.export_pdf"), ("dxf", "drawing.export_dxf")] {
-            if ui.button(format!("{}…", ext.to_ascii_uppercase())).clicked() {
-                app.pick_save_command(&format!("{}.{ext}", d.name), &[ext], cmd, json!({"drawing": id}));
+    ui_kit::section(ui, "drw_export", "Export", true, |ui| {
+        ui.horizontal(|ui| {
+            for (ext, cmd) in [("pdf", "drawing.export_pdf"), ("dxf", "drawing.export_dxf")] {
+                if ui_kit::button(ui, format!("{}…", ext.to_ascii_uppercase()), ui_kit::Button::Normal).clicked() {
+                    app.pick_save_command(&format!("{}.{ext}", d.name), &[ext], cmd, json!({"drawing": id}));
+                }
             }
-        }
+        });
     });
-    ui.end_row();
     if let Some(s) = &k.status {
-        row_label(ui, "");
-        ui.label(RichText::new(s).color(t.error));
-        ui.end_row();
+        ui_kit::text(ui, s, ui_kit::Text::Report("drawing_status", true));
     }
     false
-}
-
-fn section(ui: &mut egui::Ui, title: &str) {
-    let t = Tokens::get();
-    row_label(ui, "");
-    ui.label(RichText::new(crate::i18n::tr_label(title)).size(11.0).strong().color(t.text_dim));
-    ui.end_row();
 }
 
 /// What the tool wants next.
@@ -483,7 +449,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     let t = Tokens::get();
     painter.rect_filled(rect, 0.0, t.panel);
     let Some(v) = drawn(app, k) else {
-        painter.text(rect.center(), Align2::CENTER_CENTER, crate::i18n::tr_label("No drawing"), FontId::proportional(14.0), t.text_dim);
+        painter.text(rect.center(), Align2::CENTER_CENTER, crate::i18n::tr_label("No drawing"), FontId::proportional(t.font_body), t.text_dim);
         return true;
     };
     let (w, h) = (v["width"].as_f64().unwrap_or(420.0), v["height"].as_f64().unwrap_or(297.0));
@@ -582,7 +548,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     }
     for e in v["errors"].as_array().into_iter().flatten() {
         if let Some(msg) = e.get(1).and_then(Value::as_str) {
-            painter.text(paper.left_top() + vec2(8.0, -18.0), Align2::LEFT_BOTTOM, msg, FontId::proportional(12.0), t.error);
+            painter.text(paper.left_top() + vec2(8.0, -18.0), Align2::LEFT_BOTTOM, msg, FontId::proportional(t.font_label), t.error);
         }
     }
     // The selected dimension: a ring round its text.

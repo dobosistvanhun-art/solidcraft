@@ -12,7 +12,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("canvas.insert", "Canvas", add_canvas)
         .at("SKETCH", "INSERT")
         .icon("canvas")
-        .params("path | data (base64 PNG or JPEG); plane?: XY|XZ|YZ|{face: [x,y,z]}|… (default XY); center?: [x,y] on the plane, or at?: [x,y,z]; width?: mm (default 100); angle?: deg; opacity?: 0…1 (default 0.5); flip?; name?"),
+        .params("path | data (base64 PNG or JPEG; BMP, GIF, TIFF and WebP are converted to PNG); plane?: XY|XZ|YZ|{face: [x,y,z]}|… (default XY); center?: [x,y] on the plane, or at?: [x,y,z]; width?: mm (default 100); angle?: deg; opacity?: 0…1 (default 0.5); flip?; name?"),
     CommandSpec::new("canvas.decal", "Decal", add_decal)
         .at("SKETCH", "INSERT")
         .icon("decal")
@@ -20,7 +20,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("canvas.edit", "Edit Canvas", edit_canvas).at("SKETCH", "INSERT").icon("canvas").params("canvas: id or name; center?, width?, angle?: deg, opacity?, flip?, visible?, name?"),
     CommandSpec::new("canvas.calibrate", "Calibrate Canvas", calibrate).icon("measure")
         .params("canvas: id or name; a, b: two points on the canvas plane [x,y]; distance: their true distance (mm): scales the image about a"),
-    CommandSpec::new("canvas.delete", "Delete Canvas", delete_canvas).icon("delete").params("canvas: id or name"),
+    CommandSpec::new("canvas.delete", "Delete Canvas", delete_canvas)
+        .at("SKETCH", "INSERT")
+        .icon("delete")
+        .params("canvas: id or name — the reference image goes; sketches drawn over it stay"),
 ];
 
 fn image_bytes(p: &Value, cmd: &str) -> Result<Vec<u8>> {
@@ -36,12 +39,39 @@ fn image_bytes(p: &Value, cmd: &str) -> Result<Vec<u8>> {
     if b.len() > MAX_CANVAS_BYTES {
         return Err(bad(cmd, "the image is too large"));
     }
-    Ok(b)
+    if image_info(&b).is_some() {
+        return Ok(b);
+    }
+    to_png(&b).ok_or_else(|| bad(cmd, "only PNG, JPEG, BMP, GIF, TIFF and WebP images can be inserted"))
+}
+
+/// Largest picture (pixels) another format may be converted from.
+const MAX_CONVERT_PIXELS: u64 = 40_000_000;
+
+/// A BMP, GIF, TIFF or WebP picture as PNG (the design keeps canvases as PNG or JPEG).
+fn to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    use image::ImageFormat;
+    let format = image::guess_format(bytes).ok()?;
+    if !matches!(format, ImageFormat::Bmp | ImageFormat::Gif | ImageFormat::Tiff | ImageFormat::WebP) {
+        return None;
+    }
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_CONVERT_PIXELS * 4);
+    reader.limits(limits);
+    let picture = reader.decode().ok()?;
+    if u64::from(picture.width()) * u64::from(picture.height()) > MAX_CONVERT_PIXELS {
+        return None;
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    picture.to_rgba8().write_to(&mut out, ImageFormat::Png).ok()?;
+    let out = out.into_inner();
+    (out.len() <= MAX_CANVAS_BYTES).then_some(out)
 }
 
 fn make(s: &mut Session, p: &Value, cmd: &str, decal: bool) -> Result<Value> {
     let bytes = image_bytes(p, cmd)?;
-    let (format, pixels) = image_info(&bytes).ok_or_else(|| bad(cmd, "only PNG and JPEG images can be inserted"))?;
+    let (format, pixels) = image_info(&bytes).ok_or_else(|| bad(cmd, "only PNG, JPEG, BMP, GIF, TIFF and WebP images can be inserted"))?;
     let plane = super::sketch::plane_ref(s, p, cmd)?;
     let (vals, _) = s.doc.param_values();
     let pl = s.doc.resolve_plane_in(&vals, &plane, 0, Some(&s.model.state()))?;
@@ -194,5 +224,44 @@ mod tests {
         s.execute("solid.box", &json!({"length": 30, "width": 30, "height": 10})).unwrap();
         let r = s.execute("canvas.decal", &json!({"data": png(10, 10), "face": [15, 15, 10], "width": 20})).unwrap();
         assert!(r["canvas"].is_u64());
+    }
+
+    /// A 24-bit BMP of `w` × `h` grey pixels.
+    fn bmp(w: u32, h: u32) -> Vec<u8> {
+        let row = (w * 3).div_ceil(4) * 4;
+        let size = 54 + row * h;
+        let mut b = b"BM".to_vec();
+        for v in [size, 0, 54, 40] {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend((w as i32).to_le_bytes());
+        b.extend((h as i32).to_le_bytes());
+        b.extend(1u16.to_le_bytes());
+        b.extend(24u16.to_le_bytes());
+        for v in [0u32, row * h, 2835, 2835, 0, 0] {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend(std::iter::repeat_n(128u8, (row * h) as usize));
+        b
+    }
+
+    #[test]
+    fn a_bmp_is_inserted_as_png_and_the_tracing_outlives_the_canvas() {
+        let mut s = Session::default();
+        let r = s.execute("canvas.insert", &json!({"data": base64_encode(&bmp(30, 20)), "plane": "XY", "width": 60})).unwrap();
+        let c = s.doc.canvases[0].clone();
+        assert_eq!((c.format.as_str(), c.pixels), ("png", [30, 20]));
+        assert!((c.height() - 40.0).abs() < 1e-9);
+        // Traced over, then the image goes and the sketch stays.
+        s.execute("sketch.create", &json!({"plane": "XY", "name": "Trace"})).unwrap();
+        s.execute("sketch.rectangle.two_point", &json!({"p0": [-30, -20], "p1": [30, 20]})).unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+        s.execute("canvas.delete", &json!({"canvas": r["canvas"]})).unwrap();
+        assert!(s.doc.canvases.is_empty());
+        assert!(s.model.state().sketches.iter().any(|k| k.name == "Trace" && !k.profiles.is_empty()));
+        // A broken BMP is refused, not inserted.
+        let mut broken = bmp(30, 20);
+        broken.truncate(60);
+        assert!(s.execute("canvas.insert", &json!({"data": base64_encode(&broken)})).is_err());
     }
 }

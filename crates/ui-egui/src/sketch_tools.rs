@@ -220,6 +220,27 @@ pub fn start_hook(app: &mut SolveApp, id: &str) -> bool {
         }
         return false;
     }
+    if id == "canvas.delete" {
+        // The ribbon's Delete Canvas: the canvases picked (browser or viewport), else the only
+        // one; with several and none picked, say how to pick one.
+        let doc = &app.session.doc;
+        let mut ids: Vec<u64> = app.tree.picked_canvases.iter().copied().filter(|i| doc.canvases.iter().any(|c| c.id == *i)).collect();
+        if ids.is_empty() && doc.canvases.len() == 1 {
+            ids = doc.canvases.iter().map(|c| c.id).collect();
+        }
+        if ids.is_empty() {
+            let msg = if doc.canvases.is_empty() {
+                "There is no canvas to delete"
+            } else {
+                "Click the image (or pick it under Canvases in the browser), then Delete Canvas"
+            };
+            app.set_status(msg, !doc.canvases.is_empty());
+            return false;
+        }
+        app.tree.picked_canvases.clear();
+        crate::delete::request(app, json!({ "canvases": ids }));
+        return false;
+    }
     if !matches!(id, "canvas.insert" | "canvas.decal") {
         return true;
     }

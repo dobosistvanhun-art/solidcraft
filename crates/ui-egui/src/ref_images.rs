@@ -163,3 +163,49 @@ mod codec_tests {
         assert!(decode_reference(png.get_ref()).is_some());
     }
 }
+
+/// The visible canvas under the screen point `pos` (the nearest along the view ray), for picking
+/// a canvas in the viewport: a click selects it (Delete removes it), a right-click opens its menu.
+pub fn canvas_at(app: &SolveApp, proj: &Proj, pos: egui::Pos2) -> Option<u64> {
+    let doc = &app.session.doc;
+    if doc.canvases.is_empty() || app.session.folder_hidden(crate::browser::CANVASES) {
+        return None;
+    }
+    let (vals, _) = doc.param_values();
+    let (o, d) = proj.ray(pos);
+    doc.canvases
+        .iter()
+        .filter(|c| c.visible && c.opacity > 0.0)
+        .filter_map(|c| {
+            let plane = doc.canvas_plane(&vals, c).ok()?;
+            let w = plane.intersect_ray(o, d)?;
+            let p = plane.to_local(w);
+            let q = c.corners();
+            // Inside the (convex) image: on the same side of all four edges.
+            let sides: Vec<f64> = (0..4).map(|i| (q[(i + 1) % 4] - q[i]).cross(p - q[i])).collect();
+            let inside = sides.iter().all(|s| *s >= 0.0) || sides.iter().all(|s| *s <= 0.0);
+            inside.then(|| (c.id, (w - o).dot(d)))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
+}
+
+/// An outline round each canvas picked in the browser or the viewport.
+pub fn outline_picked(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
+    if app.tree.picked_canvases.is_empty() {
+        return;
+    }
+    let doc = &app.session.doc;
+    let (vals, _) = doc.param_values();
+    let col = crate::theme::Tokens::get().accent;
+    for c in doc.canvases.iter().filter(|c| app.tree.picked_canvases.contains(&c.id)) {
+        let Ok(plane) = doc.canvas_plane(&vals, c) else { continue };
+        let pts: Option<Vec<egui::Pos2>> = c.corners().iter().map(|p| proj.to_screen(plane.to_world(*p))).collect();
+        if let Some(mut pts) = pts {
+            if let Some(first) = pts.first().copied() {
+                pts.push(first);
+            }
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(2.0, col)));
+        }
+    }
+}

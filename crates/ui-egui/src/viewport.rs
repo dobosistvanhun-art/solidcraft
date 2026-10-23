@@ -2515,8 +2515,30 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                         None if !add && !resp.double_clicked() && crate::select_other::cycle_click(app, &proj, p) => {}
                         None => {
                             let sel = cand.and_then(|c| c.1);
-                            select(app, sel.clone(), add);
-                            crate::select_other::note_click(app, p, if add { None } else { sel });
+                            // Nothing else under the click: a reference image (canvas) is picked
+                            // as in the browser, so Delete or its menu removes it.
+                            // (An origin or construction plane under it does not hide it.)
+                            let canvas =
+                                if matches!(sel, None | Some(Sel::Plane { .. })) { crate::ref_images::canvas_at(app, &proj, p) } else { None };
+                            if !add {
+                                app.tree.picked_canvases.clear();
+                            }
+                            match canvas {
+                                Some(id) => {
+                                    if !add {
+                                        let _ = app.run("select.clear", json!({}));
+                                    }
+                                    if app.tree.picked_canvases.contains(&id) {
+                                        app.tree.picked_canvases.retain(|c| *c != id);
+                                    } else {
+                                        app.tree.picked_canvases.push(id);
+                                    }
+                                }
+                                None => {
+                                    select(app, sel.clone(), add);
+                                    crate::select_other::note_click(app, p, if add { None } else { sel });
+                                }
+                            }
                         }
                     }
                 }
@@ -2574,7 +2596,15 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             if app.tool.is_some() {
                 crate::tools::finish(app);
             } else if app.dialog.is_none() {
-                crate::context_menu::open(app, p);
+                // On a reference image with nothing else under the pointer: the canvas's menu.
+                let over_plane_only = app.viewport.hover.clone().is_none_or(|h| matches!(candidate(app, &[h]), None | Some((_, Sel::Plane { .. }))));
+                match crate::ref_images::canvas_at(app, &proj, p).filter(|_| over_plane_only) {
+                    Some(id) => {
+                        app.tree.picked_canvases = vec![id];
+                        crate::context_menu::open_for(app, p, crate::context_menu::Target::Canvas { id });
+                    }
+                    None => crate::context_menu::open(app, p),
+                }
             }
         }
     }
@@ -2805,6 +2835,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         crate::tools::preview(app, tl, &painter, &proj);
     }
     crate::canvas::show(app, ui, &painter, &proj);
+    crate::ref_images::outline_picked(app, &painter, &proj);
     crate::sketch_tools::show(app, ui, &painter, &proj);
     crate::sketch_dims::show(app, ui, &proj);
     crate::select_other::show(app, ui.ctx());

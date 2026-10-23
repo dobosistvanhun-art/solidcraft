@@ -1313,6 +1313,7 @@ fn canvas_panel(app: &mut SolveApp, ctx: &egui::Context) {
     let mut open = true;
     let mut edit: Option<Value> = None;
     let mut done = false;
+    let mut gone = false;
     let title = if m.calibrate { format!("Calibrate: {}", c.name) } else { format!("Edit Canvas: {}", c.name) };
     crate::frame::window(ctx, title, crate::frame::Width::Normal)
         .id(egui::Id::new("sc_canvas_panel"))
@@ -1361,10 +1362,22 @@ fn canvas_panel(app: &mut SolveApp, ctx: &egui::Context) {
                 }
             });
             ui.add_space(6.0);
-            if ui.button(if m.calibrate { "Calibrate" } else { "OK" }).clicked() {
-                done = true;
-            }
+            ui.horizontal(|ui| {
+                if ui.button(if m.calibrate { "Calibrate" } else { "OK" }).clicked() {
+                    done = true;
+                }
+                // Done tracing: the image goes, the sketch drawn over it stays.
+                if !m.calibrate && ui.button(crate::i18n::tr_label("Delete Canvas")).clicked() {
+                    gone = true;
+                }
+            });
         });
+    if gone {
+        app.tree.canvas_panel = None;
+        app.tree.picked_canvases.retain(|x| *x != c.id);
+        let _ = app.run("canvas.delete", json!({ "canvas": c.id }));
+        return;
+    }
     if let Some(p) = edit
         && app.run("canvas.edit", p).is_ok()
     {

@@ -20,3 +20,5 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
+# Reference images in other formats (BMP, GIF, TIFF, WebP) become PNG when inserted.
+image = { workspace = true, features = ["bmp", "gif", "tiff", "webp"] }

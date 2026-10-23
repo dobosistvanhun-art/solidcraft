@@ -606,6 +606,24 @@ pub struct SheetBody {
     /// The base sketch's lines (id, ends in flat coordinates), naming the base panel's edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub base_curves: Vec<(String, Vec2, Vec2)>,
+    /// A sheet metal loft (transition): its folded wall and its bends. Its flat pattern is the
+    /// base panel alone, with no flanges.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lofted: Option<LoftedSheet>,
+}
+
+/// A sheet metal loft's folded wall (already ripped open) and the bend lines of its flat pattern.
+#[derive(Clone, Debug, Serialize)]
+pub struct LoftedSheet {
+    pub bends: Vec<BendInfo>,
+    #[serde(skip)]
+    pub folded: Body,
+}
+
+impl PartialEq for LoftedSheet {
+    fn eq(&self, o: &Self) -> bool {
+        self.bends == o.bends
+    }
 }
 
 /// A straight round bore of one panel (None = the base), in flat coordinates: a cylinder from
@@ -1432,6 +1450,9 @@ impl SheetBody {
         if self.flat {
             return self.flat_solid();
         }
+        if let Some(l) = &self.lofted {
+            return Ok(l.folded.clone());
+        }
         let mut work = FlatWork::new();
         let cells = self.cells_with_work(&mut work)?;
         // Validate the bounded material first, then build close to the sheet's own
@@ -1959,6 +1980,9 @@ impl SheetBody {
     /// bend is listed where its centre line has material: one entry for every stretch that the
     /// cut-outs leave of it, all with the bend's `index`, and none for a bend they take whole.
     pub fn bends(&self) -> Vec<BendInfo> {
+        if let Some(l) = &self.lofted {
+            return l.bends.clone();
+        }
         let cuts = self.cut_outs();
         let mut out = Vec::new();
         for (i, f) in self.flanges.iter().enumerate() {
@@ -4288,6 +4312,7 @@ pub fn base_flange(body: &str, rule: &str, rv: &RuleValues, plane: Plane, region
         relief_size: rv.corner_relief,
         bend_relief: (rv.relief_width, rv.relief_depth),
         base_curves: Vec::new(),
+        lofted: None,
     }
 }
 
@@ -4346,6 +4371,7 @@ pub fn contour_flange(body: &str, rule: &str, rv: &RuleValues, plane: &Plane, pt
         relief_size: rv.corner_relief,
         bend_relief: (rv.relief_width, rv.relief_depth),
         base_curves: Vec::new(),
+        lofted: None,
     };
     let (y0, y1) = if ysign > 0.0 { (0.0, width) } else { (-width, 0.0) };
     // First segment: the base panel.

@@ -36,6 +36,7 @@ const SHEET_CREATE: &[&str] = &[
     "sheet.flat_pattern",
     "sheet.hem",
     "sheet.fold",
+    "sheet.loft",
     "sheet.convert",
     "component.create",
     "solid.extrude",

@@ -53,6 +53,7 @@ mod project3d;
 pub mod render_settings;
 pub use project3d::iso_grid;
 pub mod sheet;
+pub mod sheet_loft;
 pub mod thread_spec;
 
 pub use assembly::{

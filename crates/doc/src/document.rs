@@ -301,6 +301,20 @@ pub struct LoftThin {
     /// outside radius twice it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sharp: bool,
+    /// Sheet metal loft (a transition): the wall is a sheet of this sheet metal rule (empty: the
+    /// active one), its thickness, K-factor and bend radius taking the place of `thickness`; it
+    /// is ripped open at the middle of its longest straight side and has a flat pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    /// Sheet metal loft: the largest angle one bend line of the flat pattern takes of a round
+    /// (default 15°).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[walk(angle = "Bend step")]
+    pub bend_step: Option<Expr>,
+    /// Sheet metal loft: a point the rip runs through, on either section's edge (default: the
+    /// middle of the longest straight side).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rip: Option<Position>,
 }
 
 /// How a swept profile turns as it follows its path.

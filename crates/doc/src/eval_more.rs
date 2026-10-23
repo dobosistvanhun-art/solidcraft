@@ -410,6 +410,15 @@ fn rebuild_sheet(st: &mut ModelState, idx: usize) -> Result<()> {
 
 /// The sheet a feature works on: by body name, else the one with an edge nearest the pick.
 fn sheet_for(st: &ModelState, body: &Option<crate::BodyName>, pick: Option<Vec3>) -> Result<usize> {
+    let i = any_sheet_for(st, body, pick)?;
+    if st.sheets.get(i).is_some_and(|s| s.lofted.is_some()) {
+        return Err(DocError::Invalid("not supported yet: flanges, hems, folds and perforations on a sheet metal loft".into()));
+    }
+    Ok(i)
+}
+
+/// [`sheet_for`], a sheet metal loft too.
+fn any_sheet_for(st: &ModelState, body: &Option<crate::BodyName>, pick: Option<Vec3>) -> Result<usize> {
     if let Some(n) = body {
         return st.sheets.iter().position(|s| &s.body == n).ok_or_else(|| DocError::Invalid(format!("`{n}` is not a sheet metal body")));
     }
@@ -681,7 +690,7 @@ pub(super) fn sheet_eval(
         }
         FeatureKind::SheetUnfold { body, refold } => {
             let i = match body {
-                Some(_) => sheet_for(st, body, None)?,
+                Some(_) => any_sheet_for(st, body, None)?,
                 None => st.sheets.iter().rposition(|s| s.flat == *refold).ok_or_else(|| {
                     DocError::Invalid(if *refold { "no unfolded sheet to refold".into() } else { "no sheet metal body to unfold".into() })
                 })?,
@@ -883,6 +892,10 @@ pub(super) fn sheet_cut(
 /// Whether a cut of `f` with these targets (else its participants, else its component's
 /// bodies) machines the sheet `original`.
 fn sheet_eligible(f: &Feature, st: &ModelState, targets: &[String], original: &crate::sheet::SheetBody) -> bool {
+    // A sheet metal loft's flat pattern does not follow cuts yet: they cut its solid only.
+    if original.lofted.is_some() {
+        return false;
+    }
     let targets = if targets.is_empty() { &f.participants } else { targets };
     let all = targets.len() == 1 && targets.first().is_some_and(|t| t == "*");
     all || if targets.is_empty() {

@@ -26,6 +26,14 @@ pub static COMMANDS: &[CommandSpec] = &[
          Thickness, K-factor and bend radius come from the rule (sheet.manage_rules); passing them here is refused, \
          and so is the corner relief on a base or contour flange",
     ),
+    CommandSpec::new("sheet.loft", "Lofted Flange", lofted_flange).at("SHEET METAL", "CREATE").icon("loft").params(
+        "sections: [{sketch, profiles?} | sketch name] (exactly 2: say a square and a circle in parallel planes); rule? (default: the active rule: \
+         its thickness, K-factor and bend radius); side?: inside (default: the sections are the sheet's outside) | outside | both; \
+         bend_step?: angle expr (the largest angle one bend line takes of a round, default 15 deg); \
+         rip?: [x, y, z] (the rip runs through the point of a section's edge nearest it; default: the middle of the longest straight side); sharp_corners?: bool; name?, body_name? — \
+         a transition of sheet metal: a thin loft ripped open at the middle of its longest straight side, with a flat pattern (sheet.flat_pattern, \
+         sheet.export_dxf, sheet.unfold) unfolded along its neutral surface, each round bent in steps",
+    ),
     CommandSpec::new("sheet.perforate", "Perforate", perforate).at("SHEET METAL", "CREATE").icon("perforate").params(
         "diameter, pitch: expr; margin?: expr (clear of edges, cut-outs and bends; default: the diameter); pattern?: staggered (60°, default) | square; body? - a perforation field over the whole flat sheet: holes in the flat pattern (perforations), the DXF (layer PERFORATION) and the measured volume, not cut into the B-rep (#732)",
     ),
@@ -270,6 +278,60 @@ fn perforate(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`pattern` is \"staggered\" (60°, default) or \"square\""));
     }
     add_feature(s, p, FeatureKind::SheetPerforate { diameter, pitch, margin, pattern, body: str_(p, "body").map(BodyName::from) })
+}
+
+/// A sheet metal loft: a thin Loft whose wall is a sheet of the rule (see `LoftThin::sheet`).
+fn lofted_flange(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "sheet.loft";
+    let list = p.get("sections").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`sections` must be a list of two sections"))?;
+    if list.len() != 2 {
+        return Err(bad(cmd, "a sheet metal loft needs exactly 2 sections"));
+    }
+    let mut sections = Vec::with_capacity(2);
+    for sec in list {
+        let sketch = sketch_id(s, sec.get("sketch").or(Some(sec)), cmd, "sections[].sketch")?;
+        let profiles = if sec.is_object() { profiles(sec, cmd)? } else { solidcraft_doc::ProfileSel::All };
+        sections.push(solidcraft_doc::LoftSection { sketch: SketchId(sketch), profiles, point: None });
+    }
+    let rule = str_(p, "rule").unwrap_or_default().to_string();
+    if !rule.is_empty() && !s.doc.sheet.rules.iter().any(|r| r.name == rule) {
+        return Err(bad(cmd, format!("no sheet metal rule `{rule}`")));
+    }
+    let side = str_(p, "side").map(str::to_ascii_lowercase).unwrap_or_default();
+    if !matches!(side.as_str(), "" | "inside" | "outside" | "both") {
+        return Err(bad(cmd, "`side` must be inside, outside or both"));
+    }
+    let bend_step = expr(p, "bend_step");
+    if bend_step.is_none() && p.get("bend_step").is_some_and(|v| !v.is_null()) {
+        return Err(bad(cmd, "`bend_step` must be an angle"));
+    }
+    if let Some(e) = &bend_step {
+        check_expr(s, e, Kind::Angle, cmd, "bend_step")?;
+    }
+    let rip = match p.get("rip") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(Position(vec3(v).ok_or_else(|| bad(cmd, "`rip` must be a point [x, y, z] on a section's edge"))?)),
+    };
+    let thickness = solidcraft_doc::expr::Expr::new(s.doc.sheet_rule(Some(rule.as_str()).filter(|r| !r.is_empty())).thickness);
+    add_feature(
+        s,
+        p,
+        FeatureKind::Loft {
+            sections,
+            operation: solidcraft_doc::Operation::NewBody,
+            targets: Vec::new(),
+            thin: Some(solidcraft_doc::LoftThin {
+                thickness,
+                side: if side == "inside" { String::new() } else { side },
+                closed_start: false,
+                closed_end: false,
+                sharp: bool_(p, "sharp_corners").unwrap_or(false),
+                sheet: Some(rule),
+                bend_step,
+                rip,
+            }),
+        },
+    )
 }
 
 fn hem(s: &mut Session, p: &Value) -> Result<Value> {
@@ -928,3 +990,7 @@ mod convert_tests;
 #[cfg(test)]
 #[path = "sheet_dxf_tests.rs"]
 mod dxf_tests;
+
+#[cfg(test)]
+#[path = "sheet_loft_tests.rs"]
+mod loft_tests;

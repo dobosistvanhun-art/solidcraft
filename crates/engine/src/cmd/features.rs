@@ -2076,6 +2076,9 @@ fn loft_thin(s: &Session, p: &Value, cmd: &str) -> Result<Option<solidcraft_doc:
         closed_start,
         closed_end,
         sharp: bool_(p, "sharp_corners").unwrap_or(false),
+        sheet: None,
+        bend_step: None,
+        rip: None,
     }))
 }
 

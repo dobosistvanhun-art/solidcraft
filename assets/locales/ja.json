@@ -542,6 +542,7 @@
   "cmd.sheet_flat_pattern": "展開図を作成",
   "cmd.sheet_fold": "折り曲げ",
   "cmd.sheet_hem": "ヘミング",
+  "cmd.sheet_loft": "ロフトフランジ",
   "cmd.sheet_manage_rules": "板金ルール",
   "cmd.sheet_perforate": "パンチング",
   "cmd.sheet_refold": "折り戻し",

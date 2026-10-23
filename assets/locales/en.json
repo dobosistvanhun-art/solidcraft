@@ -542,6 +542,7 @@
   "cmd.sheet_flat_pattern": "Create Flat Pattern",
   "cmd.sheet_fold": "Fold",
   "cmd.sheet_hem": "Hem",
+  "cmd.sheet_loft": "Lofted Flange",
   "cmd.sheet_manage_rules": "Sheet Metal Rules",
   "cmd.sheet_perforate": "Perforate",
   "cmd.sheet_refold": "Refold",

@@ -38,6 +38,9 @@ const RELIEF_SHAPE_LABELS: [&str; 4] = ["Notch", "Round", "Rectangular", "Tear"]
 /// The corner relief shapes an edge flange offers: the rule's (index 0, nothing of its own), then
 /// the shapes of `RELIEF_SHAPES` in order.
 const FLANGE_RELIEF_LABELS: [&str; 5] = ["Rule", "Notch", "Round", "Rectangular", "Tear"];
+/// Where a lofted flange's sheet lies against its profiles.
+const LOFT_SIDES: [&str; 3] = ["inside", "outside", "both"];
+const LOFT_SIDE_LABELS: [&str; 3] = ["Inside", "Outside", "Both"];
 
 #[derive(Clone, Debug)]
 pub enum Sm {
@@ -77,6 +80,13 @@ pub enum Sm {
     Unfold {
         refold: bool,
     },
+    /// Lofted Flange: a sheet metal transition between the profiles of two sketches; `side`
+    /// indexes `LOFT_SIDES`, `step` is the largest angle one bend line takes of a round.
+    Loft {
+        rule: usize,
+        side: usize,
+        step: String,
+    },
     Convert {
         rule: usize,
     },
@@ -108,6 +118,7 @@ impl Sm {
             Sm::Fold { .. } => "FOLD",
             Sm::Unfold { refold: false } => "UNFOLD",
             Sm::Unfold { refold: true } => "REFOLD",
+            Sm::Loft { .. } => "LOFTED FLANGE",
             Sm::Convert { .. } => "CONVERT TO SHEET METAL",
             Sm::Rules { .. } => "SHEET METAL RULES",
             Sm::FlatPattern { .. } => "FLAT PATTERN",
@@ -160,6 +171,7 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             Sm::Fold { angle: "90 deg".into(), radius: String::new(), position: 0, flip: false },
             vec![SelInput::new("Bend Line", AXES, false), SelInput::new("Stationary Side", PLANAR_FACES, false)],
         ),
+        "sheet.loft" => (Sm::Loft { rule: 0, side: 0, step: "15 deg".into() }, vec![SelInput::new("Profiles", PROFILES, true)]),
         "sheet.unfold" => (Sm::Unfold { refold: false }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         "sheet.refold" => (Sm::Unfold { refold: true }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         "sheet.convert" => {
@@ -358,6 +370,23 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
             }
             row_label(ui, "Flip");
             ui.checkbox(flip, "");
+            ui.end_row();
+        }
+        Sm::Loft { rule, side, step } => {
+            rule_combo(app, ui, "sm_loft_rule", rule);
+            row_label(ui, "Side");
+            combo(ui, "sm_loft_side", &LOFT_SIDE_LABELS, side);
+            ui.end_row();
+            row_label(ui, "Bend step");
+            enter |= field(ui, step);
+            ui.end_row();
+            row_label(ui, "");
+            ui.label(
+                RichText::new(crate::i18n::tr_label(
+                    "Pick a profile in each of two sketches. The rip runs along the middle of the longest straight side.",
+                ))
+                .weak(),
+            );
             ui.end_row();
         }
         Sm::Hem { length, gap, flip } => {
@@ -689,6 +718,30 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             }
             ("sheet.flange", p)
         }
+        Sm::Loft { rule, side, step } => {
+            // One section per sketch, in the order the sketches were first picked.
+            let mut sections: Vec<(u64, Vec<usize>)> = Vec::new();
+            for x in items(inputs, 0) {
+                if let Sel::Profile { sketch, index } = x {
+                    match sections.iter_mut().find(|(sk, _)| sk == sketch) {
+                        Some((_, v)) => v.push(*index),
+                        None => sections.push((*sketch, vec![*index])),
+                    }
+                }
+            }
+            if sections.len() != 2 {
+                return Err("pick a profile in each of two sketches".into());
+            }
+            let sections: Vec<Value> = sections.into_iter().map(|(sk, v)| json!({"sketch": sk, "profiles": v})).collect();
+            let mut p = json!({"sections": sections, "side": LOFT_SIDES.get(*side).copied().unwrap_or("inside")});
+            if !step.trim().is_empty() {
+                p["bend_step"] = json!(step);
+            }
+            if let Some(r) = rule_value(app, *rule) {
+                p["rule"] = json!(r);
+            }
+            ("sheet.loft", p)
+        }
         Sm::Hem { length, gap, flip } => {
             let edges = edge_points(inputs);
             if edges.is_empty() {
@@ -876,6 +929,30 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
             if let Some(i) = ins.get_mut(1) {
                 i.items = fixed.and_then(|f| face_sel(s, f.0)).into_iter().collect();
             }
+            return Some((Kind::Sheet(k), ins, extra));
+        }
+        FeatureKind::Loft { sections, thin: Some(thin), .. } if thin.sheet.is_some() => {
+            let (_, mut ins) = start(app, "sheet.loft")?;
+            if let Some(i) = ins.first_mut() {
+                i.items = sections
+                    .iter()
+                    .flat_map(|sec| {
+                        let idx = st.sketch(sec.sketch.0).map(|ss| crate::dialogs::profile_indices(ss, &sec.profiles)).unwrap_or_default();
+                        idx.into_iter().map(move |index| Sel::Profile { sketch: sec.sketch.0, index })
+                    })
+                    .collect();
+            }
+            if let Some(p) = thin.rip {
+                extra.insert("rip".into(), pt(p.0));
+            }
+            if thin.sharp {
+                extra.insert("sharp_corners".into(), json!(true));
+            }
+            let k = Sm::Loft {
+                rule: rule_index(&thin.sheet.clone().filter(|n| !n.is_empty())),
+                side: LOFT_SIDES.iter().position(|x| *x == thin.side).unwrap_or(0),
+                step: thin.bend_step.as_ref().map_or_else(|| "15 deg".to_string(), |e| e.to_string()),
+            };
             return Some((Kind::Sheet(k), ins, extra));
         }
         FeatureKind::SheetUnfold { body, refold } => {

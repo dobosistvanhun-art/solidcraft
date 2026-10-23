@@ -4653,13 +4653,17 @@ fn trim_to_body(tools: Vec<Traced>, target: &ModelBody, dist_to_start: impl Fn(V
 /// sections lofted the same way and cut out of the outer loft. A closed end keeps a floor as thick
 /// as the wall: the inner loft starts that far into the loft.
 fn thin_loft_tools(
+    doc: &Document,
     vals: &BTreeMap<String, Value>,
     st: &ModelState,
     sections: &[crate::LoftSection],
     thin: &crate::LoftThin,
     tools: Vec<Traced>,
 ) -> Result<Vec<Traced>> {
-    let t = val(vals, &thin.thickness, Kind::Length)?;
+    let t = match &thin.sheet {
+        Some(rule) => doc.rule_values(vals, &doc.sheet_rule(Some(rule.as_str()).filter(|n| !n.is_empty())))?.thickness,
+        None => val(vals, &thin.thickness, Kind::Length)?,
+    };
     if !(t.is_finite() && t > 1e-6) {
         return Err(DocError::Invalid("the thin loft's thickness must be positive".into()));
     }
@@ -4740,6 +4744,118 @@ fn thin_loft_tools(
     let wall = kernel::boolean(&outer_tool.body, &cavity.body, BoolOp::Cut)?
         .ok_or_else(|| DocError::Invalid("thin loft: nothing is left of the wall".into()))?;
     Ok(vec![Traced::step(wall, &[&outer_tool, &cavity])])
+}
+
+/// A sheet metal loft: the thin loft's wall ripped open at the middle of its longest straight
+/// side, made a sheet metal body whose flat pattern is the neutral surface unfolded.
+#[allow(clippy::too_many_arguments)]
+fn sheet_loft(
+    doc: &Document,
+    vals: &BTreeMap<String, Value>,
+    f: &Feature,
+    st: &mut ModelState,
+    sections: &[crate::LoftSection],
+    thin: &crate::LoftThin,
+    operation: Operation,
+) -> Result<()> {
+    if operation != Operation::NewBody {
+        return Err(DocError::Invalid("a sheet metal loft makes a new body".into()));
+    }
+    let [s0, s1] = sections else { return Err(DocError::Invalid("not supported yet: a sheet metal loft through more than two sections".into())) };
+    if thin.closed_start || thin.closed_end {
+        return Err(DocError::Invalid("a sheet metal loft has both ends open".into()));
+    }
+    let rule = doc.sheet_rule(thin.sheet.as_deref().filter(|n| !n.is_empty()));
+    let rv = doc.rule_values(vals, &rule)?;
+    let t = rv.thickness;
+    let inside = match thin.side.as_str() {
+        "outside" => 0.0,
+        "both" => t / 2.0,
+        _ => t,
+    };
+    // The neutral surface: the K-factor's share of the thickness out from the wall's inside.
+    let inward = inside - rv.k_factor * t;
+    let mut lines: Vec<Vec<Vec3>> = Vec::with_capacity(2);
+    let mut frame = Plane::XY;
+    for (n, sec) in [s0, s1].into_iter().enumerate() {
+        let ss = st.sketch(sec.sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {}", sec.sketch)))?;
+        let regions = solidcraft_sketch::merge_regions(&select_profiles(ss, &sec.profiles)?);
+        let [r] = &regions[..] else { return Err(DocError::Invalid("each loft section must be one profile".into())) };
+        let mut lp = r.outer.ccw();
+        if !thin.sharp {
+            let along = if inside >= t {
+                2.0
+            } else if inside <= 0.0 {
+                1.0
+            } else {
+                1.5
+            };
+            lp = round_sharp_corners(&lp, along * t).0;
+        }
+        let wall = |i: f64, o: f64| {
+            solidcraft_sketch::thin_wall_regions(std::slice::from_ref(&lp.segs), i, o)
+                .map_err(|e| DocError::Invalid(format!("sheet metal loft: section {}: {e}", ss.name)))
+        };
+        let neutral = if inward > 1e-9 {
+            wall(inward, 0.0)?.into_iter().next().and_then(|w| w.holes.into_iter().next())
+        } else if inward < -1e-9 {
+            wall(0.0, -inward)?.into_iter().next().map(|w| w.outer)
+        } else {
+            Some(lp.clone())
+        }
+        .ok_or_else(|| DocError::Invalid(format!("sheet metal loft: section {} is too small for the sheet", ss.name)))?;
+        if n == 0 {
+            frame = ss.plane;
+        }
+        lines.push(neutral.polyline(0.01).into_iter().map(|p| ss.plane.to_world(p)).collect());
+    }
+    let step = match &thin.bend_step {
+        Some(e) => val(vals, e, Kind::Angle)?,
+        None => 15f64.to_radians(),
+    };
+    if !(step >= 0.5f64.to_radians() && step <= std::f64::consts::FRAC_PI_2) {
+        return Err(DocError::Invalid("the sheet metal loft's bend step must be between 0.5° and 90°".into()));
+    }
+    let gap = rv.gap.max(0.1);
+    let (Some(a), Some(b)) = (lines.first(), lines.get(1)) else { return Err(DocError::Invalid("loft sections".into())) };
+    let unfolded = crate::sheet_loft::unfold(a, b, &frame, thin.rip.map(Vec3::from), gap, step, rv.bend_radius, t, rv.k_factor)?;
+    // The folded wall: planar facets of the developable strip, sewn into a solid (else a mesh).
+    let faces: Vec<kernel::FaceSpec> = unfolded
+        .wall
+        .iter()
+        .map(|x| kernel::FaceSpec {
+            loops: vec![vec![
+                kernel::EdgeSpec::Line { a: x[0], b: x[1] },
+                kernel::EdgeSpec::Line { a: x[1], b: x[2] },
+                kernel::EdgeSpec::Line { a: x[2], b: x[0] },
+            ]],
+            surface: kernel::SurfSpec::Plane,
+            probe: None,
+        })
+        .collect();
+    let wall = match kernel::sew(&faces) {
+        Ok(b) => b,
+        Err(_) => {
+            let mut points: Vec<Vec3> = Vec::with_capacity(unfolded.wall.len() * 3);
+            let mut tris = Vec::with_capacity(unfolded.wall.len());
+            for x in &unfolded.wall {
+                let n = points.len() as u32;
+                points.extend_from_slice(x);
+                tris.push([n, n + 1, n + 2]);
+            }
+            kernel::mesh_body(&points, &tris)?
+        }
+    };
+    let ripped = vec![Traced::unnamed(wall)];
+    apply_traced(st, f, ripped, Operation::NewBody, &[])?;
+    let made = st.bodies.iter().rev().find(|b| b.feature == f.id).map(|b| (b.name.clone(), b.body.clone()));
+    let (name, folded) = made.ok_or_else(|| DocError::Invalid("the sheet metal loft made no body".into()))?;
+    let outline = solidcraft_geom::Loop2::polygon(&unfolded.outline).ccw();
+    let mut sh = crate::sheet::base_flange(&name, &rule.name, &rv, frame, Region2 { outer: outline, holes: Vec::new() });
+    sh.lofted = Some(crate::sheet::LoftedSheet { bends: unfolded.bends, folded });
+    st.sheets.retain(|s| s.body != name);
+    st.sheets.push(sh);
+    Ok(())
 }
 
 /// `lp` (counter-clockwise) with each convex corner between two straight segments rounded by
@@ -5106,7 +5222,10 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             let mut tools = feature_tools_with_constructor(doc, vals, f, st, &mut constructor)?;
             // Thin Loft: the loft hollowed, its ends open.
             if let FeatureKind::Loft { sections, thin: Some(thin), .. } = &f.kind {
-                tools = thin_loft_tools(vals, st, sections, thin, tools)?;
+                if thin.sheet.is_some() {
+                    return sheet_loft(doc, vals, f, st, sections, thin, *operation);
+                }
+                tools = thin_loft_tools(doc, vals, st, sections, thin, tools)?;
             }
             // Cuts through sheet metal become cut-outs of its flat pattern.
             if matches!(operation, Operation::Cut | Operation::Intersect) && matches!(f.kind, FeatureKind::Extrude { .. }) && !st.sheets.is_empty() {

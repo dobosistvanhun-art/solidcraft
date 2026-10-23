@@ -663,12 +663,6 @@ fn note_delete(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-/// A drawing drawn from the current model.
-pub fn drawn(s: &Session, id: u64) -> Option<SheetDrawn> {
-    let d = s.doc.drawings.iter().find(|d| d.id == id)?;
-    Some(dv::draw(s, d))
-}
-
 fn render(s: &mut Session, p: &Value) -> Result<Value> {
     let i = find(s, p, "drawing.render")?;
     let d = s.doc.drawings.get(i).ok_or_else(|| bad("drawing.render", "no such drawing"))?;

@@ -1088,7 +1088,7 @@ impl Default for FlatView {
 
 impl FlatView {
     /// Frame the pattern's bounds `lo..hi` in `area`, the part of `rect` the command panel leaves.
-    fn fit(&mut self, rect: Rect, area: Rect, lo: (f64, f64), hi: (f64, f64)) {
+    pub(crate) fn fit(&mut self, rect: Rect, area: Rect, lo: (f64, f64), hi: (f64, f64)) {
         let scale = (f64::from(area.width()) / (hi.0 - lo.0)).min(f64::from(area.height()) / (hi.1 - lo.1));
         self.cam.target.x = (lo.0 + hi.0) * 0.5 - f64::from(area.center().x - rect.center().x) / scale;
         self.cam.target.y = (lo.1 + hi.1) * 0.5 + f64::from(area.center().y - rect.center().y) / scale;
@@ -1100,7 +1100,7 @@ impl FlatView {
 
 /// The Create Flat Pattern dialog is open, so the viewport shows its 2D view.
 pub(crate) fn flat_active(app: &SolveApp) -> bool {
-    matches!(app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Sheet(Sm::FlatPattern { .. })))
+    matches!(app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Sheet(Sm::FlatPattern { .. }) | Kind::Drawing(_)))
 }
 
 /// Camera input for the flat pattern: the shared navigation without orbit, driving the flat view

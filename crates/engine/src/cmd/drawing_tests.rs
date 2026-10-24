@@ -324,3 +324,60 @@ fn a_dimension_to_virtual_sharps_measures_the_corners_as_if_they_werent_rounded(
         s.execute("drawing.dimension.horizontal", &json!({"drawing": "D", "view": top, "points": [[200, 150], [210, 150]], "arc": "sharp"})).is_err()
     );
 }
+
+/// A 100 × 100 square to a Ø60 circle 80 above it, as a sheet metal loft.
+fn lofted_sheet() -> Session {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Square"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-50, -50], "p1": [50, 50]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 80], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Round"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 30}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sheet.loft", json!({"sections": ["Square", "Round"]}));
+    s
+}
+
+/// A flat pattern view: the outline as cut, a chain line and a note for every bend, and a
+/// dimension across it measuring the flat pattern's width.
+#[test]
+fn a_flat_pattern_view_shows_the_outline_and_bend_lines_and_takes_dimensions() {
+    let mut s = lofted_sheet();
+    let flat = run(&mut s, "sheet.flat_pattern", json!({}));
+    let bends = flat["bends"].as_array().map(Vec::len).unwrap_or(0);
+    assert!(bends > 0);
+    let outline: Vec<(f64, f64)> =
+        flat["outline"][0].as_array().into_iter().flatten().filter_map(|p| Some((p.get(0)?.as_f64()?, p.get(1)?.as_f64()?))).collect();
+    let (x0, x1) = outline.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = outline.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    let d = run(&mut s, "drawing.create", json!({"name": "D", "size": "A2", "views": "none"}));
+    let id = d["drawing"].as_u64().unwrap();
+    let before = s.doc.drawings[0].views.len();
+    let v = run(&mut s, "drawing.view.flat", json!({"drawing": id, "at": [300, 200], "scale": "1:2"}));
+    let view = v["view"].as_u64().unwrap();
+    assert_eq!(s.doc.drawings[0].views.len(), before + 1);
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(0), "{}", r["errors"]);
+    // Its frame is the flat pattern at 1:2 about its place.
+    let (fx0, fy0, fx1, fy1) = view_frame(&r, view);
+    assert!(((fx1 - fx0) - (x1 - x0) / 2.0).abs() < 0.05 && ((fy1 - fy0) - (y1 - y0) / 2.0).abs() < 0.05, "{fx0} {fy0} {fx1} {fy1}");
+    assert!(((fx0 + fx1) / 2.0 - 300.0).abs() < 0.05 && ((fy0 + fy1) / 2.0 - 200.0).abs() < 0.05);
+    assert!(count(&r, "chain") >= bends, "a centre line for each bend");
+    assert!(texts(&r).iter().filter(|t| t.starts_with("UP ") || t.starts_with("DOWN ")).count() >= bends, "{:?}", texts(&r));
+    // Across it: from the leftmost to the rightmost outline point, its width.
+    let on_sheet = |p: (f64, f64)| json!([300.0 + (p.0 - (x0 + x1) / 2.0) / 2.0, 200.0 + (p.1 - (y0 + y1) / 2.0) / 2.0]);
+    let left = outline.iter().copied().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+    let right = outline.iter().copied().max_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+    run(&mut s, "drawing.dimension", json!({"drawing": id, "view": view, "kind": "horizontal", "points": [on_sheet(left), on_sheet(right)]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    let want = crate::cmd::view_dxf::drawing_views::number(x1 - x0);
+    assert!(texts(&r).contains(&want), "{want} in {:?}", texts(&r));
+    // Nothing is projected, cut or enlarged from it.
+    assert!(s.execute("drawing.view.projected", &json!({"drawing": id, "parent": view, "side": "right"})).is_err());
+    assert!(s.execute("drawing.view.detail", &json!({"drawing": id, "parent": view, "center": [300, 200], "radius": 10})).is_err());
+    // Without a sheet metal body there is none to show.
+    let mut p = plate();
+    let d = run(&mut p, "drawing.create", json!({"name": "P"}));
+    assert!(p.execute("drawing.view.flat", &json!({"drawing": d["drawing"]})).is_err());
+    assert!(s.execute("drawing.view.flat", &json!({"drawing": id, "body": "nope"})).is_err());
+}

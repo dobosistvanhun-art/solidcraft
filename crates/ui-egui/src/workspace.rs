@@ -269,6 +269,7 @@ pub const SECTIONS: &[Section] = &[
         ids: &[
             "drawing.view.base",
             "drawing.view.projected",
+            "drawing.view.flat",
             "drawing.view.section",
             "drawing.view.detail",
             "drawing.view.edit",
@@ -299,6 +300,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("drawing.edit", "Sheet Setup"),
     ("drawing.export_dxf", "Drawing DXF"),
     ("drawing.export_pdf", "Drawing PDF"),
+    ("drawing.view.flat", "Flat Pattern"),
     ("drawing.view.projected", "Projected"),
     ("inspect.accessibility", "Access"),
     ("inspect.center_of_mass", "Mass Center"),

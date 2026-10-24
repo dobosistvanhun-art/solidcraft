@@ -69,7 +69,7 @@ pub struct DrawUi {
     /// The title block's fields as edited (written when a field is left).
     pub title: Vec<String>,
     /// The drawn sheet: (revision, drawing) it was drawn for and the result.
-    pub drawn: Option<((u64, u64), Value)>,
+    pub drawn: Option<((u64, u64), std::sync::Arc<Value>)>,
     /// A view being dragged: its id, where the drag started (sheet mm) and its place then.
     pub drag: Option<(u64, [f64; 2], [f64; 2])>,
     pub status: Option<String>,
@@ -100,9 +100,13 @@ impl DrawUi {
 /// The editor for a toolbar command of the DRAWING tab.
 pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<crate::selection::SelInput>)> {
     let tool = match id {
-        "drawing.create" | "drawing.edit" | "drawing.view.base" | "drawing.view.projected" | "drawing.export_pdf" | "drawing.export_dxf" => {
-            Tool::Select
-        }
+        "drawing.create"
+        | "drawing.edit"
+        | "drawing.view.base"
+        | "drawing.view.projected"
+        | "drawing.view.flat"
+        | "drawing.export_pdf"
+        | "drawing.export_dxf" => Tool::Select,
         "drawing.view.section" => Tool::Section,
         "drawing.view.detail" => Tool::Detail,
         "drawing.note" => Tool::Note,
@@ -122,7 +126,12 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<crate::selection::S
     };
     ui.dim_kind = kind;
     ui.arc = arc;
-    ui.status = Some(if id == "drawing.create" { "new".into() } else { String::new() });
+    ui.status = Some(match id {
+        "drawing.create" => "new".into(),
+        // The ribbon's flat pattern view: added once the drawing is known.
+        "drawing.view.flat" => "flat".into(),
+        _ => String::new(),
+    });
     Some((Kind::Drawing(Box::new(ui)), vec![]))
 }
 
@@ -153,7 +162,8 @@ fn run(app: &mut SolveApp, k: &mut DrawUi, cmd: &str, p: Value) -> Option<Value>
 pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
     // The drawing: a new one when the editor was opened for one (or there is none yet).
     let wants_new = k.status.as_deref() == Some("new");
-    if wants_new {
+    let wants_flat = k.status.as_deref() == Some("flat");
+    if wants_new || wants_flat {
         k.status = None;
     }
     if k.drawing.is_none_or(|id| !app.session.doc.drawings.iter().any(|d| d.id == id)) {
@@ -189,6 +199,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
         return false;
     };
     let id = d.id;
+    if wants_flat && let Some(v) = run(app, k, "drawing.view.flat", json!({"drawing": id})) {
+        k.selected = v["view"].as_u64();
+    }
 
     // ---- sheet ----
     ui_kit::section(ui, "drw_sheet", "Sheet", true, |ui| {
@@ -258,6 +271,16 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
                 }
             });
         });
+        // A sheet metal part's flat pattern, as cut, with its bend lines.
+        if !app.session.model.state().sheets.is_empty() {
+            ui_kit::row(ui, "Flat Pattern", |ui| {
+                if ui_kit::button(ui, crate::i18n::tr_label("Add"), ui_kit::Button::Small).clicked()
+                    && let Some(v) = run(app, k, "drawing.view.flat", json!({"drawing": id}))
+                {
+                    k.selected = v["view"].as_u64();
+                }
+            });
+        }
         let selected = k.selected.and_then(|v| d.view(v)).cloned();
         if let Some(v) = &selected {
             ui_kit::row(ui, "Projected from it", |ui| {
@@ -417,13 +440,14 @@ fn hint(k: &DrawUi) -> &'static str {
 }
 
 /// The drawn sheet (drawn again when the design or the drawing changed).
-fn drawn(app: &mut SolveApp, k: &mut DrawUi) -> Option<Value> {
+fn drawn(app: &mut SolveApp, k: &mut DrawUi) -> Option<std::sync::Arc<Value>> {
     let id = k.drawing?;
     let key = (app.session.revision, id);
     if k.drawn.as_ref().map(|(kk, _)| *kk) != Some(key) {
         let v = app.session.execute("drawing.render", &json!({"drawing": id})).ok()?;
-        k.drawn = Some(((app.session.revision, id), v));
+        k.drawn = Some(((app.session.revision, id), std::sync::Arc::new(v)));
     }
+    // Shared, not copied: the sheet is painted every frame.
     k.drawn.as_ref().map(|(_, v)| v.clone())
 }
 
@@ -716,6 +740,52 @@ mod tests {
             Some(Kind::Drawing(k)) => (**k).clone(),
             other => panic!("not the drawing editor: {other:?}"),
         }
+    }
+
+    /// Left alone, the open editor changes nothing (no edit each frame, which would draw the
+    /// sheet again and again).
+    #[test]
+    fn the_open_editor_leaves_the_design_alone() {
+        let mut h = editor();
+        let d = h.app.session.doc.drawings.first().cloned().unwrap();
+        // Across the front view's frame: the plate's lower corners.
+        let r = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
+        let v = r["views"].as_array().and_then(|vs| vs.iter().find(|v| v["id"] == d.views[0].id).cloned()).unwrap();
+        let (lo, hi) = (read2(&v["min"]).unwrap(), read2(&v["max"]).unwrap());
+        let dim = h
+            .app
+            .run("drawing.dimension", json!({"drawing": d.id, "view": d.views[0].id, "kind": "horizontal", "points": [lo, [hi[0], lo[1]]]}))
+            .ok()
+            .and_then(|v| v["dimension"].as_u64());
+        assert!(dim.is_some());
+        if let (Some(dim), Some(Kind::Drawing(k))) = (dim, h.app.dialog.as_mut().map(|d| &mut d.kind)) {
+            k.dim = Some((dim, String::new(), String::new()));
+        }
+        h.frames(3);
+        let revision = h.app.session.revision;
+        h.frames(10);
+        assert_eq!(h.app.session.revision, revision, "{:?}", ui(&h).status);
+    }
+
+    /// The ribbon's Flat Pattern (DRAWING tab): the editor opens with the sheet metal part's flat
+    /// pattern added to the drawing.
+    #[test]
+    fn the_ribbon_adds_a_flat_pattern_view() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("sketch.create", json!({"plane": "XY", "name": "Square"})).unwrap();
+        h.app.run("sketch.rectangle.two_point", json!({"p0": [-50, -50], "p1": [50, 50]})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        h.app.run("sketch.create", json!({"plane": {"origin": [0, 0, 80], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Round"})).unwrap();
+        h.app.run("sketch.circle.center", json!({"center": [0, 0], "radius": 30})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        h.app.run("sheet.loft", json!({"sections": ["Square", "Round"]})).unwrap();
+        h.step(&json!({"start": "drawing.view.flat"})).unwrap();
+        h.frames(4);
+        let d = h.app.session.doc.drawings.first().cloned().unwrap();
+        let flat = d.views.iter().find(|v| matches!(v.kind, solidcraft_engine::doc::drawing::ViewKind::Flat { .. })).map(|v| v.id);
+        assert!(flat.is_some(), "{:?} {:?}", d.views, ui(&h).status);
+        assert_eq!(ui(&h).selected, flat);
+        assert!(crate::scenario::handle_at(&format!("drawing:view:{}", flat.unwrap_or(0))).is_some());
     }
 
     #[test]

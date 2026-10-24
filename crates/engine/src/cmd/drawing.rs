@@ -31,6 +31,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("drawing.view.projected", "Projected View", view_projected).at(TAB, "VIEWS").icon("project").params(
         "drawing; parent (view id); side: right|left|above|below|iso; at?: [x, y] (default: beside the parent); scale?; hidden? → view id",
     ),
+    CommandSpec::new("drawing.view.flat", "Flat Pattern View", view_flat).at(TAB, "VIEWS").icon("flat").params(
+        "drawing; body? (a sheet metal body; default the last one the drawing shows); at?: [x, y] (default: below the other views); scale?; label? → view id. \
+         The flat pattern as cut: outline and cut-outs, bend centre lines (chain) with their notes (UP 90° R1); dimensions snap to its corners, arc ends and hole centres",
+    ),
     CommandSpec::new("drawing.view.section", "Section View", view_section).at(TAB, "VIEWS").icon("section").params(
         "drawing; parent (view id); line: [[x, y], [x, y]] on the sheet (the cutting plane through it, square to the sheet); flip? (look the other way); \
          at?: [x, y] (default: beside the parent); label? (default: the next free letter) → view id",
@@ -377,7 +381,32 @@ fn add_view(
 fn parent_of(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
     let i = find(s, p, cmd)?;
     let parent = id_of(p, "parent", cmd)?;
-    s.doc.drawings.get(i).and_then(|d| d.view(parent)).map(|v| v.id).ok_or_else(|| bad(cmd, "no such parent view"))
+    let v = s.doc.drawings.get(i).and_then(|d| d.view(parent)).ok_or_else(|| bad(cmd, "no such parent view"))?;
+    if matches!(v.kind, ViewKind::Flat { .. }) {
+        return Err(bad(cmd, "a flat pattern view has no views projected, cut or enlarged from it"));
+    }
+    Ok(v.id)
+}
+
+fn view_flat(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "drawing.view.flat";
+    let body = str_(p, "body").map(str::trim).unwrap_or("").to_string();
+    let i = find(s, p, cmd)?;
+    let d = s.doc.drawings.get(i).cloned().ok_or_else(|| bad(cmd, "no such drawing"))?;
+    // There must be one to draw (and it must unfold).
+    {
+        let st = s.model.state();
+        let sh = dv::flat_sheet(&st, &d, &body).map_err(|e| bad(cmd, e))?;
+        sh.flat_regions().map_err(|e| bad(cmd, e.to_string()))?;
+    }
+    // Default place: below the views there are, else the middle of the free area.
+    let at = |s: &Session, d: &Drawing| -> [f64; 2] {
+        let (x0, y0, x1, y1) = area(d);
+        let drawn = dv::draw(s, d);
+        let low = drawn.views.iter().map(|v| v.min.y).fold(f64::INFINITY, f64::min);
+        if low.is_finite() && low - 40.0 > y0 { [(x0 + x1) / 2.0, (y0 + low) / 2.0] } else { [(x0 + x1) / 2.0, (y0 + y1) / 2.0] }
+    };
+    add_view(s, p, cmd, ViewKind::Flat { body }, at, false)
 }
 
 /// Where a new view goes next to `parent` on `side` (a gap of 25 mm past the parent's frame).

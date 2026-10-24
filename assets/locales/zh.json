@@ -742,6 +742,7 @@
   "cmd.drawing_view_delete": "删除视图",
   "cmd.drawing_view_detail": "局部放大视图",
   "cmd.drawing_view_edit": "编辑视图",
+  "cmd.drawing_view_flat": "展开图视图",
   "cmd.drawing_view_projected": "投影视图",
   "cmd.drawing_view_section": "剖视图",
   "cmd.edit_checkpoint": "检查点",

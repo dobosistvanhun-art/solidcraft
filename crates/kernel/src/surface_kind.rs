@@ -95,6 +95,30 @@ pub fn edge_circle(b: &Body, edge: usize) -> Option<EdgeCircle> {
     .flatten()
 }
 
+/// [`edge_circle`] of every edge (in the body's edge order) at once: the edges are listed once,
+/// not once per edge.
+pub fn edge_circles(b: &Body) -> Vec<Option<EdgeCircle>> {
+    use mt::{BoundedCurve, ParametricCurve};
+    if b.mesh.is_some() {
+        return Vec::new();
+    }
+    let tol = (b.size() * 1e-7).max(1e-9) * 100.0;
+    Body::unique_edges(&b.solid)
+        .into_iter()
+        .map(|e| {
+            crate::guard("edge circle", || {
+                let c = e.oriented_curve();
+                let (t0, t1) = c.range_tuple();
+                let at = |f: f64| from_p3(c.subs(t0 + (t1 - t0) * f));
+                let samples: Vec<Vec3> = (0..=24).map(|i| at(f64::from(i) / 24.0)).collect();
+                Ok(circle_through(&samples, tol))
+            })
+            .ok()
+            .flatten()
+        })
+        .collect()
+}
+
 /// The circle through evenly spaced samples of a curve (first to last), if they all lie on one.
 fn circle_through(s: &[Vec3], tol: f64) -> Option<EdgeCircle> {
     let (start, end) = (*s.first()?, *s.last()?);

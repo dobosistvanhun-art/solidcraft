@@ -742,6 +742,7 @@
   "cmd.drawing_view_delete": "Delete View",
   "cmd.drawing_view_detail": "Detail View",
   "cmd.drawing_view_edit": "Edit View",
+  "cmd.drawing_view_flat": "Flat Pattern View",
   "cmd.drawing_view_projected": "Projected View",
   "cmd.drawing_view_section": "Section View",
   "cmd.edit_checkpoint": "Checkpoint",

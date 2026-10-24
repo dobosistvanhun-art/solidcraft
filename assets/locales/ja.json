@@ -742,6 +742,7 @@
   "cmd.drawing_view_delete": "ビューを削除",
   "cmd.drawing_view_detail": "詳細ビュー",
   "cmd.drawing_view_edit": "ビューを編集",
+  "cmd.drawing_view_flat": "フラットパターンビュー",
   "cmd.drawing_view_projected": "投影ビュー",
   "cmd.drawing_view_section": "断面ビュー",
   "cmd.edit_checkpoint": "チェックポイント",

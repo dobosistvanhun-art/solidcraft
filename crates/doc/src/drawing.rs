@@ -122,6 +122,13 @@ pub enum ViewKind {
     },
     /// An enlarged part of another view: the circle about `center` (parent coordinates) of `radius`.
     Detail { parent: u64, center: [f64; 2], radius: f64 },
+    /// A sheet metal body's flat pattern, as cut: its outline and cut-outs, with its bend lines
+    /// (chain lines, each with its direction, angle and radius). `body` empty: the last sheet
+    /// metal body.
+    Flat {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        body: String,
+    },
 }
 
 /// A view on the sheet.
@@ -310,7 +317,7 @@ impl Drawing {
         while let Some(&cur) = out.get(i) {
             for v in &self.views {
                 let p = match &v.kind {
-                    ViewKind::Base { .. } => None,
+                    ViewKind::Base { .. } | ViewKind::Flat { .. } => None,
                     ViewKind::Projected { parent, .. } | ViewKind::Section { parent, .. } | ViewKind::Detail { parent, .. } => Some(*parent),
                 };
                 if p == Some(cur) && !out.contains(&v.id) && out.len() < MAX_ITEMS {

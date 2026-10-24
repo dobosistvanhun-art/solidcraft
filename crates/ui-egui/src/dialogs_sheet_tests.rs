@@ -941,3 +941,36 @@ fn the_sidebar_shows_the_properties_of_the_selected_body() {
     assert_eq!(m["bodies"][0]["material"], "Aluminium AlMg3 (5754)");
     assert!((m["bodies"][0]["mass_g"].as_f64().unwrap_or(0.0) - 26.7).abs() < 1e-6, "{m}");
 }
+
+/// Lofted Flange takes one profile from each of two sketches (a second sketch's profile does not
+/// replace the first), and an optional rip point: a sketch point on a section's edge.
+#[test]
+fn lofted_flange_takes_profiles_of_two_sketches_and_a_rip_point() {
+    let mut s = Session::default();
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Square"})),
+        ("sketch.rectangle.two_point", json!({"p0": [-50, -50], "p1": [50, 50]})),
+        ("sketch.point", json!({"point": [20, 50], "id": "rip"})),
+        ("sketch.finish", json!({})),
+        ("sketch.create", json!({"plane": {"origin": [0, 0, 80], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Round"})),
+        ("sketch.circle.center", json!({"center": [0, 0], "radius": 30})),
+        ("sketch.finish", json!({})),
+    ] {
+        s.execute(id, &p).unwrap();
+    }
+    let (square, round) = (s.doc.features[0].id, s.doc.features[1].id);
+    let mut app = SolveApp::new(s, Services::default());
+    app.start("sheet.loft");
+    let mut d = app.dialog.clone().unwrap();
+    d.pick(&app.session, Sel::Profile { sketch: square, index: 0 });
+    d.pick(&app.session, Sel::Profile { sketch: round, index: 0 });
+    assert_eq!(d.inputs[0].items.len(), 2, "{:?}", d.inputs[0].items);
+    d.inputs[1].items = vec![Sel::SketchPoint { id: format!("{square}:rip") }];
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].0, "sheet.loft");
+    assert_eq!(c[0].1["sections"].as_array().map(Vec::len), Some(2));
+    assert_eq!(c[0].1["rip"], json!([20.0, 50.0, 0.0]));
+    run_all(&mut app, c);
+    let st = app.session.model.state();
+    assert!(st.sheets.iter().any(|sh| sh.lofted.is_some()));
+}

@@ -15,7 +15,7 @@ use solidcraft_engine::geom::Vec3;
 
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind, edge_sel, face_sel, form_row, profile_indices};
-use crate::selection::{AXES, BODIES, CURVES, EDGES, PLANAR_FACES, PROFILES, SelInput, SelectionExt as _, items, point_value as pt};
+use crate::selection::{AXES, BODIES, CURVES, EDGES, PLANAR_FACES, POINTS, PROFILES, SelInput, SelectionExt as _, items, point_value as pt};
 use crate::theme::Tokens;
 
 const FOLD_POSITIONS: [&str; 4] = ["centerline", "start", "end", "mould"];
@@ -172,7 +172,10 @@ fn new_flange(ty: usize) -> Sm {
 pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     let (sm, inputs) = match id {
         "sheet.flange" => (new_flange(0), vec![SelInput::new("Profile / Edges", PROFILES | EDGES | CURVES, true)]),
-        "sheet.loft" => (Sm::Loft { rule: 0, side: 0, step: "15 deg".into() }, vec![SelInput::new("Profiles", PROFILES, true)]),
+        "sheet.loft" => (
+            Sm::Loft { rule: 0, side: 0, step: "15 deg".into() },
+            vec![SelInput::new("Profiles", PROFILES, true), SelInput::new("Rip point (optional)", POINTS, false)],
+        ),
         "sheet.unfold" => (Sm::Unfold { refold: false }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         "sheet.refold" => (Sm::Unfold { refold: true }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         "sheet.convert" => {
@@ -358,7 +361,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
             enter |= expr_row(ui, "Bend step", step);
             crate::ui_kit::text(
                 ui,
-                crate::i18n::tr_label("Pick a profile in each of two sketches. The rip runs along the middle of the longest straight side."),
+                crate::i18n::tr_label(
+                    "Pick a profile in each of two sketches. The rip runs along the middle of the longest straight side, or through the rip point: a sketch point on a section's edge.",
+                ),
                 crate::ui_kit::Text::Hint("sheet_loft"),
             );
         }
@@ -639,6 +644,17 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             }
             if let Some(r) = rule_value(app, *rule) {
                 p["rule"] = json!(r);
+            }
+            // The rip through a picked sketch point (on a section's edge, or nearest it).
+            if let Some(Sel::SketchPoint { id }) = items(inputs, 1).first() {
+                let at = id.split_once(':').and_then(|(sk, pid)| {
+                    let st = s.world_state();
+                    let ss = st.sketch(sk.parse::<u64>().ok()?)?;
+                    let q = ss.sketch.points.iter().find(|q| q.id == pid)?;
+                    Some(ss.plane.to_world(q.pos))
+                });
+                let at = at.ok_or("the rip point is no longer in its sketch")?;
+                p["rip"] = pt(at);
             }
             ("sheet.loft", p)
         }

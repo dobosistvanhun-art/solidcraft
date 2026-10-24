@@ -117,11 +117,30 @@ impl Locale {
     /// Translate source labels from engine/UI tables, preserving unknown labels.
     /// Also accepts stable IDs while table helpers migrate away from source text.
     pub fn label(self, label: &str) -> &str {
-        static LABEL_IDS: OnceLock<BTreeMap<&'static str, &'static str>> = OnceLock::new();
+        // Stable IDs are authoritative. An untranslated legacy ID identical to its
+        // English caption can still use another translated ID for that source label.
+        if ENGLISH.messages().get(label).is_some_and(|text| text != label || self.0.messages().contains_key(label)) {
+            return self.text(label);
+        }
+        static LABEL_IDS: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
         let ids = LABEL_IDS.get_or_init(|| {
-            ENGLISH.messages().iter().filter(|(_, text)| !text.contains('{')).map(|(id, text)| (text.as_str(), id.as_str())).collect()
+            let mut ids: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            for (id, text) in ENGLISH.messages().iter().filter(|(_, text)| !text.contains('{')) {
+                ids.entry(text.as_str()).or_default().push(id.as_str());
+            }
+            ids
         });
-        ids.get(label).map_or_else(|| self.text(label), |id| self.text(id))
+        if let Some(candidates) = ids.get(label) {
+            // Preserve the old last-ID preference among available translations. A new
+            // English-only alias must not hide a translation that already exists here.
+            if let Some(text) = candidates.iter().rev().find_map(|id| self.0.messages().get(*id)) {
+                return text;
+            }
+            if let Some(id) = candidates.last() {
+                return self.text(id);
+            }
+        }
+        self.text(label)
     }
 
     pub fn format(self, id: &str, args: &[(&str, &str)]) -> String {
@@ -247,6 +266,22 @@ pub fn tr_name(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+
+    fn alias_resolution_regression() {
+        static LEGACY: Catalog = Catalog::new("test-legacy", "Test", r#"{"Pitch":"legacy pitch"}"#);
+        static ALIAS: Catalog = Catalog::new("test-alias", "Test", r#"{"coupling.pitch":"mechanical pitch"}"#);
+        assert_eq!(ENGLISH.messages().get("Pitch").map(String::as_str), Some("Pitch"));
+        assert_eq!(ENGLISH.messages().get("coupling.pitch").map(String::as_str), Some("Pitch"));
+        let legacy = Locale(&LEGACY);
+        assert_eq!(legacy.label("Pitch"), "legacy pitch");
+        assert_eq!(legacy.label("coupling.pitch"), "Pitch");
+        let alias = Locale(&ALIAS);
+        assert_eq!(alias.label("Pitch"), "mechanical pitch");
+        assert_eq!(alias.label("coupling.pitch"), "mechanical pitch");
+        assert_eq!(alias.label("original unknown caption"), "original unknown caption");
+    }
 
     /// English first, then by id, so adding a locale edits only its own line.
     #[test]
@@ -448,6 +483,27 @@ mod tests {
     /// translate their label themselves (`row`, imported as `form_row`, and the rest of
     /// `KIT_CALLS`) are read at the same argument positions the kit translates.
     #[test]
+    fn english_only_render_aliases_do_not_hide_existing_label_translations() {
+        for language in ["de", "fr"] {
+            let locale = Locale::for_language(language);
+            for (label, stable_id) in [
+                ("Library", "Library"),
+                ("Favorites", "Favorites"),
+                ("Center X", "Center X"),
+                ("Move up", "Move up"),
+                ("Appearance", "cmd.appearance_assign"),
+                ("Checkpoint", "cmd.edit_checkpoint"),
+                ("Pitch", "coupling.pitch"),
+            ] {
+                assert_eq!(locale.label(label), locale.text(stable_id), "{language}: {label}");
+                assert_ne!(locale.label(label), label, "{language}: {label} must retain its existing translation");
+            }
+            assert_eq!(locale.label("render.camera_pitch"), locale.text("render.camera_pitch"));
+            assert_eq!(locale.label("a custom untranslated caption"), "a custom untranslated caption");
+        }
+    }
+
+    #[test]
     fn every_ui_label_literal_reaches_an_english_catalog_entry() {
         let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
         let ids: BTreeSet<&str> = english.keys().map(String::as_str).collect();
@@ -498,6 +554,17 @@ mod tests {
             let id = format!("nav.{}.help", preset.id);
             assert_eq!(english.text(&id), preset.help, "{id}");
         }
+    }
+
+    #[test]
+    fn missing_sheet_metal_guidance_uses_the_message_catalog() {
+        let _scope = scope("ja");
+        let message = "there is no sheet metal body: start one with Flange > Base, or turn a plate into sheet metal with Convert to Sheet Metal (pick its large flat face)";
+        let error = format!("invalid parameters for `sheet.flange`: {message}");
+        let translated = tr("sheet.no_body");
+        assert_ne!(translated, "sheet.no_body");
+        assert_ne!(translated, message);
+        assert_eq!(crate::friendly_error("sheet.flange", &error), format!("{}: {translated}", tr_label("Flange")));
     }
 
     #[test]

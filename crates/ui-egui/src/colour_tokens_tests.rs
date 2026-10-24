@@ -71,6 +71,7 @@ const ALLOWED_LITERALS: &[(&str, usize, &str)] = &[
     ("dialogs_appearance.rs", 1, "a design appearance: the colour is the fact"),
     ("dialogs_save_mesh.rs", 1, "an installed slicer's own icon, drawn untinted"),
     ("dialogs_library.rs", 1, "a library appearance's swatch: the colour is the fact"),
+    ("render_workspace_materials.rs", 1, "an authored material swatch: the displayed colour is the material data"),
     ("dialogs_assembly.rs", 1, "the interference fill, shaded from its token"),
     ("dialogs_drawing.rs", 3, "the drawing sheet as it prints: white paper, black ink, the paper's shadow"),
     ("dialogs_motion.rs", 1, "a white outline"),

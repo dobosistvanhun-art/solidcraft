@@ -6,7 +6,7 @@ use std::f64::consts::TAU;
 use serde_json::{Value, json};
 use solidcraft_doc::ProfileSel;
 use solidcraft_geom::Vec2;
-use solidcraft_sketch::{ConstraintKind, Curve, CurveKind, Shape, Sketch, intersections};
+use solidcraft_sketch::{ConstraintKind, Curve, CurveKind, Shape, Sketch, intersections, intersections_within};
 
 use super::sketch::{add_c, edit, ids_of, solve_current};
 use super::{CommandSpec, in_sketch};
@@ -95,7 +95,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SKETCH", "PATTERN")
         .icon("sketch_circ_pattern")
         .enabled(in_sketch)
-        .params(concat!("entities: [ids], center: [x,y] or point ref, count: 2…500, angle?: total deg (default 360); alignment?: left|center|right (default right); reversed?: bool (default false). Quantity includes the original. Center balances copies around it; reversed flips the direction and extra side for even totals. Partial arcs span angle with angle/(count-1) spacing; full turns use angle/count. Adds associative pattern constraints; a coordinate center creates a constrainable point. Returns pattern and center ids. pattern?: existing pattern id to edit (omitted values retained; surviving instance ids retained)", created_doc!())),
+        .params(concat!("entities: [ids], center: [x,y] or point ref, count: 2…500 (number or unitless expression, retained through edits), angle?: total deg (default 360); alignment?: left|center|right (default right); reversed?: bool (default false). Quantity includes the original. Center balances copies around it; reversed flips the direction and extra side for even totals. Partial arcs span angle with angle/(count-1) spacing; full turns use angle/count. Adds associative pattern constraints; a coordinate center creates a constrainable point. Returns pattern and center ids. pattern?: existing pattern id to edit (omitted values retained; surviving instance ids retained)", created_doc!())),
     CommandSpec::new("sketch.pattern.rectangular", "Rectangular Pattern", pattern_rect)
         .at("SKETCH", "PATTERN")
         .icon("sketch_rect_pattern")
@@ -144,7 +144,10 @@ fn cut_points(sk: &Sketch, ci: usize) -> Vec<(f64, Vec2, usize)> {
             continue;
         }
         let Some(other) = sk.shape(oi) else { continue };
-        let mut pts = intersections(&sh, &other);
+        // A line or circle the solver made tangent to a circle touches it within rounding noise,
+        // and the exact roots miss it whenever the noise falls outside: the touch counts as a
+        // cut, as profile detection counts it (#588), or trim deletes the whole curve (#5074).
+        let mut pts = intersections_within(&sh, &other, TOL * 10.0);
         // Overlapping or touching ends that the analytic intersection misses (parallel lines).
         if let Shape::Line { a, b } = other {
             pts.extend([a, b]);
@@ -866,11 +869,11 @@ struct CornerKept {
 }
 
 /// Keep corner point `c` of curves `ca`, `cb` (whose corner ends were just moved to `na`, `nb`)
-/// when anything measures to it: a constraint or dimension on the point, the length of either
-/// line, or it is the origin or still ends another curve. It stays as a virtual sharp corner,
-/// held on both curves' extensions (their intersection), and the line lengths become distances
-/// from the far end to it, so the part keeps its size. Otherwise None: the
-/// caller removes the point.
+/// when anything measures to it or places it: a constraint or dimension on the point, the length
+/// of either line, a fixed or expression-driven position, or it is the origin or still ends another
+/// curve. It stays as a virtual sharp corner, held on both curves' extensions (their
+/// intersection), and the line lengths become distances from the far end to it, so the part
+/// keeps its size. Otherwise None: the caller removes the point.
 fn keep_corner(sk: &mut Sketch, c: usize, [(ca, na), (cb, nb)]: [(usize, usize); 2]) -> Result<Option<CornerKept>> {
     let used = sk.curves.iter().any(|x| uses(x, c));
     let mut moved: Vec<String> = sk.constraints.iter().filter(|k| k.kind.refers_to_point(c)).map(|k| k.id.clone()).collect();
@@ -888,7 +891,8 @@ fn keep_corner(sk: &mut Sketch, c: usize, [(ca, na), (cb, nb)]: [(usize, usize);
         k.kind = if *a == new_end { ConstraintKind::Distance { p: c, q: *b, value } } else { ConstraintKind::Distance { p: *a, q: c, value } };
         moved.push(k.id.clone());
     }
-    if moved.is_empty() && !used && c != 0 {
+    let positioned = sk.points.get(c).is_some_and(|pt| pt.fixed || pt.exprs.is_some());
+    if moved.is_empty() && !used && c != 0 && !positioned {
         return Ok(None);
     }
     for cu in [ca, cb] {

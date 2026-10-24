@@ -119,7 +119,7 @@ fn properties(s: &Session, doc: &Document, selected: &[u64], descendants: bool, 
             let transform: Mat = doc.model_body_offset(body).map(|offset| solidcraft_doc::mat_mul(&transform, offset)).unwrap_or(transform);
             let placed = solidcraft_kernel::transform_matrix(&body.body, transform)?;
             let measured = solidcraft_kernel::measure(&placed)?;
-            let density = doc.body_density(&body.name, &state.sheets);
+            let density = doc.density_in(&body.name, &state.sheets);
             let body_mass = measured.volume * density / 1000.0;
             volume += measured.volume;
             area += measured.area;
@@ -130,7 +130,7 @@ fn properties(s: &Session, doc: &Document, selected: &[u64], descendants: bool, 
             edges += measured.merged.edges;
             vertices += measured.merged.vertices;
             bodies.push(json!({"name": body.name, "component": component, "path": path,
-                "material": doc.body_material(&body.name, &state.sheets).unwrap_or_else(|| "Default".into()),
+                "material": doc.body_material_in(&body.name, &state.sheets),
                 "density_g_cm3": density, "mass_g": body_mass, "volume_mm3": measured.volume,
                 "area_mm2": measured.area, "center_of_mass": measured.centroid,
                 "bbox": {"min": measured.bbox.min, "max": measured.bbox.max}}));

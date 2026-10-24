@@ -36,6 +36,8 @@ pub mod dialogs_appearance;
 pub mod dialogs_assembly;
 pub mod dialogs_coupling;
 pub mod dialogs_drawing;
+pub mod dialogs_frame;
+mod dialogs_hole;
 pub mod dialogs_library;
 pub mod dialogs_motion;
 pub mod dialogs_move;
@@ -64,8 +66,14 @@ pub mod gpu;
 pub mod help;
 #[cfg(test)]
 mod hole_direction_ui_tests;
+pub(crate) mod hole_place;
+#[cfg(test)]
+mod hole_place_ui_tests;
 #[cfg(test)]
 mod hole_placement_ui_tests;
+pub(crate) mod hole_refs;
+#[cfg(test)]
+mod hole_refs_ui_tests;
 pub mod home;
 pub mod i18n;
 #[cfg(test)]
@@ -89,6 +97,7 @@ mod look_at_tests;
 #[cfg(test)]
 mod manage_dialogs_tests;
 mod material_card_review;
+mod material_editor;
 
 #[cfg(test)]
 mod measurement_ui_tests;
@@ -96,6 +105,7 @@ mod measurement_ui_tests;
 mod menu_tests;
 pub(crate) mod mesh_lod;
 pub mod messages;
+pub mod occurrence_drag;
 #[cfg(test)]
 mod pattern_arrow_tests;
 #[cfg(test)]
@@ -139,6 +149,8 @@ mod status_tests {
 mod apply_off_thread_tests;
 mod expression_complete;
 #[cfg(test)]
+mod extrude_auto_to_object_tests;
+#[cfg(test)]
 mod extrude_edit_tests;
 mod extrude_preview;
 mod file_load;
@@ -162,6 +174,7 @@ mod file_load_ui_tests;
 mod fillet_spline_handle_tests;
 pub mod mouse_gesture;
 pub(crate) mod navigation;
+pub use navigation::WebWheelGestures;
 pub(crate) mod open_meshing;
 pub mod params_dialog;
 pub(crate) mod pick_index;
@@ -226,9 +239,12 @@ pub mod smart_extrude;
 mod smart_extrude_ui_tests;
 pub mod space_mouse;
 pub mod space_mouse_calibration;
+pub mod space_mouse_model;
+pub mod space_mouse_offer;
 pub mod stand_up;
 #[cfg(test)]
 mod sweep_dialog_tests;
+pub(crate) mod test_boat;
 pub mod theme;
 pub mod theme_files;
 #[cfg(test)]
@@ -265,6 +281,10 @@ pub struct UiState {
     pub layout: shell::LayoutMode,
     /// Ribbon tab; SHEET METAL and the contextual SKETCH join the seven design tabs.
     pub tab: String,
+    /// The toolbar tab a sketch was started from; finishing the sketch goes back to it (#3250).
+    /// Not saved: it only lives while a sketch is open.
+    #[serde(skip)]
+    pub sketch_return_tab: Option<String>,
     /// Last contextual body/sketch, only used to select on entry.
     #[serde(skip)]
     pub ribbon_context: Option<String>,
@@ -303,6 +323,7 @@ impl Default for UiState {
             layout: Default::default(),
             tab: "MODEL".into(),
             ribbon_context: None,
+            sketch_return_tab: None,
             show_browser: true,
             show_timeline: true,
             show_grid: true,
@@ -340,6 +361,8 @@ pub struct Services {
     pub show_in_folder: Option<Box<dyn Fn(&str)>>,
     /// Where the host reads the anti-aliasing preference at start (a small JSON file).
     pub graphics_path: Option<String>,
+    /// Linux: the window system this run uses, `wayland` or `x11` (Preferences shows it, #3083).
+    pub window_system: Option<&'static str>,
     /// HTTPS GET for the update check (`update`); None: never check (browser, tests).
     pub http_get: Option<update::HttpGet>,
     /// HTTPS download to a file, with progress, for one-click updates (`update::install`).
@@ -455,6 +478,8 @@ pub struct SolveApp {
     pub stand_up: Option<Vec<String>>,
     /// The placement of the component that file came in as: the offer turns it.
     pub stand_up_occurrence: Option<u64>,
+    /// The file's header names an exporter that saves Y up (SolidWorks): the offer says so.
+    pub stand_up_reason: bool,
     /// The anti-aliasing sample counts the graphics device supports (empty without a GPU).
     pub msaa_supported: Vec<u32>,
     /// Settings put back at start because they kept SolidCraft from starting, one line each,
@@ -471,6 +496,8 @@ pub struct SolveApp {
     pub native_resize_border: bool,
     /// macOS: the traffic lights sit over the application bar's left end.
     pub integrated_titlebar: bool,
+    /// The desktop host installed a system File menu; omit the in-window duplicate.
+    pub native_file_menu: bool,
     /// Build bodies' display meshes on the CPU even where the GPU could (safe mode). Read by
     /// [`SolveApp::set_wgpu`].
     pub cpu_meshing: bool,
@@ -586,6 +613,7 @@ impl SolveApp {
             recoverable: Vec::new(),
             stand_up: None,
             stand_up_occurrence: None,
+            stand_up_reason: false,
             msaa_supported: Vec::new(),
             settings_reset: Vec::new(),
             big_operation: false,
@@ -593,6 +621,7 @@ impl SolveApp {
             custom_titlebar: false,
             native_resize_border: false,
             integrated_titlebar: false,
+            native_file_menu: false,
             cpu_meshing: false,
             frame_ms: 0.0,
             frame_rate: frame_rate::FrameRate::default(),
@@ -672,6 +701,12 @@ impl SolveApp {
                 None
             }
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let adapter = rs.adapter.clone();
+            let key = render_workspace::adapter_key(&adapter.get_info());
+            self.render_workspace.defer_path_host(key, move || solidcraft_gpu::path::host_on_adapter(&adapter).map_err(|e| e.to_string()));
+        }
         render_workspace::sync_backend(self);
         self.msaa_supported = rs.msaa_supported.clone();
         let info = rs.adapter.get_info();
@@ -698,6 +733,7 @@ impl SolveApp {
             "ground_shadow": self.ui.ground_shadow,
             "agent_cursor": self.ui.agent_cursor,
             "preferences": self.preferences,
+            "gpu_path_setup_seconds": self.render_workspace.setup_seconds,
         })
         .to_string()
     }
@@ -709,6 +745,9 @@ impl SolveApp {
         self.home.opened_at = v.get("recent_opened_at").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default();
         if let Some(d) = flag("dark") {
             self.ui.dark = d;
+        }
+        if let Some(t) = v.get("gpu_path_setup_seconds") {
+            self.render_workspace.setup_seconds = render_workspace::load_setup_seconds(t);
         }
         if let Some(g) = flag("grid") {
             self.ui.show_grid = g;
@@ -827,6 +866,14 @@ impl SolveApp {
             }
             // Curves drawn in construction (or centerline) mode take that line type.
             sketch_palette::apply_mode(self, id, v);
+            // Locks follow a body's rename, from the rename box or anywhere else.
+            if id == "body.rename"
+                && let (Some(old), Some(new)) = (v.get("body").and_then(Value::as_str), v.get("name").and_then(Value::as_str))
+            {
+                for b in self.ui.locked_bodies.iter_mut().filter(|b| *b == old) {
+                    *b = new.to_string();
+                }
+            }
         }
         self.finish_command(id, &r);
         r
@@ -920,6 +967,9 @@ impl SolveApp {
         {
             let label = self.tr_label(info.label).to_string();
             self.set_status(format!("{label}: {why}"), true);
+            return;
+        }
+        if render_workspace::start_interactive(self, id) {
             return;
         }
         workspace::select_command_tab(self, id);
@@ -1023,6 +1073,10 @@ impl SolveApp {
         }
         if id == "sketch.finish" {
             self.finish_sketch();
+            return;
+        }
+        if id == "sketch.cancel" {
+            self.cancel_sketch();
             return;
         }
         // Press Pull: edges get a fillet, faces and profiles an extrude.
@@ -1172,13 +1226,25 @@ impl SolveApp {
     /// Finish the active sketch: stop editing and restore the history marker Edit Sketch moved.
     /// The camera stays where it is, however the sketch is left.
     pub fn finish_sketch(&mut self) {
+        self.leave_sketch("sketch.finish");
+    }
+
+    /// Cancel Sketch (#3838): leave the sketch without its changes. When the command refuses (the
+    /// undo history no longer leads back to where the sketch was opened), the sketch stays open.
+    pub fn cancel_sketch(&mut self) {
+        self.leave_sketch("sketch.cancel");
+    }
+
+    fn leave_sketch(&mut self, command: &str) {
         sketch_text_move::cancel_drag(self);
         if sketch_text::editing(self) || self.dialog.as_ref().is_some_and(|d| matches!(d.kind, dialogs::Kind::TextMove(_))) {
             dialogs::cancel(self);
         }
         dim_view::cancel();
         self.tool = None;
-        let _ = self.run("sketch.finish", json!({}));
+        if self.run(command, json!({})).is_err() && command != "sketch.finish" {
+            return;
+        }
         if let Some(marker) = self.pre_sketch_marker.take() {
             self.restore_marker(marker);
         }
@@ -1286,6 +1352,10 @@ impl SolveApp {
     }
 
     pub fn fit_view(&mut self) {
+        if render_workspace::result_active(self) {
+            render_workspace::fit_result(self);
+            return;
+        }
         if dialogs_sheet::flat_active(self) {
             self.flat_view.fitted = false;
             return;
@@ -1392,6 +1462,10 @@ impl SolveApp {
 
     /// Animated view changes for the axis view and navigation bar.
     pub fn animate_view(&mut self, v: &str) {
+        if render_workspace::result_active(self) && matches!(v, "fit" | "home") {
+            render_workspace::fit_result(self);
+            return;
+        }
         // The flat pattern is a 2D view: Fit and Home frame it, and the Design camera stays put.
         if dialogs_sheet::flat_active(self) && matches!(v, "fit" | "home") {
             self.flat_view.fitted = false;
@@ -1517,6 +1591,10 @@ impl SolveApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         if self.issue_report.draft.is_none() && self.file_picker.is_none() {
+            // Completion owns its keys before either CAD shortcuts or text editors see them.
+            if !keymap::capturing(self) {
+                expression_complete::begin_frame(ctx);
+            }
             toolbar::shortcuts(self, ctx);
         }
         recovery_ui::tick(self);
@@ -1579,7 +1657,6 @@ impl SolveApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        expression_complete::begin_frame(ui.ctx());
         let t0 = now_ms();
         // The first frames draw with the bundled faces while the system's CJK, Hangul and Thai
         // faces are read on a thread; the fonts are installed again once they are there.
@@ -1911,12 +1988,13 @@ pub fn command_label(id: &str) -> &str {
     solidcraft_engine::find_command(id).map_or(id, |c| c.label)
 }
 
-/// An engine error with the command's label instead of its id: "Shell: offset must be …". The
-/// label follows the interface language; the engine's sentence stays as the engine wrote it.
+/// An engine error with the command's label instead of its id: "Shell: offset must be …".
+/// The command label and catalogued engine messages follow the interface language.
 pub fn friendly_error(id: &str, e: &str) -> String {
     let label = i18n::tr_label(command_label(id));
     let msg = e.replace(&format!("invalid parameters for `{id}`: "), "").replace(&format!("{id}: "), "").replace(&format!("`{id}`"), label);
-    if msg.starts_with(label) { msg } else { format!("{label}: {msg}") }
+    let msg = i18n::tr_label(&msg);
+    if msg.starts_with(label) { msg.to_string() } else { format!("{label}: {msg}") }
 }
 
 pub fn now_ms() -> f64 {

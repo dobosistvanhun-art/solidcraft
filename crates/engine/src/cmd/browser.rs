@@ -4,6 +4,8 @@
 //! Browser items are keyed per component folder (`bodies`, `sketches`, `construction`): a body
 //! by name, a sketch or construction plane by feature id.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use solidcraft_doc::FeatureKind;
@@ -539,6 +541,23 @@ fn replace_body_name(v: &mut Value, old: &str, new: &str, names_body: bool, dept
     }
 }
 
+/// A frame member feature's bodies by line id, as its own result made them: what pins each
+/// member's name to its line. `None` for any other feature, or when they don't pair up.
+fn member_pins(s: &Session, fid: u64) -> Option<BTreeMap<String, String>> {
+    let f = s.doc.feature(fid)?;
+    let result = s.model.result(fid)?;
+    let lines = solidcraft_doc::frame::member_line_ids(&result.state, &f.kind).ok()?;
+    let made: Vec<String> = result.state.bodies.iter().filter(|b| b.feature == fid).map(|b| b.name.clone()).collect();
+    (lines.len() == made.len()).then(|| lines.into_iter().zip(made).collect())
+}
+
+/// Whether the `i`-th new body of `f` is numbered by the body counter (`BodyN`): it has no stored
+/// name of its own and is not numbered after the feature's first name (`Ribs (4)`).
+pub(crate) fn counted(f: &solidcraft_doc::Feature, i: usize) -> bool {
+    let first = f.body_names.first().is_some_and(|n| !n.trim().is_empty());
+    f.body_names.get(i).is_none_or(|n| n.trim().is_empty()) && (f.shell_piece_order || i < f.body_names.len() || !first)
+}
+
 fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "body.rename";
     let old = str_(p, "body").ok_or_else(|| bad(cmd, "`body` must be a body name"))?.to_string();
@@ -557,17 +576,15 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     // includes the siblings whose stored name is shared: the solids of a STEP file with one label
     // are stored as `X`, `X`, `X` and built as `X`, `X (2)`, `X (3)`, so the stored names are set
     // to the numbered ones, or `X (3)` would turn into `X (2)` once the second solid is renamed.
+    // Read the feature's own result so siblings removed by later features keep their names too.
     let fid = b.feature;
-    let siblings: Vec<String> = st.bodies.iter().filter(|x| x.feature == fid).map(|x| x.name.clone()).collect();
+    let made = s.model.result(fid).map_or(&st.bodies, |r| &r.state.bodies);
+    let siblings: Vec<String> = made.iter().filter(|x| x.feature == fid).map(|x| x.name.clone()).collect();
     let k = siblings.iter().position(|n| *n == old).unwrap_or(0);
     // A body numbered by the counter (`BodyN`) gives its number back once it has a name of its
     // own, and every counted body after it would move down one (`Body3` becoming `Body1`) and
     // break what names it. Those later features keep the names they made too (#1109): each one's
     // own result holds them, also for bodies a later feature joins away.
-    let counted = |f: &solidcraft_doc::Feature, i: usize| {
-        let first = f.body_names.first().is_some_and(|n| !n.trim().is_empty());
-        f.body_names.get(i).is_none_or(|n| n.trim().is_empty()) && (f.shell_piece_order || i < f.body_names.len() || !first)
-    };
     // Bodies later features name after this one (`Top (1)`, a split's other piece) keep their
     // names too: they would otherwise follow it, and break what names them (#3510).
     let derived = format!("{old} (");
@@ -587,22 +604,40 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
             .collect(),
         None => Vec::new(),
     };
+    // Frame members are named by their lines (#4003): each keeps the name it has now on its
+    // line, whichever lines come and go later, and the renamed one takes its new name.
+    let later_pins: Vec<Option<BTreeMap<String, String>>> = later.iter().map(|(id, _)| member_pins(s, *id)).collect();
+    let own_pins = member_pins(s, fid).and_then(|mut pins| {
+        let line = pins.iter().find(|(_, n)| **n == old).map(|(line, _)| line.clone())?;
+        pins.insert(line, name.to_string());
+        Some(pins)
+    });
     let d = s.doc_mut();
-    for (id, made) in &later {
+    for ((id, made), pins) in later.iter().zip(later_pins) {
         if let Some(f) = d.feature_mut(*id) {
-            f.body_names.clone_from(made);
+            if let (Some(pins), FeatureKind::FrameMember { names, .. }) = (pins, &mut f.kind) {
+                *names = pins;
+                f.body_names.clear();
+            } else {
+                f.body_names.clone_from(made);
+            }
         }
     }
     let f = d.feature_mut(fid).ok_or_else(|| bad(cmd, "the body's feature is gone"))?;
-    while f.body_names.len() < siblings.len().max(k + 1) {
-        let i = f.body_names.len();
-        f.body_names.push(siblings.get(i).cloned().unwrap_or_default());
-    }
-    for (slot, current) in f.body_names.iter_mut().zip(&siblings) {
-        slot.clone_from(current);
-    }
-    if let Some(slot) = f.body_names.get_mut(k) {
-        *slot = name.to_string();
+    if let (Some(pins), FeatureKind::FrameMember { names, .. }) = (own_pins, &mut f.kind) {
+        *names = pins;
+        f.body_names.clear();
+    } else {
+        while f.body_names.len() < siblings.len().max(k + 1) {
+            let i = f.body_names.len();
+            f.body_names.push(siblings.get(i).cloned().unwrap_or_default());
+        }
+        for (slot, current) in f.body_names.iter_mut().zip(&siblings) {
+            slot.clone_from(current);
+        }
+        if let Some(slot) = f.body_names.get_mut(k) {
+            *slot = name.to_string();
+        }
     }
     // Later features refer to bodies by name.
     let mut failed = None;
@@ -786,6 +821,30 @@ mod tests {
         assert_eq!(names(&s)[1], b);
     }
 
+    #[test]
+    fn renaming_a_body_keeps_a_later_sibling_removal() {
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY"}));
+        for x in [0, 20, 40] {
+            run(&mut s, "sketch.rectangle.two_point", json!({"p0": [x, 0], "p1": [x + 10, 10]}));
+        }
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance": 5, "operation": "new", "name": "Extrude1"}));
+        assert_eq!(names(&s), ["Body1", "Body2", "Body3"]);
+        run(&mut s, "solid.remove", json!({"bodies": ["Body3"]}));
+        assert_eq!(names(&s), ["Body1", "Body2"]);
+
+        run(&mut s, "body.rename", json!({"body": "Body1", "name": "Ext"}));
+        assert_eq!(s.doc.find_feature("Extrude1").unwrap().body_names, ["Ext", "Body2", "Body3"]);
+        assert_eq!(names(&s), ["Ext", "Body2"]);
+        assert!(s.model.results.iter().all(|r| r.error.is_none()), "the remove still finds Body3");
+
+        let mut fresh = Session::new((*s.doc).clone());
+        fresh.refresh();
+        assert_eq!(names(&fresh), ["Ext", "Body2"]);
+        assert!(fresh.model.results.iter().all(|r| r.error.is_none()), "the remove also works after a full evaluation");
+    }
+
     /// #3510: each piece of a split is renamed on its own. Renaming the split body leaves the
     /// other piece, and the features that use it, as they were.
     #[test]
@@ -804,6 +863,28 @@ mod tests {
         assert!(ok(&s), "the move follows the renamed piece");
         run(&mut s, "edit.undo", json!({}));
         assert_eq!(names(&s), vec!["Upper", "Top (1)"]);
+    }
+
+    /// Renaming one half of a split leaves the other half's name, also once a later feature
+    /// joins that other half away.
+    #[test]
+    fn renaming_one_half_of_a_split_leaves_the_other() {
+        let ok = |s: &Session| s.model.results.iter().all(|r| r.error.is_none());
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [0, 0, -5]}));
+        run(&mut s, "solid.split_body", json!({"body": "Body1", "plane": "XY"}));
+        assert_eq!(names(&s), ["Body1", "Body1 (1)"]);
+        run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": [10, 0, -5], "operation": "new", "body_name": "Tab"}));
+        run(&mut s, "solid.combine", json!({"target": "Tab", "tools": ["Body1 (1)"], "operation": "join"}));
+        assert_eq!(names(&s), ["Body1", "Tab"]);
+
+        run(&mut s, "body.rename", json!({"body": "Body1", "name": "Upper"}));
+        assert_eq!(names(&s), ["Upper", "Tab"]);
+        assert!(ok(&s), "the join still finds the other half");
+        let mut fresh = Session::new((*s.doc).clone());
+        fresh.refresh();
+        assert_eq!(names(&fresh), ["Upper", "Tab"]);
+        assert!(ok(&fresh), "the join also works after a full evaluation");
     }
 
     /// #1108: a primitive's `targets` are its participants, kept beside its kind; a rename

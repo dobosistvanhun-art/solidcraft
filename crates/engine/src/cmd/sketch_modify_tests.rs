@@ -239,6 +239,41 @@ fn exact_extend_refuses_ambiguous_stop_without_history_change() {
 }
 
 #[test]
+fn fillet_keeps_expression_corner_when_parameter_changes() {
+    let mut s = new_sketch();
+    run(&mut s, "parameters.add", json!({"name": "W", "expression": "40 mm"}));
+    run(&mut s, "parameters.add", json!({"name": "H", "expression": "20 mm"}));
+    let outline = run(&mut s, "sketch.line", json!({"closed": true, "points": [["0 mm", "0 mm"], ["W", "0 mm"], ["W", "H"], ["0 mm", "H"]]}));
+    assert_eq!(outline["sketch"]["dof"], 0);
+    let fillet = run(&mut s, "sketch.fillet", json!({"point": "l2.end", "radius": 5}));
+    assert_eq!(fillet["sketch"]["dof"], 0, "{fillet}");
+    let corners = ids(&fillet["virtual_corners"]);
+    assert_eq!(corners.len(), 1, "{fillet}");
+
+    for width in [60.0, 30.0] {
+        run(&mut s, "parameters.change", json!({"name": "W", "expression": format!("{width} mm")}));
+        let info = run(&mut s, "sketch.inspect", json!({}));
+        assert_eq!(info["dof"], 0, "{info}");
+        let sk = sketch(&s);
+        let corner = &sk.points[sk.resolve_point(&corners[0]).unwrap()];
+        assert!(corner.fixed && corner.exprs.is_some());
+        for (point, expected) in [
+            (corners[0].as_str(), Vec2::new(width, 20.0)),
+            ("l2.start", Vec2::new(width, 0.0)),
+            ("l2.end", Vec2::new(width, 15.0)),
+            ("l3.start", Vec2::new(width - 5.0, 20.0)),
+            ("l3.end", Vec2::new(0.0, 20.0)),
+        ] {
+            let actual = sk.point(sk.resolve_point(point).unwrap()).unwrap();
+            assert!(actual.dist(expected) < 1e-6, "{point}: {actual:?}, expected {expected:?}");
+        }
+        let area = profiles(&s);
+        assert_eq!(area.len(), 1);
+        assert!(close(area[0], width * 20.0 - 25.0 * (1.0 - std::f64::consts::PI / 4.0)), "{area:?}");
+    }
+}
+
+#[test]
 fn fillet_and_chamfers() {
     let mut s = new_sketch();
     let r = run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [40, 30]}));
@@ -1528,6 +1563,50 @@ fn offset_driver_edits_reopens_and_undoes_without_moving_sources() {
 }
 
 #[test]
+fn an_offset_leaves_its_source_lines_free_to_turn() {
+    // #4464: the Parallel between each source line and its offset line pinned the source to the
+    // offset's held direction: 8 degrees of freedom became 6, Horizontal and angle edits conflicted.
+    let mut s = new_sketch();
+    let points = json!([[-2, 38.9], [36.7, 17.1], [-5, 0], [57.7, -17.7], [-7.6, -25.7], [-22, 21.3]]);
+    run(&mut s, "sketch.line", json!({"points": points, "closed": true, "ids": ["l1", "l2", "l3", "l4", "l5", "l6"]}));
+    let mut angle = String::new();
+    for pair in [["l6", "l1"], ["l1", "l2"], ["l2", "l3"], ["l4", "l5"]] {
+        let d = run(&mut s, "sketch.dimension", json!({"entities": pair, "type": "angle"}));
+        angle = d["param"].as_str().unwrap().to_string();
+    }
+    let o = run(&mut s, "sketch.offset", json!({"curves": ["l1"], "distance": 2, "side": [5, 5]}));
+    assert_eq!(o["sketch"]["dof"], 8, "the offset follows its source and takes no freedom away: {o}");
+    let outputs = ids(&o["curves"]);
+    let line = |sk: &solidcraft_sketch::Sketch, id: &str| match sk.curves[sk.curve_index(id).unwrap()].kind {
+        CurveKind::Line { a, b } => (sk.points[a].pos, sk.points[b].pos),
+        ref other => panic!("{id} is {other:?}"),
+    };
+    let follows = |s: &Session| {
+        let sk = sketch(s);
+        for (source, output) in ["l1", "l2", "l3", "l4", "l5", "l6"].iter().zip(&outputs) {
+            let ((a, b), (c, d)) = (line(&sk, source), line(&sk, output));
+            let u = (b - a).normalized().unwrap();
+            assert!(u.cross((d - c).normalized().unwrap()).abs() < 1e-7, "{output} is parallel to {source}");
+            assert!(close(u.cross(c - a).abs(), 2.0) && close(u.cross(d - a).abs(), 2.0), "{output} is 2 mm from {source}");
+        }
+    };
+    follows(&s);
+    let h = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"line": "l4", "mode": "horizontal"}));
+    assert_eq!(h["sketch"]["dof"], 7, "{h}");
+    follows(&s);
+    let (a, b) = line(&sketch(&s), "l4");
+    assert!((a.y - b.y).abs() < 1e-7, "l4 is horizontal");
+    run(&mut s, "parameters.change", json!({"name": angle, "expression": "90 deg"}));
+    follows(&s);
+    // A rounded boundary takes the convex path, whose lines pair with the association's roles.
+    let polygon = run(&mut s, "sketch.line", json!({"points": [[100, 0], [130, 5], [125, 30], [105, 25]], "closed": true}));
+    let corners = run(&mut s, "sketch.fillet", json!({"points": polygon["created"]["points"], "radius": "1 mm"}));
+    let o = run(&mut s, "sketch.offset", json!({"curves": [ids(&polygon["curves"])[0]], "distance": 1, "side": [115, 15]}));
+    assert!(o["association"].is_string(), "{o}");
+    assert_eq!(o["sketch"]["dof"], corners["sketch"]["dof"], "{o}");
+}
+
+#[test]
 fn offset_driver_covers_disconnected_selections_and_refuses_bad_values_atomically() {
     let mut s = new_sketch();
     run(&mut s, "sketch.line", json!({"points":[[0,0],[10,0]]}));
@@ -1869,5 +1948,58 @@ fn fillet_refuses_an_offsets_corners_until_its_association_is_broken() {
         let ai = sk.curve_index(arc).unwrap();
         assert!(matches!(sk.curves[ai].kind, CurveKind::Arc { .. }), "{arc} is a trimmed arc");
         assert!((sk.radius(ai).unwrap() - 2.0).abs() < 1e-7);
+    }
+}
+
+/// #4681: a fillet radius typed as `=name` (a leading equals sign, as in a spreadsheet) is the
+/// expression after the sign, so it can follow a parameter.
+#[test]
+fn fillet_radius_accepts_a_leading_equals_sign() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [50, 0], [50, 30], [0, 30]], "closed": true, "ids": ["a", "b", "c", "d"]}));
+    let first = run(&mut s, "sketch.fillet", json!({"point": "a.end", "radius": 4}));
+    let pname = first["param"].as_str().unwrap().to_string();
+    let second = run(&mut s, "sketch.fillet", json!({"point": "b.end", "radius": format!("={pname}")}));
+    let sk = sketch(&s);
+    let arc = ids(&second["curves"])[0].clone();
+    let ai = sk.curve_index(&arc).unwrap();
+    assert!((sk.radius(ai).unwrap() - 4.0).abs() < 1e-7);
+    // Changing the parameter moves both fillets.
+    run(&mut s, "parameters.change", json!({"name": pname, "expression": "6 mm"}));
+    let sk = sketch(&s);
+    let ai = sk.curve_index(&arc).unwrap();
+    assert!((sk.radius(ai).unwrap() - 6.0).abs() < 1e-7);
+    let plain = run(&mut s, "sketch.fillet", json!({"point": "c.end", "radius": "= 2 mm"}));
+    assert!(plain["curves"].is_array());
+}
+
+/// #5074: lines made tangent to a circle by the solver touch it within rounding noise, and the
+/// noise often falls outside, so trim found no cut at the touch and deleted the whole line. Each
+/// line is trimmed back to its tangent point instead: the belt shape (two lines from one point)
+/// and two parallel lines.
+#[test]
+fn trim_cuts_a_line_at_its_tangent_point_on_a_circle() {
+    // (start, end, where the trim picks: past the tangent point)
+    let belt = [([30.0, 0.0], [-8.0, 12.0], [-7.0, 12.5]), ([30.0, 0.0], [-8.0, -12.0], [-7.0, -12.5])];
+    let parallel = [([-20.0, 11.0], [20.0, 11.0], [-15.0, 10.0]), ([-20.0, -11.0], [20.0, -11.0], [-15.0, -10.0])];
+    for (name, lines) in [("belt", belt), ("parallel", parallel)] {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 10}));
+        for (a, b, _) in lines {
+            run(&mut s, "sketch.line", json!({"points": [a, b], "connect": false, "infer": false}));
+        }
+        run(&mut s, "sketch.constraint.tangent", json!({"a": "l1", "b": "c1"}));
+        run(&mut s, "sketch.constraint.tangent", json!({"a": "l2", "b": "c1"}));
+        for (line, (_, _, at)) in ["l1", "l2"].into_iter().zip(lines) {
+            let r = run(&mut s, "sketch.trim", json!({"curve": line, "at": at}));
+            assert_eq!(r["result"]["trimmed"], line, "{name}: {line} was {}", r["result"]);
+            let sk = sketch(&s);
+            let at = |r: &str| sk.point(sk.resolve_point(r).unwrap()).unwrap();
+            // The solve may size the circle to the lines (its radius isn't dimensioned).
+            let radius = sk.radius(sk.curve_index("c1").unwrap()).unwrap();
+            let touches = [format!("{line}.start"), format!("{line}.end")].iter().any(|e| (at(e).len() - radius).abs() < 1e-6);
+            assert!(touches, "{name}: {line} now ends at its tangent point");
+        }
+        assert_eq!(sketch(&s).curves.len(), 3, "{name}: the circle and both lines stay");
     }
 }

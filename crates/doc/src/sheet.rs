@@ -632,7 +632,8 @@ impl LoftedSheet {
             })
             .collect();
         if let Ok(b) = kernel::sew(&faces) {
-            return Ok(b);
+            // Drawn as the smooth wall the facets follow (only real creases keep their lines).
+            return Ok(b.with_facet_smoothing(20f64.to_radians()));
         }
         let mut points: Vec<Vec3> = Vec::with_capacity(self.wall.len() * 3);
         let mut tris = Vec::with_capacity(self.wall.len());

@@ -317,6 +317,15 @@ pub struct LoftThin {
     /// middle of the longest straight side).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rip: Option<Position>,
+    /// Sheet metal loft: the rip's direction from the first section's middle, in its plane
+    /// (angle from its x axis), when no rip point is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[walk(angle = "Rip angle")]
+    pub rip_angle: Option<Expr>,
+    /// Sheet metal loft: how wide the rip is (default 0.1 mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[walk(length = "Rip gap")]
+    pub rip_gap: Option<Expr>,
 }
 
 /// How a swept profile turns as it follows its path.

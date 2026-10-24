@@ -91,6 +91,10 @@ crate::dialog_descriptor::dialog_descriptors! {
                 rule: usize,
                 side: usize,
                 step: String,
+                /// The rip's direction from the first section's middle (empty: the middle of the
+                /// longest straight side) and its width (empty: 0.1 mm).
+                rip_angle: String,
+                rip_gap: String,
             },
             Convert {
                 rule: usize,
@@ -173,7 +177,7 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     let (sm, inputs) = match id {
         "sheet.flange" => (new_flange(0), vec![SelInput::new("Profile / Edges", PROFILES | EDGES | CURVES, true)]),
         "sheet.loft" => (
-            Sm::Loft { rule: 0, side: 0, step: "15 deg".into() },
+            Sm::Loft { rule: 0, side: 0, step: "15 deg".into(), rip_angle: String::new(), rip_gap: String::new() },
             vec![SelInput::new("Profiles", PROFILES, true), SelInput::new("Rip point (optional)", POINTS, false)],
         ),
         "sheet.unfold" => (Sm::Unfold { refold: false }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
@@ -355,14 +359,16 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
                 crate::ui_kit::options(ui, "sheet_options", &mut [("Flip", flip)]);
             }
         }
-        Sm::Loft { rule, side, step } => {
+        Sm::Loft { rule, side, step, rip_angle, rip_gap } => {
             rule_combo(app, ui, "sm_loft_rule", rule);
             choice_row(ui, "Side", "sm_loft_side", side, &LOFT_SIDE_LABELS);
             enter |= expr_row(ui, "Bend step", step);
+            enter |= hint_row(ui, "Rip angle", rip_angle, crate::i18n::tr_label("longest side"));
+            enter |= hint_row(ui, "Rip gap", rip_gap, "0.1 mm");
             crate::ui_kit::text(
                 ui,
                 crate::i18n::tr_label(
-                    "Pick a profile in each of two sketches. The rip runs along the middle of the longest straight side, or through the rip point: a sketch point on a section's edge.",
+                    "Pick a profile in each of two sketches. The rip runs along the middle of the longest straight side, at the rip angle (0° = the first sketch's x axis, 90° = its y axis), or through the rip point: a sketch point on a section's edge.",
                 ),
                 crate::ui_kit::Text::Hint("sheet_loft"),
             );
@@ -623,7 +629,7 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             }
             ("sheet.flange", p)
         }
-        Sm::Loft { rule, side, step } => {
+        Sm::Loft { rule, side, step, rip_angle, rip_gap } => {
             // One section per sketch, in the order the sketches were first picked.
             let mut sections: Vec<(u64, Vec<usize>)> = Vec::new();
             for x in items(inputs, 0) {
@@ -641,6 +647,12 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             let mut p = json!({"sections": sections, "side": LOFT_SIDES.get(*side).copied().unwrap_or("inside")});
             if !step.trim().is_empty() {
                 p["bend_step"] = json!(step);
+            }
+            if !rip_angle.trim().is_empty() {
+                p["rip_angle"] = json!(rip_angle.trim());
+            }
+            if !rip_gap.trim().is_empty() {
+                p["rip_gap"] = json!(rip_gap.trim());
             }
             if let Some(r) = rule_value(app, *rule) {
                 p["rule"] = json!(r);
@@ -851,6 +863,8 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
                 rule: rule_index(&thin.sheet.clone().filter(|n| !n.is_empty())),
                 side: LOFT_SIDES.iter().position(|x| *x == thin.side).unwrap_or(0),
                 step: thin.bend_step.as_ref().map_or_else(|| "15 deg".to_string(), |e| e.to_string()),
+                rip_angle: thin.rip_angle.as_ref().map(|e| e.to_string()).unwrap_or_default(),
+                rip_gap: thin.rip_gap.as_ref().map(|e| e.to_string()).unwrap_or_default(),
             };
             return Some((Kind::Sheet(k), ins, extra));
         }

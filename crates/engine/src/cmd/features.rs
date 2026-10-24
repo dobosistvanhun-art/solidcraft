@@ -2311,6 +2311,8 @@ fn loft_thin(s: &Session, p: &Value, cmd: &str) -> Result<Option<solidcraft_doc:
         sheet: None,
         bend_step: None,
         rip: None,
+        rip_angle: None,
+        rip_gap: None,
     }))
 }
 

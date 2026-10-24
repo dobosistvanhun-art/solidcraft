@@ -67,6 +67,9 @@ pub struct Body {
     /// placed copy, which keeps them where they are, need not turn them again: searching every
     /// revolved face of every placed occurrence was most of the time moving an assembly took.
     pub(crate) phased: bool,
+    /// Display only: joins of planar facets meeting at most this angle (radians) are drawn as
+    /// one smooth surface (a faceted developable wall). Operations drop it.
+    pub(crate) facet_smooth: Option<f64>,
 }
 
 /// The meshes made of one solid (see [`Body::keeping_meshes`]), by tolerance, angle and
@@ -659,6 +662,7 @@ impl Body {
             display_of: None,
             meshes: None,
             phased: true,
+            facet_smooth: None,
         })
     }
 
@@ -701,6 +705,7 @@ impl Body {
             display_of: None,
             meshes: None,
             phased: true,
+            facet_smooth: None,
         })
     }
 
@@ -1596,7 +1601,20 @@ impl Body {
         }
         m.seams = crate::topo::seam_flags(self, &m);
         (m.smooth_edges, m.sharp_edges) = crate::smooth_edges::flags(self, &m);
+        if let Some(angle) = self.facet_smooth {
+            smooth_facet_joins(&mut m, angle);
+        }
         Ok(m)
+    }
+
+    /// This body drawn with the joins of its planar facets that meet at most `max_angle`
+    /// (radians) shown smooth: a wall built of flat facets reads as the surface they follow.
+    /// Display only; the faces and edges are unchanged, and operations drop it.
+    pub fn with_facet_smoothing(&self, max_angle: f64) -> Body {
+        let mut b = self.clone();
+        b.facet_smooth = (max_angle.is_finite() && max_angle > 0.0).then_some(max_angle.min(std::f64::consts::FRAC_PI_2));
+        b.meshes = None;
+        b
     }
 
     /// Edges with polylines (index = position in [`Body::tessellate`]'s `edges`).
@@ -1937,3 +1955,34 @@ mod display_mesh_tests;
 #[cfg(test)]
 #[path = "regularization_protection_tests.rs"]
 mod regularization_protection_tests;
+
+/// Flag as smooth (not drawn) each edge between two faces whose mean normals differ by at most
+/// `max_angle` (see [`Body::with_facet_smoothing`]).
+fn smooth_facet_joins(m: &mut Mesh, max_angle: f64) {
+    let faces = m.tri_face.iter().map(|f| *f as usize + 1).max().unwrap_or(0);
+    let mut normals = vec![Vec3::ZERO; faces];
+    for (t, f) in m.triangles.iter().zip(&m.tri_face) {
+        let (Some(a), Some(b), Some(c)) = (m.positions.get(t[0] as usize), m.positions.get(t[1] as usize), m.positions.get(t[2] as usize)) else {
+            continue;
+        };
+        if let Some(n) = normals.get_mut(*f as usize) {
+            *n += (b - a).cross(c - a);
+        }
+    }
+    let cos = max_angle.cos();
+    if m.smooth_edges.len() < m.edges.len() {
+        m.smooth_edges.resize(m.edges.len(), false);
+    }
+    for (i, fs) in m.edge_faces.iter().enumerate() {
+        let [f1, f2] = fs.as_slice() else { continue };
+        let (Some(n1), Some(n2)) = (normals.get(*f1 as usize).and_then(|n| n.normalized()), normals.get(*f2 as usize).and_then(|n| n.normalized()))
+        else {
+            continue;
+        };
+        if n1.dot(n2) >= cos
+            && let Some(flag) = m.smooth_edges.get_mut(i)
+        {
+            *flag = true;
+        }
+    }
+}

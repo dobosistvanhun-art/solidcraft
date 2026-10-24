@@ -5894,9 +5894,44 @@ fn sheet_loft(
     if !(step >= 0.5f64.to_radians() && step <= std::f64::consts::FRAC_PI_2) {
         return Err(DocError::Invalid("the sheet metal loft's bend step must be between 0.5° and 90°".into()));
     }
-    let gap = rv.gap.max(0.1);
+    let gap = match &thin.rip_gap {
+        Some(e) => val(vals, e, Kind::Length)?,
+        None => 0.1,
+    };
+    if !(gap.is_finite() && (0.01..=t.max(0.01) * 10.0).contains(&gap)) {
+        return Err(DocError::Invalid("the sheet metal loft's rip gap must be between 0.01 mm and ten times the thickness".into()));
+    }
+    // The rip at an angle: where the ray from the first section's middle crosses its outline.
+    let rip_at = match (thin.rip.map(Vec3::from), &thin.rip_angle) {
+        (Some(p), _) => Some(p),
+        (None, Some(e)) => {
+            let a = val(vals, e, Kind::Angle)?;
+            if !a.is_finite() {
+                return Err(DocError::Invalid("the rip angle must be a number".into()));
+            }
+            let pts: Vec<Vec2> = lines.first().into_iter().flatten().map(|p| frame.to_local(*p)).collect();
+            let c = pts.iter().fold(Vec2::ZERO, |s, p| s + *p) * (1.0 / pts.len().max(1) as f64);
+            let d = Vec2::new(a.cos(), a.sin());
+            let n = pts.len();
+            let hit = (0..n)
+                .filter_map(|i| {
+                    let (p, q) = (pts.get(i).copied()?, pts.get((i + 1) % n).copied()?);
+                    let e = q - p;
+                    let den = d.cross(e);
+                    if den.abs() < 1e-12 {
+                        return None;
+                    }
+                    let w = p - c;
+                    let (t_ray, u) = (w.cross(e) / den, w.cross(d) / den);
+                    (t_ray > 0.0 && (-1e-9..=1.0 + 1e-9).contains(&u)).then_some(t_ray)
+                })
+                .fold(f64::INFINITY, f64::min);
+            hit.is_finite().then(|| frame.to_world(c + d * hit))
+        }
+        _ => None,
+    };
     let (Some(a), Some(b)) = (lines.first(), lines.get(1)) else { return Err(DocError::Invalid("loft sections".into())) };
-    let unfolded = crate::sheet_loft::unfold(a, b, &frame, thin.rip.map(Vec3::from), gap, step, rv.bend_radius, t, rv.k_factor)?;
+    let unfolded = crate::sheet_loft::unfold(a, b, &frame, rip_at, gap, step, rv.bend_radius, t, rv.k_factor)?;
     // The folded wall: planar facets of the developable strip, sewn into a solid.
     let lofted = crate::sheet::LoftedSheet { bends: unfolded.bends, wall: unfolded.wall };
     let wall = lofted.solid()?;

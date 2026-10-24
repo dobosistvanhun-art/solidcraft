@@ -125,6 +125,7 @@ pub fn decode_native_body(bytes: &[u8]) -> Result<Body> {
             display_of: None,
             meshes: None,
             phased: false,
+            facet_smooth: None,
             regularization_protected: false,
         };
         metadata::apply(&mut body, saved.metadata)?;

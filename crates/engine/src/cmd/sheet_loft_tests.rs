@@ -68,6 +68,20 @@ fn a_square_to_round_transition_unfolds_with_its_rounds_bent_in_steps() {
     run(&mut r, "sheet.loft", json!({"sections": ["Square", "Round"], "bend_step": 5, "rip": [40, 50, 0]}));
     let ar = area(&run(&mut r, "sheet.flat_pattern", json!({}))["outline"][0]);
     assert!((ar - a5).abs() < 0.01 * a5, "{ar} vs {a5}");
+    // At an angle: 90° from the square's x axis is the middle of its far side, as by default
+    // (the longest side's middle); a wider rip takes more material from the wall.
+    let mut g = sections();
+    run(&mut g, "sheet.loft", json!({"sections": ["Square", "Round"], "bend_step": 5, "rip_angle": 90}));
+    let ag = area(&run(&mut g, "sheet.flat_pattern", json!({}))["outline"][0]);
+    assert!((ag - a5).abs() < 0.01 * a5, "{ag} vs {a5}");
+    let narrow = volume(&mut g);
+    let mut w = sections();
+    run(&mut w, "sheet.loft", json!({"sections": ["Square", "Round"], "bend_step": 5, "rip_angle": 90, "rip_gap": 3}));
+    assert!(volume(&mut w) < narrow - 1.0, "a 3 mm rip takes more than a 0.1 mm one");
+    // The facets' joins on the wall are drawn smooth: the rims and the rip keep their lines.
+    let mesh = w.model.state().bodies.last().map(|b| b.mesh()).unwrap();
+    let drawn = mesh.smooth_edges.iter().filter(|f| !**f).count();
+    assert!(mesh.smooth_edges.iter().filter(|f| **f).count() > drawn, "{drawn} drawn of {}", mesh.edges.len());
     // The DXF of the flat pattern.
     let dxf = run(&mut s, "sheet.export_dxf", json!({}));
     assert!(dxf.to_string().contains("BEND"), "{}", &dxf.to_string()[..dxf.to_string().len().min(400)]);
@@ -85,6 +99,10 @@ fn hostile_sheet_lofts_are_refused() {
         json!({"sections": ["Square", "Round"], "bend_step": 1e300}),
         json!({"sections": ["Square", "Square"]}),
         json!({"sections": ["Square", "Round"], "rip": "here"}),
+        json!({"sections": ["Square", "Round"], "rip_gap": 0}),
+        json!({"sections": ["Square", "Round"], "rip_gap": "5 deg"}),
+        json!({"sections": ["Square", "Round"], "rip_angle": "10 mm"}),
+        json!({"sections": ["Square", "Round"], "rip_angle": 1e300}),
     ] {
         assert!(s.execute("sheet.loft", &p).is_err(), "{p}");
     }

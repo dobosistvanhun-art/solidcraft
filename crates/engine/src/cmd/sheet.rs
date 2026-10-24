@@ -30,7 +30,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         "sections: [{sketch, profiles?} | sketch name] (exactly 2: say a square and a circle in parallel planes); rule? (default: the active rule: \
          its thickness, K-factor and bend radius); side?: inside (default: the sections are the sheet's outside) | outside | both; \
          bend_step?: angle expr (the largest angle one bend line takes of a round, default 15 deg); \
-         rip?: [x, y, z] (the rip runs through the point of a section's edge nearest it; default: the middle of the longest straight side); sharp_corners?: bool; name?, body_name? — \
+         rip?: [x, y, z] (the rip runs through the point of a section's edge nearest it), or rip_angle?: angle expr (the rip's direction from the first section's middle, from its plane's x axis; default: the middle of the longest straight side); rip_gap?: length expr (the rip's width, default 0.1 mm); sharp_corners?: bool; name?, body_name? — \
          a transition of sheet metal: a thin loft ripped open at the middle of its longest straight side, with a flat pattern (sheet.flat_pattern, \
          sheet.export_dxf, sheet.unfold) unfolded along its neutral surface, each round bent in steps",
     ),
@@ -312,6 +312,18 @@ fn lofted_flange(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(Position(vec3(v).ok_or_else(|| bad(cmd, "`rip` must be a point [x, y, z] on a section's edge"))?)),
     };
+    let opt_expr = |key: &str, kind: Kind| -> Result<Option<solidcraft_doc::Expr>> {
+        let e = expr(p, key);
+        if e.is_none() && p.get(key).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty())) {
+            return Err(bad(cmd, format!("`{key}` must be a number or an expression")));
+        }
+        if let Some(e) = &e {
+            check_expr(s, e, kind, cmd, key)?;
+        }
+        Ok(e)
+    };
+    let rip_angle = opt_expr("rip_angle", Kind::Angle)?;
+    let rip_gap = opt_expr("rip_gap", Kind::Length)?;
     let thickness = solidcraft_doc::expr::Expr::new(s.doc.sheet_rule(Some(rule.as_str()).filter(|r| !r.is_empty())).thickness);
     add_feature(
         s,
@@ -331,6 +343,8 @@ fn lofted_flange(s: &mut Session, p: &Value) -> Result<Value> {
                 sheet: Some(rule),
                 bend_step,
                 rip,
+                rip_angle,
+                rip_gap,
             }),
         },
     )

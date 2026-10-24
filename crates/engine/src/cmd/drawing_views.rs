@@ -885,7 +885,12 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
     let material = m
         .as_ref()
         .and_then(|m| {
-            let names: Vec<String> = m.bodies.iter().map(|(n, ..)| s.doc.body_material_in(n, &s.model.state().sheets)).filter(|m| m != solidcraft_doc::DEFAULT_MATERIAL).collect();
+            let names: Vec<String> = m
+                .bodies
+                .iter()
+                .map(|(n, ..)| s.doc.body_material_in(n, &s.model.state().sheets))
+                .filter(|m| m != solidcraft_doc::DEFAULT_MATERIAL)
+                .collect();
             names.first().filter(|f| names.iter().all(|n| n == *f)).cloned()
         })
         .unwrap_or_default();

@@ -1000,6 +1000,7 @@ fn lofted_flange_takes_profiles_of_two_sketches_and_a_rip_point() {
     run_all(&mut app, c);
     let st = app.session.model.state();
     assert!(st.sheets.iter().any(|sh| sh.lofted.is_some()));
+}
 
 fn perforated_flat() -> (SolveApp, Dialog) {
     let mut app = plate(crate::shell::LayoutMode::Floating);

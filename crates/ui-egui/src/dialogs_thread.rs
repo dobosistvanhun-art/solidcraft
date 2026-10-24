@@ -707,7 +707,9 @@ mod contribution_tests {
         *designation = Some("1/4-20 UNC".into());
         *modeled = true;
         let reopened = Session::new(Document::from_json(&app.session.doc.to_json()).unwrap());
-        assert!(reopened.model.results.last().unwrap().error.as_ref().unwrap().contains("ISO metric"));
+        // The fork's Thread feature knows the Unified threads too (crate::thread_spec): this one
+        // is refused because a 1/4" thread does not fit the M8 hole, not for its standard.
+        assert!(reopened.model.results.last().unwrap().error.as_ref().unwrap().contains("does not fit"), "{:?}", reopened.model.results.last());
     }
 
     #[test]

@@ -1907,8 +1907,14 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
     let thread = str_(p, "thread").map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     if let Some(t) = &thread
         && solidcraft_doc::parse_tapped_thread(t).is_none()
+        && solidcraft_doc::thread_spec::tapped_beyond_catalogue(t).is_none()
     {
-        return Err(bad(cmd, format!("unknown tapped thread `{t}` (ISO metric or a catalogued UNC/UNF, G or Rp size)")));
+        return Err(bad(
+            cmd,
+            format!(
+                "unknown tapped thread `{t}` (ISO metric, a catalogued UNC/UNF, G or Rp size, or a parallel Tr, S, Rd, Pg, BSW or custom thread)"
+            ),
+        ));
     }
     // A position given as length expressions (#1678), say `["leg_h*0.4", "width/2", "t"]`: kept,
     // so the hole follows the parameters; drilled where they evaluate now.
@@ -1985,10 +1991,13 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
             let d = clearance_diameter(c, &fit).ok_or_else(|| bad(cmd, format!("no clearance hole for `{c}` ({fit} fit): M1.6 to M64")))?;
             Expr::new(format!("{d} mm"))
         }
-        (None, Some(t), None) => {
-            let size = solidcraft_doc::parse_tapped_thread(t).ok_or_else(|| bad(cmd, "thread"))?;
-            Expr::new(format!("{} mm", size.tap_drill))
-        }
+        (None, Some(t), None) => match solidcraft_doc::parse_tapped_thread(t) {
+            Some(size) => Expr::new(format!("{} mm", size.tap_drill)),
+            None => {
+                let spec = solidcraft_doc::thread_spec::tapped_beyond_catalogue(t).ok_or_else(|| bad(cmd, "thread"))?;
+                Expr::new(format!("{} mm", (spec.tap_drill() * 1000.0).round() / 1000.0))
+            }
+        },
         (None, None, None) => return Err(bad(cmd, "needs `diameter`, `thread` (a tapped hole) or `clearance` (a bolt size)")),
     };
     check_expr(s, &diameter, Kind::Length, cmd, "diameter")?;

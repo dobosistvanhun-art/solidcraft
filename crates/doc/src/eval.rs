@@ -422,16 +422,25 @@ fn thread_on_impl(
     let dia = cyl.radius * 2.0;
     // A tapped hole takes its size from the verified tapping catalogue (metric, UNC/UNF, G, Rp);
     // a Thread feature from the thread standards (crate::thread_spec), metric by default.
+    let mut beyond = None;
     let tapped_size = if tapped {
         let name = designation.ok_or_else(|| DocError::Invalid("a tapped hole needs a designation".into()))?;
-        Some(
-            crate::parse_tapped_thread(name)
-                .ok_or_else(|| DocError::Invalid(format!("unknown tapped thread `{name}` (ISO metric or a catalogued UNC/UNF, G or Rp size)")))?,
-        )
+        match crate::parse_tapped_thread(name) {
+            Some(size) => Some(size),
+            None => {
+                beyond = Some(crate::thread_spec::tapped_beyond_catalogue(name).ok_or_else(|| {
+                    DocError::Invalid(format!(
+                        "unknown tapped thread `{name}` (ISO metric, a catalogued UNC/UNF, G or Rp size, or a parallel Tr, S, Rd, Pg, BSW or custom thread)"
+                    ))
+                })?);
+                None
+            }
+        }
     } else {
         None
     };
     let spec = match (&tapped_size, designation) {
+        _ if beyond.is_some() => beyond,
         (Some(_), _) => None,
         (None, Some(s)) => {
             Some(crate::thread_spec::parse(s).ok_or_else(|| DocError::Invalid(format!("unknown thread `{s}` ({})", crate::thread_spec::HELP)))?)

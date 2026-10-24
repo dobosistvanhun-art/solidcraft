@@ -679,6 +679,15 @@ pub fn sizes(profile: &str) -> Vec<String> {
 }
 
 /// The designations in a family for a picker (with a size), and how to write the others.
+/// A tapped hole for a thread the tapping catalogue doesn't list (trapezoidal, buttress, round,
+/// Pg, Whitworth or a custom profile): parallel threads only. Metric, Unified and pipe threads
+/// go by the verified catalogue (`crate::parse_tapped_thread`), which also refuses tapered ones.
+pub fn tapped_beyond_catalogue(name: &str) -> Option<ThreadSpec> {
+    parse(name).filter(|s| {
+        s.taper == 0.0 && matches!(s.family, Family::Trapezoidal | Family::Buttress | Family::Round | Family::Pg | Family::Whitworth | Family::Custom)
+    })
+}
+
 pub const HELP: &str = "M8, M8x1, MF10x1, 1/4-20 UNC, #10-32 UNF, 1/4 BSW, G1/2, R1/2, Rc1/2, Rp1/2, 1/2 NPT, Tr16x4, Tr16x8(P4), S16x4, Rd16x1/8, Pg13.5, or custom: 20x2.5 60° (triangle, included angle), 20x3 3/30° h2.2 (flank angles, depth), 20x4 30° h1.5 c1.2 (trapezoid: depth, crest width), 20x4 SQ (square), 20x4 P0:0;1:2;2:2;3:0 (own contour: x:h points over one pitch); add LH for left-handed";
 
 /// The groove between two neighbouring threads in the axial section, as (radius, axial offset)

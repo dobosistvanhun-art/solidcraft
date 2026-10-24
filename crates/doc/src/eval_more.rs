@@ -416,7 +416,7 @@ fn put_sheet(st: &mut ModelState, sh: sheet::SheetBody) -> Result<()> {
     Ok(())
 }
 
-fn rebuild_sheet(st: &mut ModelState, idx: usize) -> Result<()> {
+pub(super) fn rebuild_sheet(st: &mut ModelState, idx: usize) -> Result<()> {
     let sheet = st.sheets.get(idx).cloned().ok_or_else(|| DocError::Invalid("sheet".into()))?;
     let solid = sheet.solid()?;
     let i = st.bodies.iter().position(|b| b.name == sheet.body).ok_or_else(|| DocError::Unknown(format!("body `{}`", sheet.body)))?;

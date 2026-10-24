@@ -25,7 +25,12 @@ pub struct Unfolded {
     /// The folded wall as a closed triangle mesh wound outward: the strip of the neutral
     /// surface offset along its normals, the K-factor's share of the thickness to the inside.
     pub wall: Vec<[Vec3; 3]>,
+    /// The strip: each triangle of the neutral surface (3D) with its place in the flat pattern.
+    pub strip: Vec<StripTri>,
 }
+
+/// A triangle of the neutral surface and the same triangle laid flat.
+pub type StripTri = ([Vec3; 3], [Vec2; 3]);
 
 fn wrap(a: f64) -> f64 {
     let a = (a + PI).rem_euclid(TAU) - PI;
@@ -385,7 +390,12 @@ pub fn unfold(
         outline.reverse();
     }
     let wall = folded(&ta, &tb, &steps, t, kf)?;
-    Ok(Unfolded { outline, bends, wall })
+    let mut strip = Vec::with_capacity(steps.len());
+    for &(i, j, on_a) in &steps {
+        let (v3, v2) = if on_a { (get(&ta, i + 1)?, get(&fa, i + 1)?) } else { (get(&tb, j + 1)?, get(&fb, j + 1)?) };
+        strip.push(([get(&tb, j)?, get(&ta, i)?, v3], [get(&fb, j)?, get(&fa, i)?, v2]));
+    }
+    Ok(Unfolded { outline, bends, wall, strip })
 }
 
 /// The folded wall (see [`Unfolded::wall`]) of the strip `steps` between `ta` and `tb`.
@@ -467,6 +477,159 @@ fn folded(ta: &[Vec3], tb: &[Vec3], steps: &[(usize, usize, bool)], t: f64, k: f
         push([a.0, b.1, a.1], away);
     }
     Ok(wall)
+}
+
+/// Most grid nodes a cut-out search samples.
+const MAX_NODES: usize = 4_000_000;
+
+/// Where a flat point lies on the neutral surface (3D), by the strip triangle it falls in.
+fn lift(tris: &[&StripTri], p: Vec2) -> Option<Vec3> {
+    for (t3, t2) in tris {
+        let (a, b, c) = (t2[0], t2[1], t2[2]);
+        let den = (b - a).cross(c - a);
+        if den.abs() < 1e-12 {
+            continue;
+        }
+        let u = (p - a).cross(c - a) / den;
+        let v = (b - a).cross(p - a) / den;
+        if u >= -1e-9 && v >= -1e-9 && u + v <= 1.0 + 1e-9 {
+            return Some(t3[0] + (t3[1] - t3[0]) * u + (t3[2] - t3[0]) * v);
+        }
+    }
+    None
+}
+
+/// The cut-outs (closed flat loops) a tool makes in the wall: the flat points whose place on the
+/// neutral surface lies inside the tool, traced on a grid `step` apart (marching squares) with
+/// each crossing found to a thousandth of the step. Only the strip near the tool is searched.
+pub fn flat_cutouts(strip: &[StripTri], inside: &dyn Fn(Vec3) -> bool, lo: Vec3, hi: Vec3, step: f64) -> Result<Vec<Vec<Vec2>>> {
+    if !(step.is_finite() && step > 1e-4) || !lo.is_finite() || !hi.is_finite() {
+        return Err(DocError::Invalid("sheet metal loft: bad cut-out search".into()));
+    }
+    let near: Vec<&StripTri> = strip
+        .iter()
+        .filter(|(t3, _)| {
+            let (mn, mx) = t3
+                .iter()
+                .fold((Vec3::new(f64::MAX, f64::MAX, f64::MAX), Vec3::new(f64::MIN, f64::MIN, f64::MIN)), |(a, b), p| (a.min(*p), b.max(*p)));
+            mn.x <= hi.x + step && mx.x >= lo.x - step && mn.y <= hi.y + step && mx.y >= lo.y - step && mn.z <= hi.z + step && mx.z >= lo.z - step
+        })
+        .collect();
+    if near.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (mut fmin, mut fmax) = (Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN));
+    for (_, t2) in &near {
+        for p in t2 {
+            fmin = Vec2::new(fmin.x.min(p.x), fmin.y.min(p.y));
+            fmax = Vec2::new(fmax.x.max(p.x), fmax.y.max(p.y));
+        }
+    }
+    // A margin of one step, outside the wall, closes cut-outs that reach its edge.
+    let origin = fmin - Vec2::new(step, step);
+    let nx = (((fmax.x - fmin.x) / step).ceil() as usize).saturating_add(3);
+    let ny = (((fmax.y - fmin.y) / step).ceil() as usize).saturating_add(3);
+    if nx.saturating_mul(ny) > MAX_NODES {
+        return Err(DocError::Invalid("not supported yet: a cut this large through a sheet metal loft".into()));
+    }
+    let at = |i: usize, j: usize| origin + Vec2::new(i as f64 * step, j as f64 * step);
+    let test = |p: Vec2| lift(&near, p).is_some_and(inside);
+    let mut val = vec![false; nx * ny];
+    for j in 0..ny {
+        for i in 0..nx {
+            if let Some(v) = val.get_mut(j * nx + i) {
+                *v = test(at(i, j));
+            }
+        }
+    }
+    let node = |i: usize, j: usize| val.get(j * nx + i).copied().unwrap_or(false);
+    if !val.iter().any(|v| *v) {
+        return Ok(Vec::new());
+    }
+    // The crossing on a grid edge, found by halving.
+    let crossing = |a: Vec2, b: Vec2, a_in: bool| {
+        let (mut p, mut q) = (a, b);
+        for _ in 0..12 {
+            let m = p.lerp(q, 0.5);
+            if test(m) == a_in {
+                p = m;
+            } else {
+                q = m;
+            }
+        }
+        p.lerp(q, 0.5)
+    };
+    // Edge ids: 2·node (to the right), 2·node + 1 (upwards).
+    let h = |i: usize, j: usize| 2 * (j * nx + i);
+    let v = |i: usize, j: usize| 2 * (j * nx + i) + 1;
+    let mut points: std::collections::HashMap<usize, Vec2> = std::collections::HashMap::new();
+    let mut links: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for j in 0..ny - 1 {
+        for i in 0..nx - 1 {
+            let c = [node(i, j), node(i + 1, j), node(i + 1, j + 1), node(i, j + 1)];
+            if c.iter().all(|x| *x == c[0]) {
+                continue;
+            }
+            let corners = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+            let ids = [h(i, j), v(i + 1, j), h(i, j + 1), v(i, j)];
+            let mut crossed = Vec::with_capacity(4);
+            for k in 0..4 {
+                let (k2, id) = ((k + 1) % 4, ids[k]);
+                if c[k] != c[k2] {
+                    points.entry(id).or_insert_with(|| crossing(corners[k], corners[k2], c[k]));
+                    crossed.push(k);
+                }
+            }
+            let pairs: Vec<(usize, usize)> = if crossed.len() == 4 {
+                // A saddle: the middle decides which corners join.
+                let mid = test(at(i, j).lerp(at(i + 1, j + 1), 0.5));
+                if mid == c[1] { vec![(3, 0), (1, 2)] } else { vec![(0, 1), (2, 3)] }
+            } else if let [a, b] = crossed[..] {
+                vec![(a, b)]
+            } else {
+                Vec::new()
+            };
+            for (a, b) in pairs {
+                links.entry(ids[a]).or_default().push(ids[b]);
+                links.entry(ids[b]).or_default().push(ids[a]);
+            }
+        }
+    }
+    // Walk the links into loops.
+    let mut used: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut loops = Vec::new();
+    let mut starts: Vec<usize> = links.keys().copied().collect();
+    starts.sort_unstable();
+    for start in starts {
+        if used.contains(&start) {
+            continue;
+        }
+        let mut lp = Vec::new();
+        let (mut prev, mut cur) = (usize::MAX, start);
+        for _ in 0..links.len() + 1 {
+            used.insert(cur);
+            if let Some(p) = points.get(&cur) {
+                lp.push(*p);
+            }
+            let Some(next) = links.get(&cur).and_then(|n| n.iter().copied().find(|x| *x != prev && !used.contains(x))) else { break };
+            prev = cur;
+            cur = next;
+        }
+        // Points along a straight run are dropped.
+        let mut simple: Vec<Vec2> = Vec::with_capacity(lp.len());
+        for p in lp {
+            if let [.., a, b] = simple[..]
+                && (b - a).cross(p - a).abs() < 1e-6 * step * step
+            {
+                simple.pop();
+            }
+            simple.push(p);
+        }
+        if simple.len() >= 3 {
+            loops.push(simple);
+        }
+    }
+    Ok(loops)
 }
 
 #[cfg(test)]

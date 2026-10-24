@@ -613,10 +613,28 @@ pub struct SheetBody {
 
 /// A sheet metal loft's folded wall (already ripped open, a closed triangle mesh wound outward)
 /// and the bend lines of its flat pattern.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoftedSheet {
     pub bends: Vec<BendInfo>,
     pub wall: Vec<[Vec3; 3]>,
+    /// The neutral surface's triangles with their places in the flat pattern (to map cuts).
+    #[serde(default)]
+    pub strip: Vec<crate::sheet_loft::StripTri>,
+    /// What cuts went through the folded wall (closed triangle meshes): its flat cut-outs are in
+    /// the sheet's `holes`.
+    #[serde(default)]
+    pub cuts: Vec<solidcraft_geom::Mesh>,
+}
+
+impl PartialEq for LoftedSheet {
+    fn eq(&self, o: &Self) -> bool {
+        let same_cut = |a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh| a.positions == b.positions && a.triangles == b.triangles;
+        self.bends == o.bends
+            && self.wall == o.wall
+            && self.strip == o.strip
+            && self.cuts.len() == o.cuts.len()
+            && self.cuts.iter().zip(&o.cuts).all(|(a, b)| same_cut(a, b))
+    }
 }
 
 impl LoftedSheet {
@@ -631,7 +649,12 @@ impl LoftedSheet {
                 probe: None,
             })
             .collect();
-        if let Ok(b) = kernel::sew(&faces) {
+        if let Ok(mut b) = kernel::sew(&faces) {
+            for cut in &self.cuts {
+                let size = cut.positions.iter().copied().collect::<solidcraft_geom::Aabb3>().diagonal();
+                b = kernel::faceted_boolean(&b, cut, kernel::BoolOp::Cut, (size * 1e-3).clamp(1e-3, 0.05))?
+                    .ok_or_else(|| DocError::Invalid("a cut took the whole sheet metal loft".into()))?;
+            }
             // Drawn as the smooth wall the facets follow (only real creases keep their lines).
             return Ok(b.with_facet_smoothing(20f64.to_radians()));
         }

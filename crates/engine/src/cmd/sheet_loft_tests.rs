@@ -110,3 +110,32 @@ fn hostile_sheet_lofts_are_refused() {
     run(&mut s, "sheet.loft", json!({"sections": ["Square", "Round"]}));
     assert!(s.execute("sheet.hem", &json!({"edges": [[0, -50, 0]], "length": 10})).is_err());
 }
+
+/// A hole cut through a sheet metal loft's walls (a circle on a plane across it, extruded
+/// through all): the folded wall is cut and the flat pattern gets the cut-outs, two of them,
+/// each a little longer than the circle where the wall leans; unfolded and refolded it stays.
+#[test]
+fn a_cut_through_the_loft_makes_cutouts_in_its_flat_pattern() {
+    let mut s = sections();
+    run(&mut s, "sheet.loft", json!({"sections": ["Square", "Round"]}));
+    let before = volume(&mut s);
+    let flat0 = area(&run(&mut s, "sheet.flat_pattern", json!({}))["outline"][0]);
+    run(&mut s, "sketch.create", json!({"plane": "YZ", "name": "Hole"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 40], "radius": 8}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"sketch": "Hole", "through_all": true, "direction": "symmetric", "operation": "cut"}));
+    let cut = volume(&mut s);
+    assert!(cut < before - 100.0, "{before} -> {cut}");
+    let flat = run(&mut s, "sheet.flat_pattern", json!({}));
+    let holes = flat["cutouts"].as_array().cloned().unwrap_or_default();
+    assert_eq!(holes.len(), 2, "{flat}");
+    let disc = std::f64::consts::PI * 64.0;
+    for h in &holes {
+        let a = area(h);
+        assert!(a > disc * 0.98 && a < disc * 1.6, "a cut-out of {a} mm² for a {disc} mm² circle");
+    }
+    assert!((area(&flat["outline"][0]) - flat0).abs() < 1e-6, "the outline stays");
+    run(&mut s, "sheet.unfold", json!({}));
+    run(&mut s, "sheet.refold", json!({}));
+    assert!((volume(&mut s) - cut).abs() < 1e-3 * cut, "refolded with its holes");
+}

@@ -5824,6 +5824,63 @@ fn thin_loft_tools(
     Ok(vec![Traced::step(wall, &[&outer_tool, &cavity])])
 }
 
+/// Cuts through sheet metal lofts: each lofted sheet the tools pass through keeps the tools (its
+/// folded wall is cut by them) and gets the cut-outs they make in its flat pattern, found where
+/// its neutral surface lies inside them. The bodies handled.
+fn lofted_sheet_cut(st: &mut ModelState, f: &Feature, tools: &[Body], op: Operation, targets: &[String]) -> Result<Vec<String>> {
+    let mut handled = Vec::new();
+    if op != Operation::Cut || !st.sheets.iter().any(|s| s.lofted.is_some()) {
+        return Ok(handled);
+    }
+    let targets: &[String] = if targets.is_empty() { &f.participants } else { targets };
+    let all = targets.len() == 1 && targets.first().is_some_and(|t| t == "*");
+    let mut meshes = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let m = tool.tessellate((tool.size() * 1e-3).clamp(0.005, 0.05))?;
+        let bbox: solidcraft_geom::Aabb3 = m.positions.iter().copied().collect();
+        meshes.push((m, bbox));
+    }
+    for i in 0..st.sheets.len() {
+        let Some(sh) = st.sheets.get(i) else { continue };
+        let Some(lofted) = &sh.lofted else { continue };
+        let name = sh.body.clone();
+        let Some(mb) = st.body(&name) else { continue };
+        let eligible = all || if targets.is_empty() { mb.component == f.component || mb.feature == f.id } else { targets.contains(&name) };
+        if !eligible {
+            continue;
+        }
+        let wall: solidcraft_geom::Aabb3 = mb.mesh().positions.iter().copied().collect();
+        let step = (sh.t * 0.2).clamp(0.05, 0.5);
+        let (mut cuts, mut holes) = (Vec::new(), Vec::new());
+        for (m, bbox) in &meshes {
+            if !bbox.meets(&wall) {
+                continue;
+            }
+            let loops = crate::sheet_loft::flat_cutouts(&lofted.strip, &|p| m.contains(p), bbox.min, bbox.max, step)?;
+            if loops.is_empty() {
+                continue;
+            }
+            holes.extend(loops.into_iter().map(|lp| Region2 { outer: solidcraft_geom::Loop2::polygon(&lp).ccw(), holes: Vec::new() }));
+            cuts.push(m.clone());
+        }
+        if cuts.is_empty() {
+            continue;
+        }
+        if sh.flat {
+            return Err(DocError::Invalid(format!("not supported yet: a cut through `{name}` while it is unfolded; refold it, cut, then unfold")));
+        }
+        if let Some(sh) = st.sheets.get_mut(i) {
+            sh.holes.extend(holes);
+            if let Some(l) = sh.lofted.as_mut() {
+                l.cuts.extend(cuts);
+            }
+        }
+        more::rebuild_sheet(st, i)?;
+        handled.push(name);
+    }
+    Ok(handled)
+}
+
 /// A sheet metal loft: the thin loft's wall ripped open at the middle of its longest straight
 /// side, made a sheet metal body whose flat pattern is the neutral surface unfolded.
 #[allow(clippy::too_many_arguments)]
@@ -5933,7 +5990,7 @@ fn sheet_loft(
     let (Some(a), Some(b)) = (lines.first(), lines.get(1)) else { return Err(DocError::Invalid("loft sections".into())) };
     let unfolded = crate::sheet_loft::unfold(a, b, &frame, rip_at, gap, step, rv.bend_radius, t, rv.k_factor)?;
     // The folded wall: planar facets of the developable strip, sewn into a solid.
-    let lofted = crate::sheet::LoftedSheet { bends: unfolded.bends, wall: unfolded.wall };
+    let lofted = crate::sheet::LoftedSheet { bends: unfolded.bends, wall: unfolded.wall, strip: unfolded.strip, cuts: Vec::new() };
     let wall = lofted.solid()?;
     let ripped = vec![Traced::unnamed(wall)];
     apply_traced(st, f, ripped, Operation::NewBody, &[])?;
@@ -6334,7 +6391,8 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             // Cuts through sheet metal become cut-outs of its flat pattern.
             if matches!(operation, Operation::Cut | Operation::Intersect) && matches!(f.kind, FeatureKind::Extrude { .. }) && !st.sheets.is_empty() {
                 let bodies: Vec<Body> = tools.iter().map(|t| t.body.clone()).collect();
-                let handled = more::sheet_cut(f, st, &bodies, &crate::plain(targets), constructor.as_ref(), warning)?;
+                let mut handled = lofted_sheet_cut(st, f, &bodies, *operation, &crate::plain(targets))?;
+                handled.extend(more::sheet_cut(f, st, &bodies, &crate::plain(targets), constructor.as_ref(), warning)?);
                 if !handled.is_empty() {
                     return apply_beside_sheet_cut(st, f, tools, *operation, &crate::plain(targets), &handled);
                 }
@@ -6344,7 +6402,9 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         FeatureKind::Hole { thread, diameter, .. } => {
             let (spots, dir) = hole_spots(vals, st, f)?;
             let tools = hole_feature_tools(vals, st, f)?;
-            let handled = sheet_hole_cut(st, f, &tools, warning)?;
+            let bodies: Vec<Body> = tools.iter().map(|(t, _)| t.body.clone()).collect();
+            let mut handled = lofted_sheet_cut(st, f, &bodies, Operation::Cut, &[])?;
+            handled.extend(sheet_hole_cut(st, f, &tools, warning)?);
             let tools: Vec<Traced> = tools.into_iter().map(|(tool, _)| tool).collect();
             if handled.is_empty() {
                 apply_traced(st, f, tools, Operation::Cut, &[])?;

@@ -116,7 +116,9 @@ fn member_body(id: &str, a: Vec3, b: Vec3, regions: &[Region2], at: Vec2, turn: 
     }
     let section = |q: Vec2| a + x * (q.x - at.x) + y * (q.y - at.y);
     let onto = |p: Vec3, e: End| p + d * (e.out.dot(e.point - p) / e.out.dot(d));
-    let exact = regions.iter().all(|r| std::iter::once(&r.outer).chain(&r.holes).all(|l| l.segs.iter().all(|g| matches!(g, Seg2::Line { .. } | Seg2::Arc { .. }))));
+    let exact = regions
+        .iter()
+        .all(|r| std::iter::once(&r.outer).chain(&r.holes).all(|l| l.segs.iter().all(|g| matches!(g, Seg2::Line { .. } | Seg2::Arc { .. }))));
     if !exact {
         return member_body_cut(id, a, b, regions, at, turn, start, end);
     }
@@ -232,7 +234,9 @@ fn member_body_cut(id: &str, a: Vec3, b: Vec3, regions: &[Region2], at: Vec2, tu
     };
     for e in [start, end] {
         let cut = Plane::from_normal(e.point, e.out * -1.0).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no end plane")))?;
-        body = kernel::half_space(&body, &cut, true)?.0.ok_or_else(|| DocError::Invalid(format!("the end cut leaves nothing of the member on line `{id}`")))?;
+        body = kernel::half_space(&body, &cut, true)?
+            .0
+            .ok_or_else(|| DocError::Invalid(format!("the end cut leaves nothing of the member on line `{id}`")))?;
     }
     Ok(body)
 }
@@ -348,7 +352,8 @@ fn corner_plan(
                 }
                 CornerTrim::Butt => {
                     let first = through.unwrap_or(if butt_flip { i.max(j) } else { i.min(j) });
-                    let (a_m, a_start, ua, b_m, b_start, ub) = if first == i { (i, i_start, u, j, j_start, v) } else { (j, j_start, v, i, i_start, u) };
+                    let (a_m, a_start, ua, b_m, b_start, ub) =
+                        if first == i { (i, i_start, u, j, j_start, v) } else { (j, j_start, v, i, i_start, u) };
                     // The through member runs on to the far side of the other's section.
                     let Some((bx, by)) = axes(b_m) else { continue };
                     let beyond = -outline.iter().map(|q| (bx * (q.x - at.x) + by * (q.y - at.y)).dot(ua)).fold(0.0_f64, f64::min);

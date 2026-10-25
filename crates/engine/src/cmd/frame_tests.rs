@@ -639,6 +639,11 @@ fn editing_the_feature_keeps_member_names_until_it_names_them() {
     assert_eq!(boxes(&mut s).into_keys().collect::<Vec<_>>(), names);
 }
 
+/// A 40 × 40 solid bar (its overlaps are quick to measure).
+fn bar_40() -> Value {
+    json!({"kind": "bar", "width": 40, "height": 40})
+}
+
 /// Mitred corners: every member of the rectangle is cut on the plane halving its corners, so the
 /// members keep the volume of their centre lines (a mitred prism's), reach the corner's outside
 /// (x from −20 to 620 along the bottom) and no two overlap.
@@ -646,7 +651,7 @@ fn editing_the_feature_keeps_member_names_until_it_names_them() {
 fn mitred_corners_meet_without_overlapping() {
     let mut s = Session::default();
     rectangle_frame(&mut s);
-    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}));
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": bar_40()}));
     let square = run(&mut s, "inspect.interference", json!({}));
     assert_eq!(square["count"], 4, "square ends overlap at the four corners: {square}");
     let mut m = Session::default();
@@ -700,7 +705,11 @@ fn butted_corners_run_one_member_through() {
     let edited = j.doc.features.last().map(|f| f.kind.clone()).unwrap();
     assert!(matches!(edited, solidcraft_doc::FeatureKind::FrameMember { ref joints, .. } if joints.len() == 1));
     // Hostile joint rules are refused.
-    for bad in [json!([{"lines": ["a", "a"], "trim": "miter"}]), json!([{"lines": ["a", "b"], "trim": "weld"}]), json!([{"lines": ["a", "b"], "trim": "butt", "through": "c"}])] {
+    for bad in [
+        json!([{"lines": ["a", "a"], "trim": "miter"}]),
+        json!([{"lines": ["a", "b"], "trim": "weld"}]),
+        json!([{"lines": ["a", "b"], "trim": "butt", "through": "c"}]),
+    ] {
         assert!(j.execute("frame.member", &json!({"sketch": "Frame", "profile": bar, "joints": bad})).is_err());
     }
     assert!(j.execute("frame.member", &json!({"sketch": "Frame", "profile": bar, "corners": "45"})).is_err());
@@ -722,19 +731,4 @@ fn a_tube_ending_on_another_is_cut_to_its_saddle() {
     let v: Vec<f64> = bodies(&mut s).iter().map(|b| b.1).collect();
     assert!(rel(v[0], ring * 400.0) < MEASURED, "{v:?}");
     assert!(v[1] < ring * 200.0 - 1.0 && v[1] > ring * 180.0, "{v:?} vs {}..{}", ring * 180.0, ring * 200.0);
-}
-
-
-#[test]
-fn zz_time_corners() {
-    for corners in ["none", "miter", "butt"] {
-        let mut m = Session::default();
-        rectangle_frame(&mut m);
-        let t = std::time::Instant::now();
-        run(&mut m, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": corners}));
-        eprintln!("{corners}: member {:?}", t.elapsed());
-        let t = std::time::Instant::now();
-        let i = run(&mut m, "inspect.interference", json!({}));
-        eprintln!("{corners}: interference {:?} count {}", t.elapsed(), i["count"]);
-    }
 }

@@ -74,14 +74,20 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
     Ok(())
 }
 
-/// How one member is cut where it meets others: how far it runs on past its line's start and end
-/// (to reach a corner's outside, or to be mitred), the planes it is cut on (each keeping the side
-/// its normal points to), and the members it is cut to fit against.
+/// One end of a member: the plane it ends on (a point of it, and its normal pointing out of the
+/// member).
+#[derive(Clone, Copy, Debug)]
+struct End {
+    point: Vec3,
+    out: Vec3,
+}
+
+/// How one member is cut where it meets others: the planes it ends on (none: square at its line's
+/// end), and the members it is cut to fit against (round faces, where no plane fits).
 #[derive(Clone, Debug, Default)]
 struct MemberTrim {
-    start_ext: f64,
-    end_ext: f64,
-    cuts: Vec<(Vec3, Vec3)>,
+    start: Option<End>,
+    end: Option<End>,
     copes: Vec<usize>,
 }
 
@@ -89,31 +95,164 @@ struct MemberTrim {
 const JOINT_TOL: f64 = 1e-4;
 /// Corners sharper or straighter than this (radians) are left square: a mitre would run out.
 const MIN_CORNER: f64 = 0.035;
+/// An end plane must meet its member's line at least this steeply (the cosine of its tilt).
+const MIN_END_COS: f64 = 0.02;
 
-/// The member along `a`–`b`: the section square to the line, run on past its ends as `trim`
-/// says and cut on its planes.
+/// The member along `a`–`b`: the section square to the line, from its start plane to its end
+/// plane. Built face by face (planes, the round faces' cylinders, and where an end cuts across
+/// them the ellipse arcs exactly): no boolean, so an oblique end costs no more than a square one.
+/// A section with other curves (a sketch's splines) is cut by booleans instead.
 fn member_body(id: &str, a: Vec3, b: Vec3, regions: &[Region2], at: Vec2, turn: f64, trim: &MemberTrim) -> Result<kernel::Body> {
+    use solidcraft_geom::Seg2;
+    use solidcraft_kernel::{EdgeSpec, FaceSpec, SurfSpec};
+    let (x, y) = frame::member_axes(b - a, turn).ok_or_else(|| DocError::Invalid(format!("line `{id}` has no length")))?;
+    let d = (b - a).normalized().ok_or_else(|| DocError::Invalid(format!("line `{id}` has no length")))?;
+    let start = trim.start.unwrap_or(End { point: a, out: d * -1.0 });
+    let end = trim.end.unwrap_or(End { point: b, out: d });
+    for e in [start, end] {
+        if e.out.dot(d).abs() < MIN_END_COS {
+            return Err(DocError::Invalid(format!("the member on line `{id}` would end along its own length")));
+        }
+    }
+    let section = |q: Vec2| a + x * (q.x - at.x) + y * (q.y - at.y);
+    let onto = |p: Vec3, e: End| p + d * (e.out.dot(e.point - p) / e.out.dot(d));
+    let exact = regions.iter().all(|r| std::iter::once(&r.outer).chain(&r.holes).all(|l| l.segs.iter().all(|g| matches!(g, Seg2::Line { .. } | Seg2::Arc { .. }))));
+    if !exact {
+        return member_body_cut(id, a, b, regions, at, turn, start, end);
+    }
+    // The section's pieces: lines, and arcs in pieces of at most a quarter turn (each one conic).
+    enum Piece {
+        Line(Vec2, Vec2),
+        Arc { p: Vec2, q: Vec2, apex: Vec2, mid: Vec2, w: f64, tangent: Vec2 },
+    }
+    let pieces_of = |l: &solidcraft_geom::Loop2| -> Vec<Piece> {
+        let mut out = Vec::new();
+        for g in &l.segs {
+            match *g {
+                Seg2::Line { a, b } => out.push(Piece::Line(a, b)),
+                Seg2::Arc { center, radius, start, sweep } => {
+                    let n = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().clamp(1.0, 8.0) as usize;
+                    let step = sweep / n as f64;
+                    for k in 0..n {
+                        let t0 = start + step * k as f64;
+                        let h = step / 2.0;
+                        let e = |t: f64| Vec2::new(t.cos(), t.sin());
+                        let tangent = Vec2::new(-(t0 + h).sin(), (t0 + h).cos()) * step.signum();
+                        out.push(Piece::Arc {
+                            p: center + e(t0) * radius,
+                            q: center + e(t0 + step) * radius,
+                            apex: center + e(t0 + h) * (radius / h.cos()),
+                            mid: center + e(t0 + h) * radius,
+                            w: h.cos().abs(),
+                            tangent,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    };
+    let loops: Vec<Vec<Piece>> = regions.iter().flat_map(|r| std::iter::once(&r.outer).chain(&r.holes)).map(pieces_of).collect();
+    // How far the faces reach along the line (for the round faces' surfaces).
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for pc in loops.iter().flatten() {
+        let pts = match pc {
+            Piece::Line(p, q) => [*p, *q, *q],
+            Piece::Arc { p, q, apex, .. } => [*p, *q, *apex],
+        };
+        for v in pts {
+            for e in [start, end] {
+                let t = (onto(section(v), e) - a).dot(d);
+                lo = lo.min(t);
+                hi = hi.max(t);
+            }
+        }
+    }
+    if !(lo.is_finite() && hi.is_finite() && hi > lo) {
+        return Err(DocError::Invalid(format!("the member on line `{id}` has no length between its ends")));
+    }
+    let edge = |pc: &Piece, e: End| -> EdgeSpec {
+        match pc {
+            Piece::Line(p, q) => EdgeSpec::Line { a: onto(section(*p), e), b: onto(section(*q), e) },
+            Piece::Arc { p, q, apex, w, .. } => {
+                EdgeSpec::Conic { a: onto(section(*p), e), apex: onto(section(*apex), e), b: onto(section(*q), e), w: *w }
+            }
+        }
+    };
+    let mut faces = Vec::new();
+    // The ends: the end runs the section's way round (counter-clockwise about the line), the
+    // start the other way.
+    for (e, forward) in [(end, true), (start, false)] {
+        let cap: Vec<Vec<EdgeSpec>> = loops
+            .iter()
+            .map(|l| {
+                let es: Vec<EdgeSpec> = l.iter().map(|pc| edge(pc, e)).collect();
+                if forward { es } else { es.iter().rev().map(EdgeSpec::reversed).collect() }
+            })
+            .collect();
+        faces.push(FaceSpec { loops: cap, surface: SurfSpec::Plane, probe: None });
+    }
+    // The sides: one face a piece, from the start to the end.
+    for pc in loops.iter().flatten() {
+        let (p, q) = match pc {
+            Piece::Line(p, q) => (*p, *q),
+            Piece::Arc { p, q, .. } => (*p, *q),
+        };
+        let (ps, qs, qe, pe) = (onto(section(p), start), onto(section(q), start), onto(section(q), end), onto(section(p), end));
+        let lp = vec![edge(pc, start), EdgeSpec::Line { a: qs, b: qe }, edge(pc, end).reversed(), EdgeSpec::Line { a: pe, b: ps }];
+        match pc {
+            Piece::Line(..) => faces.push(FaceSpec { loops: vec![lp], surface: SurfSpec::Plane, probe: None }),
+            Piece::Arc { mid, tangent, .. } => {
+                let back = |v: Vec2| section(v) + d * (lo - 1.0);
+                let surface = SurfSpec::Extruded { a: back(p), b: back(q), mid: back(*mid), dir: d * (hi - lo + 2.0) };
+                let m3 = section(*mid);
+                let (ms, me) = (onto(m3, start), onto(m3, end));
+                let out = (x * tangent.x + y * tangent.y).cross(d);
+                faces.push(FaceSpec { loops: vec![lp], surface, probe: Some(((ms + me) * 0.5, out)) });
+            }
+        }
+    }
+    kernel::sew(&faces).map_err(|e| DocError::Invalid(format!("the member on line `{id}`: {e}")))
+}
+
+/// [`member_body`] by booleans, for a section with other curves than lines and arcs: run on past
+/// both ends and cut on the end planes.
+#[allow(clippy::too_many_arguments)]
+fn member_body_cut(id: &str, a: Vec3, b: Vec3, regions: &[Region2], at: Vec2, turn: f64, start: End, end: End) -> Result<kernel::Body> {
     let (x, y) = frame::member_axes(b - a, turn).ok_or_else(|| DocError::Invalid(format!("line `{id}` has no length")))?;
     let plane = Plane::new(a - x * at.x - y * at.y, x, y).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no plane square to it")))?;
-    let mut bodies = kernel::extrude(&plane, regions, -trim.start_ext, a.dist(b) + trim.end_ext)?;
+    let reach = regions.iter().flat_map(|r| r.outer.polyline(1e-2).iter().map(|q| q.dist(at)).collect::<Vec<_>>()).fold(1.0_f64, f64::max);
+    let run = reach * 50.0 + start.point.dist(a) + end.point.dist(b);
+    let mut bodies = kernel::extrude(&plane, regions, -run, a.dist(b) + run)?;
     let mut body = match (bodies.pop(), bodies.is_empty()) {
         (Some(body), true) => body,
         _ => return Err(DocError::Invalid(format!("the member on line `{id}` is not one solid"))),
     };
-    for (origin, normal) in &trim.cuts {
-        let cut = Plane::from_normal(*origin, *normal).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no corner cut")))?;
-        body = kernel::half_space(&body, &cut, true)?
-            .0
-            .ok_or_else(|| DocError::Invalid(format!("the corner cut leaves nothing of the member on line `{id}`")))?;
+    for e in [start, end] {
+        let cut = Plane::from_normal(e.point, e.out * -1.0).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no end plane")))?;
+        body = kernel::half_space(&body, &cut, true)?.0.ok_or_else(|| DocError::Invalid(format!("the end cut leaves nothing of the member on line `{id}`")))?;
     }
     Ok(body)
 }
 
+/// Where member `a`'s outside is flat towards `towards` (a unit direction square to its line):
+/// the distance of that face from its line, when the section's support that way is a straight
+/// side (not a round's single point).
+fn flat_side(outline: &[Vec2], ax: Vec3, ay: Vec3, at: Vec2, towards: Vec3) -> (f64, bool) {
+    let vals: Vec<f64> = outline.iter().map(|q| (ax * (q.x - at.x) + ay * (q.y - at.y)).dot(towards)).collect();
+    let h = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let support: Vec<Vec2> = outline.iter().zip(&vals).filter(|(_, v)| **v > h - 1e-6).map(|(q, _)| *q).collect();
+    let flat = support.iter().any(|p| support.iter().any(|q| p.dist(*q) > 1e-3));
+    (h, flat)
+}
+
 /// How each member is cut at corners and where it ends on another line. A corner is two line
-/// ends at one point: mitred (both cut on the plane halving it) or butted (the member running
-/// through goes on to the other's outside; the other is cut to fit against it). Three or more
-/// ends at one point, and a line ending on another's middle, are butted against the first line
-/// there.
+/// ends at one point: mitred (both end on the plane halving it) or butted (the member running
+/// through goes on to the other's outside; the other ends on its face, or is cut to fit a round
+/// one). Three or more ends at one point, and a line ending on another's middle, are butted
+/// against the first line there.
 fn corner_plan(
     segments: &[(String, Vec3, Vec3)],
     regions: &[Region2],
@@ -129,9 +268,7 @@ fn corner_plan(
     if corners.is_none() && joints.iter().all(|j| j.trim.is_none()) {
         return Ok(plan);
     }
-    // How far the section reaches from the line, and its outline (for butt depths).
-    let outline: Vec<Vec2> = regions.iter().flat_map(|r| r.outer.polyline(1e-2).iter().copied().collect::<Vec<_>>()).collect();
-    let reach = outline.iter().map(|q| q.dist(at)).fold(0.0_f64, f64::max).max(1e-3);
+    let outline: Vec<Vec2> = regions.iter().flat_map(|r| r.outer.polyline(1e-3).iter().copied().collect::<Vec<_>>()).collect();
     let rule = |i: usize, j: usize| -> (CornerTrim, Option<usize>) {
         let (Some((ia, ..)), Some((ja, ..))) = (segments.get(i), segments.get(j)) else { return (corners, None) };
         match joints.iter().find(|r| (r.lines[0] == *ia && r.lines[1] == *ja) || (r.lines[0] == *ja && r.lines[1] == *ia)) {
@@ -139,7 +276,39 @@ fn corner_plan(
             None => (corners, None),
         }
     };
-    // Every end: (member, at its start?, the point, the direction from it into the member).
+    let axes = |m: usize| -> Option<(Vec3, Vec3)> { segments.get(m).and_then(|(_, a, b)| frame::member_axes(*b - *a, turn)) };
+    let set_end = |plan: &mut Vec<MemberTrim>, m: usize, at_start: bool, e: End| {
+        if let Some(t) = plan.get_mut(m) {
+            if at_start {
+                t.start = Some(e);
+            } else {
+                t.end = Some(e);
+            }
+        }
+    };
+    // Member `b` (its end at `p`, `ub` the way into it) stops against member `a` (along `da`):
+    // on `a`'s face where that is flat, else cut to fit `a`'s outside.
+    let butt = |plan: &mut Vec<MemberTrim>, a: usize, da: Vec3, b: usize, b_start: bool, p: Vec3, ub: Vec3| {
+        let towards = (ub - da * ub.dot(da)).normalized();
+        let flat = match (towards, axes(a)) {
+            (Some(t), Some((ax, ay))) => {
+                let (h, flat) = flat_side(&outline, ax, ay, at, t);
+                flat.then_some((t, h))
+            }
+            _ => None,
+        };
+        match flat {
+            Some((t, h)) if t.dot(ub).abs() >= MIN_END_COS => set_end(plan, b, b_start, End { point: p + t * h, out: t * -1.0 }),
+            _ => {
+                if let Some(m) = plan.get_mut(b)
+                    && !m.copes.contains(&a)
+                {
+                    m.copes.push(a);
+                }
+            }
+        }
+    };
+    // Every end: (member, at its start?, the point, the way from it into the member).
     let ends: Vec<(usize, bool, Vec3, Vec3)> = segments
         .iter()
         .enumerate()
@@ -150,7 +319,7 @@ fn corner_plan(
         .collect();
     let mut grouped = vec![false; ends.len()];
     for k in 0..ends.len() {
-        if grouped[k] {
+        if grouped.get(k).copied().unwrap_or(true) {
             continue;
         }
         let Some(&(_, _, p, _)) = ends.get(k) else { continue };
@@ -160,10 +329,6 @@ fn corner_plan(
                 *g = true;
             }
         }
-        if group.len() < 2 {
-            continue;
-        }
-        let members: Vec<usize> = group.iter().filter_map(|&m| ends.get(m).map(|e| e.0)).collect();
         if group.len() == 2 {
             let (Some(&(i, i_start, _, u)), Some(&(j, j_start, _, v))) = (ends.get(group[0]), ends.get(group[1])) else { continue };
             if i == j {
@@ -176,52 +341,38 @@ fn corner_plan(
             }
             match trim {
                 CornerTrim::Miter => {
-                    let ext = (reach / (angle / 2.0).tan()).min(100.0 * reach) + reach;
                     let Some(nrm) = (u - v).normalized() else { continue };
-                    for (m, start, side) in [(i, i_start, nrm), (j, j_start, nrm * -1.0)] {
-                        if let Some(t) = plan.get_mut(m) {
-                            if start {
-                                t.start_ext = t.start_ext.max(ext);
-                            } else {
-                                t.end_ext = t.end_ext.max(ext);
-                            }
-                            t.cuts.push((p, side));
-                        }
-                    }
+                    // Each keeps the side of the halving plane its own line runs into.
+                    set_end(&mut plan, i, i_start, End { point: p, out: nrm * -1.0 });
+                    set_end(&mut plan, j, j_start, End { point: p, out: nrm });
                 }
                 CornerTrim::Butt => {
                     let first = through.unwrap_or(if butt_flip { i.max(j) } else { i.min(j) });
-                    let (a_m, a_start, ua, b_m) = if first == i { (i, i_start, u, j) } else { (j, j_start, v, i) };
-                    // The through member runs on to the far side of the other's section (as it is
-                    // placed on its own line: its axes follow that line's direction).
-                    let Some((_, ba, bb)) = segments.get(b_m) else { continue };
-                    let (bx, by) = frame::member_axes(*bb - *ba, turn).unwrap_or((Vec3::X, Vec3::Y));
+                    let (a_m, a_start, ua, b_m, b_start, ub) = if first == i { (i, i_start, u, j, j_start, v) } else { (j, j_start, v, i, i_start, u) };
+                    // The through member runs on to the far side of the other's section.
+                    let Some((bx, by)) = axes(b_m) else { continue };
                     let beyond = -outline.iter().map(|q| (bx * (q.x - at.x) + by * (q.y - at.y)).dot(ua)).fold(0.0_f64, f64::min);
-                    if let Some(t) = plan.get_mut(a_m) {
-                        if a_start {
-                            t.start_ext = t.start_ext.max(beyond);
-                        } else {
-                            t.end_ext = t.end_ext.max(beyond);
-                        }
-                    }
-                    if let Some(t) = plan.get_mut(b_m) {
-                        t.copes.push(a_m);
-                    }
+                    set_end(&mut plan, a_m, a_start, End { point: p - ua * beyond, out: ua * -1.0 });
+                    butt(&mut plan, a_m, ua, b_m, b_start, p, ub);
                 }
                 CornerTrim::None => {}
             }
             continue;
         }
+        if group.len() < 2 {
+            continue;
+        }
         // Three or more: every later one butts on the first (unless a rule leaves it square).
-        let Some(&first) = members.first() else { continue };
-        for &m in members.iter().skip(1) {
-            if m != first && !rule(first, m).0.is_none() && let Some(t) = plan.get_mut(m) {
-                t.copes.push(first);
+        let Some(&(first, _, _, uf)) = group.first().and_then(|&g| ends.get(g)) else { continue };
+        for &g in group.iter().skip(1) {
+            let Some(&(m, m_start, _, um)) = ends.get(g) else { continue };
+            if m != first && !rule(first, m).0.is_none() {
+                butt(&mut plan, first, uf, m, m_start, p, um);
             }
         }
     }
-    // Lines ending on another line's middle: cut to fit against it.
-    for &(j, _, p, _) in &ends {
+    // Lines ending on another line's middle: stopped on its face, or cut to fit against it.
+    for &(j, j_start, p, uj) in &ends {
         for (i, (_, a, b)) in segments.iter().enumerate() {
             if i == j || rule(i, j).0.is_none() {
                 continue;
@@ -229,10 +380,8 @@ fn corner_plan(
             let len = a.dist(*b);
             let Some(d) = (*b - *a).normalized() else { continue };
             let t = (p - *a).dot(d);
-            if t > JOINT_TOL && t < len - JOINT_TOL && (p - (*a + d * t)).len() < JOINT_TOL && let Some(m) = plan.get_mut(j) {
-                if !m.copes.contains(&i) {
-                    m.copes.push(i);
-                }
+            if t > JOINT_TOL && t < len - JOINT_TOL && (p - (*a + d * t)).len() < JOINT_TOL {
+                butt(&mut plan, i, d, j, j_start, p, uj);
             }
         }
     }

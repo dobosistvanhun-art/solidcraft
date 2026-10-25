@@ -41,12 +41,22 @@ pub enum EdgeSpec {
         degree: usize,
         ctrl: Arc<[Vec3]>,
     },
+    /// A conic arc (a circle's or an ellipse's) from `a` to `b`: one rational quadratic with
+    /// `apex` its middle control point (where the tangents at the ends meet) and `w` its weight
+    /// (0 < w ≤ 1; a circular arc of angle θ has w = cos θ/2). An oblique cut through a round
+    /// face's arc is this exactly: the arc moved square to its plane keeps its weight.
+    Conic {
+        a: Vec3,
+        apex: Vec3,
+        b: Vec3,
+        w: f64,
+    },
 }
 
 impl EdgeSpec {
     fn ends(&self) -> (Vec3, Vec3) {
         match self {
-            EdgeSpec::Line { a, b } | EdgeSpec::Arc { a, b, .. } => (*a, *b),
+            EdgeSpec::Line { a, b } | EdgeSpec::Arc { a, b, .. } | EdgeSpec::Conic { a, b, .. } => (*a, *b),
             EdgeSpec::Chain { ctrl, .. } => (ctrl.first().copied().unwrap_or(Vec3::ZERO), ctrl.last().copied().unwrap_or(Vec3::ZERO)),
         }
     }
@@ -65,6 +75,7 @@ impl EdgeSpec {
                 let first = *ctrl.first()?;
                 ctrl.iter().skip(1).map(|p| *p - first).find(|d| d.len() > 1e-12)?
             }
+            EdgeSpec::Conic { a, apex, .. } => *apex - *a,
         };
         d.normalized()
     }
@@ -75,7 +86,13 @@ impl EdgeSpec {
             EdgeSpec::Line { a, b } => EdgeSpec::Line { a: *b, b: *a },
             EdgeSpec::Arc { a, b, mid } => EdgeSpec::Arc { a: *b, b: *a, mid: *mid },
             EdgeSpec::Chain { degree, ctrl } => EdgeSpec::Chain { degree: *degree, ctrl: ctrl.iter().rev().copied().collect() },
+            EdgeSpec::Conic { a, apex, b, w } => EdgeSpec::Conic { a: *b, apex: *apex, b: *a, w: *w },
         }
+    }
+
+    /// The conic's middle point (its parameter ½), the same whichever way it runs.
+    fn conic_mid(a: Vec3, apex: Vec3, b: Vec3, w: f64) -> Vec3 {
+        ((a + b) + apex * (2.0 * w)) * (1.0 / (2.0 + 2.0 * w))
     }
 
     /// A point telling apart edges with the same ends, whichever way they run.
@@ -83,6 +100,7 @@ impl EdgeSpec {
         match self {
             EdgeSpec::Line { .. } => None,
             EdgeSpec::Arc { mid, .. } => Some(key(*mid)),
+            EdgeSpec::Conic { a, apex, b, w } => Some(key(EdgeSpec::conic_mid(*a, *apex, *b, *w))),
             EdgeSpec::Chain { ctrl, .. } => {
                 // Summed in pairs from both ends, so that the chain run either way gives the very
                 // same point: a font's control points are simple fractions, whose mean can fall
@@ -103,6 +121,7 @@ impl EdgeSpec {
         match self {
             EdgeSpec::Line { a, b } => a.is_finite() && b.is_finite(),
             EdgeSpec::Arc { a, b, mid } => a.is_finite() && b.is_finite() && mid.is_finite(),
+            EdgeSpec::Conic { a, apex, b, w } => a.is_finite() && apex.is_finite() && b.is_finite() && *w > 0.0 && *w <= 1.0,
             EdgeSpec::Chain { degree, ctrl } => {
                 (1..=MAX_CHAIN_DEGREE).contains(degree)
                     && ctrl.len() > *degree
@@ -193,6 +212,7 @@ fn welded(faces: &[FaceSpec]) -> Option<Vec<FaceSpec>> {
     let edge = |e: &EdgeSpec| match e {
         EdgeSpec::Line { a, b } => EdgeSpec::Line { a: weld(*a), b: weld(*b) },
         EdgeSpec::Arc { a, b, mid } => EdgeSpec::Arc { a: weld(*a), b: weld(*b), mid: *mid },
+        EdgeSpec::Conic { a, apex, b, w } => EdgeSpec::Conic { a: weld(*a), apex: *apex, b: weld(*b), w: *w },
         EdgeSpec::Chain { degree, ctrl } => {
             let mut ctrl = ctrl.to_vec();
             let n = ctrl.len();
@@ -245,6 +265,18 @@ impl Cache {
         let made = match e {
             EdgeSpec::Line { .. } => builder::line(&va, &vb),
             EdgeSpec::Arc { mid, .. } => arc_edge(&va, &vb, *mid),
+            EdgeSpec::Conic { apex, w, .. } => {
+                if !e.valid() {
+                    return Err(KernelError::Invalid("sew: a conic needs finite points and a weight in (0, 1]".into()));
+                }
+                let (pa, pb) = (va.point(), vb.point());
+                let h = |p: Vec3, w: f64| mt::Vector4::new(p.x * w, p.y * w, p.z * w, w);
+                let curve = mt::NurbsCurve::new(mt::BSplineCurve::new(
+                    mt::KnotVec::bezier_knot(2),
+                    vec![h(Vec3::new(pa.x, pa.y, pa.z), 1.0), h(*apex, *w), h(Vec3::new(pb.x, pb.y, pb.z), 1.0)],
+                ));
+                mt::Edge::try_new(&va, &vb, mt::Curve::NurbsCurve(curve)).map_err(|e| KernelError::Failed(format!("sew: conic edge: {e}")))?
+            }
             EdgeSpec::Chain { .. } => {
                 let curve = self.chain(e)?;
                 mt::Edge::try_new(&va, &vb, mt::Curve::BSplineCurve(curve)).map_err(|e| KernelError::Failed(format!("sew: chain edge: {e}")))?
@@ -503,6 +535,10 @@ fn plane_normal(face: &FaceSpec) -> Option<Vec3> {
     let n = face.loops.first()?.iter().fold(Vec3::ZERO, |n, e| match e {
         EdgeSpec::Line { a, b } => n + a.cross(*b),
         EdgeSpec::Arc { a, b, mid } => n + a.cross(*mid) + mid.cross(*b),
+        EdgeSpec::Conic { a, apex, b, w } => {
+            let m = EdgeSpec::conic_mid(*a, *apex, *b, *w);
+            n + a.cross(m) + m.cross(*b)
+        }
         EdgeSpec::Chain { ctrl, .. } => ctrl.iter().zip(ctrl.iter().skip(1)).fold(n, |n, (p, q)| n + p.cross(*q)),
     });
     n.normalized()

@@ -1310,3 +1310,51 @@ mod tests {
         assert!(sew(&flat).unwrap_err().to_string().contains("not on one plane"));
     }
 }
+
+#[cfg(test)]
+mod conic_tests {
+    use super::*;
+
+    /// A quarter cylinder r 10 along Z, cut square at z = 0 and on the plane z = 20 + x (45°):
+    /// sewn with the oblique end's ellipse arc as one conic, the volume is exact
+    /// (∫ over the quarter disc of (20 + x) dA = 20·π·100/4 + ∫x dA = 500π + 1000/3).
+    #[test]
+    fn an_oblique_cut_round_face_sews_with_a_conic_edge() {
+        let r = 10.0;
+        let lift = |p: Vec3| Vec3::new(p.x, p.y, 20.0 + p.x);
+        let (o, p, q) = (Vec3::ZERO, Vec3::new(r, 0.0, 0.0), Vec3::new(0.0, r, 0.0));
+        let apex = Vec3::new(r, r, 0.0);
+        let w = std::f64::consts::FRAC_PI_4.cos();
+        let mid = Vec3::new(r * w, r * w, 0.0);
+        let line = |a: Vec3, b: Vec3| EdgeSpec::Line { a, b };
+        let bottom = FaceSpec {
+            loops: vec![vec![line(o, q), EdgeSpec::Conic { a: q, apex, b: p, w }, line(p, o)]],
+            surface: SurfSpec::Plane,
+            probe: None,
+        };
+        let top = FaceSpec {
+            loops: vec![vec![line(lift(o), lift(p)), EdgeSpec::Conic { a: lift(p), apex: lift(apex), b: lift(q), w }, line(lift(q), lift(o))]],
+            surface: SurfSpec::Plane,
+            probe: None,
+        };
+        let side_x = FaceSpec { loops: vec![vec![line(o, p), line(p, lift(p)), line(lift(p), lift(o)), line(lift(o), o)]], surface: SurfSpec::Plane, probe: None };
+        let side_y = FaceSpec { loops: vec![vec![line(q, o), line(o, lift(o)), line(lift(o), lift(q)), line(lift(q), q)]], surface: SurfSpec::Plane, probe: None };
+        let round = FaceSpec {
+            loops: vec![vec![
+                EdgeSpec::Conic { a: p, apex, b: q, w },
+                line(q, lift(q)),
+                EdgeSpec::Conic { a: lift(q), apex: lift(apex), b: lift(p), w },
+                line(lift(p), p),
+            ]],
+            surface: SurfSpec::Extruded { a: p - Vec3::Z, b: q - Vec3::Z, mid: mid - Vec3::Z, dir: Vec3::Z * 40.0 },
+            probe: Some((Vec3::new(r * w, r * w, 15.0), Vec3::new(1.0, 1.0, 0.0))),
+        };
+        let body = sew(&[bottom, top, side_x, side_y, round]).unwrap();
+        let v = crate::measure(&body).unwrap().volume;
+        let want = 500.0 * std::f64::consts::PI + 1000.0 / 3.0;
+        assert!((v - want).abs() < 1e-3 * want, "{v} vs {want}");
+        // Hostile conics are refused.
+        let bad = FaceSpec { loops: vec![vec![line(o, q), EdgeSpec::Conic { a: q, apex, b: p, w: 0.0 }, line(p, o)]], surface: SurfSpec::Plane, probe: None };
+        assert!(sew(&[bad]).is_err());
+    }
+}

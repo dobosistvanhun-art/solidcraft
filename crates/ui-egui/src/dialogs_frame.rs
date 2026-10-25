@@ -28,6 +28,9 @@ const ANCHORS: [(&str, &str); 11] = [
     ("bottom_right", "Bottom Right"),
 ];
 
+/// How corners are cut, as `frame.member` names them, and their labels.
+const CORNERS: [(&str, &str); 3] = [("none", "Square"), ("miter", "Miter"), ("butt", "Butt")];
+
 /// The Frame Member dialog's values (the picks are its selection inputs).
 #[derive(Clone, Debug)]
 pub struct Member {
@@ -45,6 +48,9 @@ pub struct Member {
     pub angle: String,
     pub mirror: bool,
     pub name: String,
+    /// Index into `CORNERS`.
+    pub corners: usize,
+    pub butt_flip: bool,
 }
 
 impl Member {
@@ -59,7 +65,18 @@ impl Member {
             .collect();
         // A rectangular tube is the most common member.
         let kind = frame::profile_kinds().iter().position(|k| k.kind == "rect_tube").unwrap_or(0);
-        Member { all: false, kind, dims, whole: None, anchor: 0, angle: String::new(), mirror: false, name: String::new() }
+        Member {
+            all: false,
+            kind,
+            dims,
+            whole: None,
+            anchor: 0,
+            angle: String::new(),
+            mirror: false,
+            name: String::new(),
+            corners: 0,
+            butt_flip: false,
+        }
     }
 }
 
@@ -100,6 +117,12 @@ pub fn rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &[SelInpu
     choice_row(ui, "Anchor", "frame_anchor", &mut m.anchor, &anchors);
     enter |= hint_row(ui, "Angle", &mut m.angle, "0 deg");
     form_row(ui, "Mirror", |ui| check(ui, &mut m.mirror));
+    // Where lines meet: mitred, or one member butting on the other (cut to fit against it).
+    let corners: Vec<&str> = CORNERS.iter().map(|c| c.1).collect();
+    choice_row(ui, "Corners", "frame_corners", &mut m.corners, &corners);
+    if CORNERS.get(m.corners).is_some_and(|c| c.0 == "butt") {
+        form_row(ui, "Other Runs Through", |ui| check(ui, &mut m.butt_flip));
+    }
     enter |= text_row(ui, "Name", &mut m.name, tr("from the profile")).0;
     enter
 }
@@ -163,6 +186,14 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
     if m.mirror {
         p["mirror"] = json!(true);
     }
+    if m.corners != 0
+        && let Some((corners, _)) = CORNERS.get(m.corners)
+    {
+        p["corners"] = json!(corners);
+        if *corners == "butt" && m.butt_flip {
+            p["butt_flip"] = json!(true);
+        }
+    }
     if let Value::Object(o) = &mut p {
         for (key, v) in extra {
             o.entry(key.clone()).or_insert_with(|| v.clone());
@@ -173,7 +204,9 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
 
 /// The dialog editing a frame member feature, filled from it.
 pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelInput>, Map<String, Value>)> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, angle, mirror, body_name, .. } = kind else { return None };
+    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, angle, mirror, body_name, corners, butt_flip, joints, .. } = kind else {
+        return None;
+    };
     let (_, mut inputs) = start(app, "frame.member")?;
     let st = app.session.model.state();
     let mut m = Member::new();
@@ -207,7 +240,17 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
     m.angle = angle.as_deref().map(|a| shown_expr(a, ValueKind::Angle)).unwrap_or_default();
     m.mirror = *mirror;
     m.name = body_name.clone().unwrap_or_default();
-    Some((Kind::Frame(m), inputs, Map::new()))
+    let corners = serde_json::to_value(corners).ok();
+    m.corners = CORNERS.iter().position(|(c, _)| corners.as_ref().and_then(Value::as_str) == Some(*c)).unwrap_or(0);
+    m.butt_flip = *butt_flip;
+    // The corners cut differently (set by command) stay as they are when the feature is edited.
+    let mut extra = Map::new();
+    if !joints.is_empty()
+        && let Ok(j) = serde_json::to_value(joints)
+    {
+        extra.insert("joints".into(), j);
+    }
+    Some((Kind::Frame(m), inputs, extra))
 }
 
 #[cfg(test)]

@@ -23,7 +23,8 @@ const STRAIGHT_TOL: f64 = 1e-3;
 /// Evaluate a `FrameMember` feature: one new body per line, each named
 /// ([`member_names`], or by position for a copy whose `body_names` were set).
 pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &mut ModelState) -> Result<()> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, angle, mirror, body_name, names } = &f.kind else {
+    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, angle, mirror, body_name, names, corners, butt_flip, joints } = &f.kind
+    else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
     let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch} (it must come earlier in the timeline)")))?;
@@ -40,15 +41,20 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
         Some(e) => val(vals, e, Kind::Angle)?,
         None => 0.0,
     };
+    let plan = corner_plan(&segments, &regions, at, turn, *corners, *butt_flip, joints)?;
     let mut made = Vec::with_capacity(segments.len());
-    for (id, a, b) in &segments {
-        let (x, y) = frame::member_axes(*b - *a, turn).ok_or_else(|| DocError::Invalid(format!("line `{id}` has no length")))?;
-        let plane = Plane::new(*a - x * at.x - y * at.y, x, y).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no plane square to it")))?;
-        let mut bodies = kernel::extrude(&plane, &regions, 0.0, a.dist(*b))?;
-        let body = match (bodies.pop(), bodies.is_empty()) {
-            (Some(body), true) => body,
-            _ => return Err(DocError::Invalid(format!("the member on line `{id}` is not one solid"))),
-        };
+    for (i, (id, a, b)) in segments.iter().enumerate() {
+        let trim = plan.get(i).cloned().unwrap_or_default();
+        let mut body = member_body(id, *a, *b, &regions, at, turn, &trim)?;
+        // Cut to fit against the members it butts on (their outside: a tube's hollow is no room).
+        for &other in &trim.copes {
+            let Some((oid, oa, ob)) = segments.get(other) else { continue };
+            let otrim = plan.get(other).cloned().unwrap_or_default();
+            let outer: Vec<Region2> = regions.iter().map(|r| Region2 { outer: r.outer.clone(), holes: Vec::new() }).collect();
+            let envelope = member_body(oid, *oa, *ob, &outer, at, turn, &MemberTrim { copes: Vec::new(), ..otrim })?;
+            body = kernel::boolean(&body, &envelope, kernel::BoolOp::Cut)?
+                .ok_or_else(|| DocError::Invalid(format!("the member on line `{id}` is used up where it meets line `{oid}`")))?;
+        }
         made.push(crate::lineage::numbered_tool(body));
     }
     if !f.body_names.is_empty() {
@@ -66,6 +72,171 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
         st.bodies.push(ModelBody::traced_new(name, t, f.id));
     }
     Ok(())
+}
+
+/// How one member is cut where it meets others: how far it runs on past its line's start and end
+/// (to reach a corner's outside, or to be mitred), the planes it is cut on (each keeping the side
+/// its normal points to), and the members it is cut to fit against.
+#[derive(Clone, Debug, Default)]
+struct MemberTrim {
+    start_ext: f64,
+    end_ext: f64,
+    cuts: Vec<(Vec3, Vec3)>,
+    copes: Vec<usize>,
+}
+
+/// Where ends meet (mm).
+const JOINT_TOL: f64 = 1e-4;
+/// Corners sharper or straighter than this (radians) are left square: a mitre would run out.
+const MIN_CORNER: f64 = 0.035;
+
+/// The member along `a`–`b`: the section square to the line, run on past its ends as `trim`
+/// says and cut on its planes.
+fn member_body(id: &str, a: Vec3, b: Vec3, regions: &[Region2], at: Vec2, turn: f64, trim: &MemberTrim) -> Result<kernel::Body> {
+    let (x, y) = frame::member_axes(b - a, turn).ok_or_else(|| DocError::Invalid(format!("line `{id}` has no length")))?;
+    let plane = Plane::new(a - x * at.x - y * at.y, x, y).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no plane square to it")))?;
+    let mut bodies = kernel::extrude(&plane, regions, -trim.start_ext, a.dist(b) + trim.end_ext)?;
+    let mut body = match (bodies.pop(), bodies.is_empty()) {
+        (Some(body), true) => body,
+        _ => return Err(DocError::Invalid(format!("the member on line `{id}` is not one solid"))),
+    };
+    for (origin, normal) in &trim.cuts {
+        let cut = Plane::from_normal(*origin, *normal).ok_or_else(|| DocError::Invalid(format!("line `{id}`: no corner cut")))?;
+        body = kernel::half_space(&body, &cut, true)?
+            .0
+            .ok_or_else(|| DocError::Invalid(format!("the corner cut leaves nothing of the member on line `{id}`")))?;
+    }
+    Ok(body)
+}
+
+/// How each member is cut at corners and where it ends on another line. A corner is two line
+/// ends at one point: mitred (both cut on the plane halving it) or butted (the member running
+/// through goes on to the other's outside; the other is cut to fit against it). Three or more
+/// ends at one point, and a line ending on another's middle, are butted against the first line
+/// there.
+fn corner_plan(
+    segments: &[(String, Vec3, Vec3)],
+    regions: &[Region2],
+    at: Vec2,
+    turn: f64,
+    corners: frame::CornerTrim,
+    butt_flip: bool,
+    joints: &[frame::JointRule],
+) -> Result<Vec<MemberTrim>> {
+    use frame::CornerTrim;
+    let n = segments.len();
+    let mut plan = vec![MemberTrim::default(); n];
+    if corners.is_none() && joints.iter().all(|j| j.trim.is_none()) {
+        return Ok(plan);
+    }
+    // How far the section reaches from the line, and its outline (for butt depths).
+    let outline: Vec<Vec2> = regions.iter().flat_map(|r| r.outer.polyline(1e-2).iter().copied().collect::<Vec<_>>()).collect();
+    let reach = outline.iter().map(|q| q.dist(at)).fold(0.0_f64, f64::max).max(1e-3);
+    let rule = |i: usize, j: usize| -> (CornerTrim, Option<usize>) {
+        let (Some((ia, ..)), Some((ja, ..))) = (segments.get(i), segments.get(j)) else { return (corners, None) };
+        match joints.iter().find(|r| (r.lines[0] == *ia && r.lines[1] == *ja) || (r.lines[0] == *ja && r.lines[1] == *ia)) {
+            Some(r) => (r.trim, r.through.as_ref().and_then(|t| segments.iter().position(|(id, ..)| id == t)).filter(|k| *k == i || *k == j)),
+            None => (corners, None),
+        }
+    };
+    // Every end: (member, at its start?, the point, the direction from it into the member).
+    let ends: Vec<(usize, bool, Vec3, Vec3)> = segments
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (_, a, b))| {
+            let d = (*b - *a).normalized().unwrap_or(Vec3::X);
+            [(i, true, *a, d), (i, false, *b, d * -1.0)]
+        })
+        .collect();
+    let mut grouped = vec![false; ends.len()];
+    for k in 0..ends.len() {
+        if grouped[k] {
+            continue;
+        }
+        let Some(&(_, _, p, _)) = ends.get(k) else { continue };
+        let group: Vec<usize> = (k..ends.len()).filter(|&m| ends.get(m).is_some_and(|e| e.2.dist(p) < JOINT_TOL)).collect();
+        for &m in &group {
+            if let Some(g) = grouped.get_mut(m) {
+                *g = true;
+            }
+        }
+        if group.len() < 2 {
+            continue;
+        }
+        let members: Vec<usize> = group.iter().filter_map(|&m| ends.get(m).map(|e| e.0)).collect();
+        if group.len() == 2 {
+            let (Some(&(i, i_start, _, u)), Some(&(j, j_start, _, v))) = (ends.get(group[0]), ends.get(group[1])) else { continue };
+            if i == j {
+                continue;
+            }
+            let (trim, through) = rule(i, j);
+            let angle = u.dot(v).clamp(-1.0, 1.0).acos();
+            if trim.is_none() || angle < MIN_CORNER || angle > std::f64::consts::PI - MIN_CORNER {
+                continue;
+            }
+            match trim {
+                CornerTrim::Miter => {
+                    let ext = (reach / (angle / 2.0).tan()).min(100.0 * reach) + reach;
+                    let Some(nrm) = (u - v).normalized() else { continue };
+                    for (m, start, side) in [(i, i_start, nrm), (j, j_start, nrm * -1.0)] {
+                        if let Some(t) = plan.get_mut(m) {
+                            if start {
+                                t.start_ext = t.start_ext.max(ext);
+                            } else {
+                                t.end_ext = t.end_ext.max(ext);
+                            }
+                            t.cuts.push((p, side));
+                        }
+                    }
+                }
+                CornerTrim::Butt => {
+                    let first = through.unwrap_or(if butt_flip { i.max(j) } else { i.min(j) });
+                    let (a_m, a_start, ua, b_m) = if first == i { (i, i_start, u, j) } else { (j, j_start, v, i) };
+                    // The through member runs on to the far side of the other's section (as it is
+                    // placed on its own line: its axes follow that line's direction).
+                    let Some((_, ba, bb)) = segments.get(b_m) else { continue };
+                    let (bx, by) = frame::member_axes(*bb - *ba, turn).unwrap_or((Vec3::X, Vec3::Y));
+                    let beyond = -outline.iter().map(|q| (bx * (q.x - at.x) + by * (q.y - at.y)).dot(ua)).fold(0.0_f64, f64::min);
+                    if let Some(t) = plan.get_mut(a_m) {
+                        if a_start {
+                            t.start_ext = t.start_ext.max(beyond);
+                        } else {
+                            t.end_ext = t.end_ext.max(beyond);
+                        }
+                    }
+                    if let Some(t) = plan.get_mut(b_m) {
+                        t.copes.push(a_m);
+                    }
+                }
+                CornerTrim::None => {}
+            }
+            continue;
+        }
+        // Three or more: every later one butts on the first (unless a rule leaves it square).
+        let Some(&first) = members.first() else { continue };
+        for &m in members.iter().skip(1) {
+            if m != first && !rule(first, m).0.is_none() && let Some(t) = plan.get_mut(m) {
+                t.copes.push(first);
+            }
+        }
+    }
+    // Lines ending on another line's middle: cut to fit against it.
+    for &(j, _, p, _) in &ends {
+        for (i, (_, a, b)) in segments.iter().enumerate() {
+            if i == j || rule(i, j).0.is_none() {
+                continue;
+            }
+            let len = a.dist(*b);
+            let Some(d) = (*b - *a).normalized() else { continue };
+            let t = (p - *a).dot(d);
+            if t > JOINT_TOL && t < len - JOINT_TOL && (p - (*a + d * t)).len() < JOINT_TOL && let Some(m) = plan.get_mut(j) {
+                if !m.copes.contains(&i) {
+                    m.copes.push(i);
+                }
+            }
+        }
+    }
+    Ok(plan)
 }
 
 /// The body name of the member on each of `lines`: its own name from `pinned` (by line id) when no

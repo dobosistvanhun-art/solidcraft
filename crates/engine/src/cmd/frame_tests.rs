@@ -638,3 +638,109 @@ fn editing_the_feature_keeps_member_names_until_it_names_them() {
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(boxes(&mut s).into_keys().collect::<Vec<_>>(), names);
 }
+
+/// Mitred corners: every member of the rectangle is cut on the plane halving its corners, so the
+/// members keep the volume of their centre lines (a mitred prism's), reach the corner's outside
+/// (x from −20 to 620 along the bottom) and no two overlap.
+#[test]
+fn mitred_corners_meet_without_overlapping() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}));
+    let square = run(&mut s, "inspect.interference", json!({}));
+    assert_eq!(square["count"], 4, "square ends overlap at the four corners: {square}");
+    let mut m = Session::default();
+    rectangle_frame(&mut m);
+    run(&mut m, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": "miter"}));
+    let bs = bodies(&mut m);
+    assert_eq!(bs.len(), 4);
+    for b in &bs {
+        let len = if (b.3[0] - b.2[0]) > 500.0 { 600.0 } else { 400.0 };
+        assert!(rel(b.1, tube_area() * len) < MEASURED, "{} {} vs {}", b.0, b.1, tube_area() * len);
+    }
+    assert!(bs.iter().any(|b| near3(b.2, [-20.0, -20.0, -20.0]) && near3(b.3, [620.0, 20.0, 20.0])), "{bs:?}");
+    let i = run(&mut m, "inspect.interference", json!({}));
+    assert_eq!(i["count"], 0, "{i}");
+}
+
+/// Butted corners: the first line's member runs on to the others' outside, the other stops
+/// against it; `butt_flip` swaps which one runs through; a joint rule mitres one corner only.
+#[test]
+fn butted_corners_run_one_member_through() {
+    let bar = json!({"kind": "bar", "width": 40, "height": 40});
+    let lengths = |s: &mut Session| -> Vec<f64> {
+        let mut v: Vec<f64> = bodies(s).iter().map(|b| (b.1 / 1600.0 * 1000.0).round() / 1000.0).collect();
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": bar, "corners": "butt"}));
+    // Bottom (first) through at both ends 640; right through at its top 400; top 600; left 360.
+    assert_eq!(lengths(&mut s), [360.0, 400.0, 600.0, 640.0]);
+    assert_eq!(run(&mut s, "inspect.interference", json!({}))["count"], 0);
+    let mut f2 = Session::default();
+    rectangle_frame(&mut f2);
+    run(&mut f2, "frame.member", json!({"sketch": "Frame", "profile": bar, "corners": "butt", "butt_flip": true}));
+    assert_eq!(lengths(&mut f2), [400.0, 440.0, 560.0, 600.0]);
+    assert_eq!(run(&mut f2, "inspect.interference", json!({}))["count"], 0);
+    // One corner mitred, the rest butted.
+    let mut j = Session::default();
+    rectangle_frame(&mut j);
+    let id = j.doc.features.first().map(|f| f.id).unwrap();
+    let lines: Vec<String> = j.model.state().sketch(id).unwrap().sketch.curves.iter().map(|c| c.id.clone()).collect();
+    run(
+        &mut j,
+        "frame.member",
+        json!({"sketch": "Frame", "profile": bar, "corners": "butt", "joints": [{"lines": [lines[0], lines[1]], "trim": "miter"}]}),
+    );
+    assert_eq!(run(&mut j, "inspect.interference", json!({}))["count"], 0);
+    let edited = j.doc.features.last().map(|f| f.kind.clone()).unwrap();
+    assert!(matches!(edited, solidcraft_doc::FeatureKind::FrameMember { ref joints, .. } if joints.len() == 1));
+    // Hostile joint rules are refused.
+    for bad in [json!([{"lines": ["a", "a"], "trim": "miter"}]), json!([{"lines": ["a", "b"], "trim": "weld"}]), json!([{"lines": ["a", "b"], "trim": "butt", "through": "c"}])] {
+        assert!(j.execute("frame.member", &json!({"sketch": "Frame", "profile": bar, "joints": bad})).is_err());
+    }
+    assert!(j.execute("frame.member", &json!({"sketch": "Frame", "profile": bar, "corners": "45"})).is_err());
+}
+
+/// A round tube ending on another's middle (a T) is cut to its saddle: it no longer overlaps the
+/// tube it meets, and keeps most of its length (cut only where it reaches into the other).
+#[test]
+fn a_tube_ending_on_another_is_cut_to_its_saddle() {
+    let pipe = json!({"kind": "round_tube", "diameter": 40, "wall": 3});
+    let ring = PI * (400.0 - 289.0);
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "T"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [400, 0]]}));
+    run(&mut s, "sketch.line", json!({"points": [[200, 0], [200, 200]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "frame.member", json!({"sketch": "T", "profile": pipe, "corners": "butt"}));
+    assert_eq!(run(&mut s, "inspect.interference", json!({}))["count"], 0);
+    let v: Vec<f64> = bodies(&mut s).iter().map(|b| b.1).collect();
+    assert!(rel(v[0], ring * 400.0) < MEASURED, "{v:?}");
+    assert!(v[1] < ring * 200.0 - 1.0 && v[1] > ring * 180.0, "{v:?} vs {}..{}", ring * 180.0, ring * 200.0);
+}
+
+#[test]
+fn zz_probe_angled_cut_through_a_tube() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "L"}));
+    run(&mut s, "sketch.line", json!({"points": [[-150, 0], [150, 0]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "frame.member", json!({"sketch": "L", "profile": tube()}));
+    let full = total_volume(&mut s);
+    run(&mut s, "construct.plane.at_angle", json!({"base": "YZ", "axis": "Z", "angle": "45 deg", "name": "P"}));
+    run(&mut s, "sketch.create", json!({"plane": "P", "name": "Cut"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-60, -60], "p1": [60, 60]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let t = std::time::Instant::now();
+    let r = s.execute("solid.extrude", &json!({"sketch": "Cut", "direction": "two_sides", "extent": "all", "operation": "cut"}));
+    eprintln!("extrude {:?} in {:?}", r.as_ref().map(|_| "ok").map_err(|e| e.to_string()), t.elapsed());
+    let res = s.model.results.last().map(|r| (r.error.clone(), r.warning.clone()));
+    eprintln!("result {res:?}");
+    for b in bodies(&mut s) {
+        eprintln!("{} vol {:.1} min {:?} max {:?}", b.0, b.1, b.2, b.3);
+    }
+    eprintln!("full {full:.1} area {:.1}", tube_area());
+}

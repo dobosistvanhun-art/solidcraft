@@ -980,6 +980,16 @@ pub enum FeatureKind {
         /// come and go (`frame::member_names`).
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         names: std::collections::BTreeMap<String, String>,
+        /// How members are cut where two lines meet at their ends (and, unless `None`, where a
+        /// line ends on another: that member is cut to fit against it).
+        #[serde(default, skip_serializing_if = "crate::frame::CornerTrim::is_none")]
+        corners: crate::frame::CornerTrim,
+        /// For butt corners: the later line's member runs through instead of the earlier one's.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        butt_flip: bool,
+        /// Corners cut differently from `corners`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        joints: Vec<crate::frame::JointRule>,
     },
     /// Raise or sink profiles on a planar face, or wrap them on a selected cylindrical wall.
     Emboss {

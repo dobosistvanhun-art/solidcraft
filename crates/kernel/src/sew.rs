@@ -1327,18 +1327,23 @@ mod conic_tests {
         let w = std::f64::consts::FRAC_PI_4.cos();
         let mid = Vec3::new(r * w, r * w, 0.0);
         let line = |a: Vec3, b: Vec3| EdgeSpec::Line { a, b };
-        let bottom = FaceSpec {
-            loops: vec![vec![line(o, q), EdgeSpec::Conic { a: q, apex, b: p, w }, line(p, o)]],
-            surface: SurfSpec::Plane,
-            probe: None,
-        };
+        let bottom =
+            FaceSpec { loops: vec![vec![line(o, q), EdgeSpec::Conic { a: q, apex, b: p, w }, line(p, o)]], surface: SurfSpec::Plane, probe: None };
         let top = FaceSpec {
             loops: vec![vec![line(lift(o), lift(p)), EdgeSpec::Conic { a: lift(p), apex: lift(apex), b: lift(q), w }, line(lift(q), lift(o))]],
             surface: SurfSpec::Plane,
             probe: None,
         };
-        let side_x = FaceSpec { loops: vec![vec![line(o, p), line(p, lift(p)), line(lift(p), lift(o)), line(lift(o), o)]], surface: SurfSpec::Plane, probe: None };
-        let side_y = FaceSpec { loops: vec![vec![line(q, o), line(o, lift(o)), line(lift(o), lift(q)), line(lift(q), q)]], surface: SurfSpec::Plane, probe: None };
+        let side_x = FaceSpec {
+            loops: vec![vec![line(o, p), line(p, lift(p)), line(lift(p), lift(o)), line(lift(o), o)]],
+            surface: SurfSpec::Plane,
+            probe: None,
+        };
+        let side_y = FaceSpec {
+            loops: vec![vec![line(q, o), line(o, lift(o)), line(lift(o), lift(q)), line(lift(q), q)]],
+            surface: SurfSpec::Plane,
+            probe: None,
+        };
         let round = FaceSpec {
             loops: vec![vec![
                 EdgeSpec::Conic { a: p, apex, b: q, w },
@@ -1354,7 +1359,11 @@ mod conic_tests {
         let want = 500.0 * std::f64::consts::PI + 1000.0 / 3.0;
         assert!((v - want).abs() < 1e-3 * want, "{v} vs {want}");
         // Hostile conics are refused.
-        let bad = FaceSpec { loops: vec![vec![line(o, q), EdgeSpec::Conic { a: q, apex, b: p, w: 0.0 }, line(p, o)]], surface: SurfSpec::Plane, probe: None };
+        let bad = FaceSpec {
+            loops: vec![vec![line(o, q), EdgeSpec::Conic { a: q, apex, b: p, w: 0.0 }, line(p, o)]],
+            surface: SurfSpec::Plane,
+            probe: None,
+        };
         assert!(sew(&[bad]).is_err());
     }
 }

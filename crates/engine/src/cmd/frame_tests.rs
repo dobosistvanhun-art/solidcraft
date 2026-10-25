@@ -764,3 +764,34 @@ fn zz_probe_user_split() {
         eprintln!("{} faces? tris {} edges {} mesh={}", b.name, m.triangles.len(), m.edges.len(), b.body.is_mesh());
     }
 }
+
+#[test]
+fn zz_probe_user_cut_display() {
+    let Ok(text) = std::fs::read_to_string("/tmp/sc-in/user-doc.json") else { return };
+    let mut doc = solidcraft_doc::Document::from_json(&text).unwrap();
+    doc.features.retain(|f| f.id < 10);
+    let mut s = Session::new(doc);
+    let t = std::time::Instant::now();
+    run(&mut s, "solid.extrude", json!({"sketch": "Sketch2", "through_all": true, "distance2": 90, "operation": "cut"}));
+    eprintln!("cut {:?}", t.elapsed());
+    let area = |m: &solidcraft_geom::Mesh| -> (f64, [f64; 6]) {
+        let mut a = 0.0;
+        let mut bb = [f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for t in &m.triangles {
+            let (p, q, r) = (m.positions[t[0] as usize], m.positions[t[1] as usize], m.positions[t[2] as usize]);
+            a += (q - p).cross(r - p).len() / 2.0;
+        }
+        for p in &m.positions {
+            bb = [bb[0].min(p.x), bb[1].min(p.y), bb[2].min(p.z), bb[3].max(p.x), bb[4].max(p.y), bb[5].max(p.z)];
+        }
+        (a, bb)
+    };
+    for b in &s.model.state().bodies {
+        let r = area(&b.mesh());
+        let plan = b.display_plan().map(|p| area(&p.evaluate()));
+        eprintln!("{} ref {:?}\n   plan {:?}", b.name, r, plan);
+        for (i, f) in b.display_plan().map(|p| p.faces.clone()).unwrap_or_default().iter().enumerate() {
+            eprintln!("  face {i} uv {} tris {} surface {:?}", f.uv.len(), f.triangles.len(), f.surface);
+        }
+    }
+}

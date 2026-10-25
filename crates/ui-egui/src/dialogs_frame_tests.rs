@@ -195,3 +195,29 @@ fn picked_lines_stay_in_the_sketch_they_were_picked_in() {
     d.inputs[0].items.push(Sel::ExternalSketchCurve { sketch: rails, id: ids[0].clone() });
     assert!(apply_commands(&app, &d).unwrap_err().contains("one sketch"));
 }
+
+/// Corners: Miter or Butt (with the other member running through) reach `frame.member`, and Edit
+/// Feature shows them again, keeping corners cut differently by command.
+#[test]
+fn corners_are_mitred_or_butted_from_the_dialog() {
+    let mut app = frame_app();
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines);
+    member(&mut d).corners = 2;
+    member(&mut d).butt_flip = true;
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!((c[0].1["corners"].as_str(), c[0].1["butt_flip"].as_bool()), (Some("butt"), Some(true)), "{}", c[0].1);
+    member(&mut d).corners = 1;
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].1["corners"], "miter");
+    assert!(c[0].1.get("butt_flip").is_none());
+    let mut p = c[0].1.clone();
+    p["joints"] = json!([{"lines": [lines[0], lines[1]], "trim": "butt"}]);
+    run_all(&mut app, vec![("frame.member".into(), p)]);
+    let id = app.session.doc.features.last().map(|f| f.id).unwrap();
+    let e = edit_dialog(&app, id, None).unwrap();
+    assert!(matches!(&e.kind, Kind::Frame(m) if m.corners == 1));
+    let again = apply_commands(&app, &e).unwrap();
+    let redefined = again.iter().find(|(_, p)| p.get("joints").is_some() || p["params"].get("joints").is_some());
+    assert!(redefined.is_some(), "{again:?}");
+}

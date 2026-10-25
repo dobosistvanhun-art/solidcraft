@@ -33,7 +33,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("frame.member", "Frame Member", member).at("SOLID", "CREATE").icon("frame_member").enabled(not_in_sketch).params(concat!(
         "sketch: the frame sketch (id or name; 2D or 3D); lines?: [curve ids] (one member each; default: every straight line drawn in the sketch: not construction, not projected or otherwise linked, not of no length); ",
         profile_doc!(),
-        " | profile_sketch: a sketch whose profile is the section, in its own x and y around its origin, with profiles?: picks as solid.extrude takes them (default: its material, nested loops alternating, so two circles make a tube); anchor?: origin|center|centroid|top_left|top|top_right|left|right|bottom_left|bottom|bottom_right (the profile point that sits on each line, default origin); angle?: angle expr (the profile turned about the line; default 0: its y as near world up as the line allows, a vertical member's x along world X); mirror?: bool (the profile mirrored across its y axis); name?; body_name? (what the members are named after, then numbered: `Rail`, `Rail (2)`…; default the profile's description, `Rect Tube 40x40x3`, or the profile sketch's name); names?: {line id: name} (names to keep, as Edit Feature keeps them). One body per line, from its start to its end; each member keeps its name when other lines are added or deleted. Returns the feature and the bodies it made"
+        " | profile_sketch: a sketch whose profile is the section, in its own x and y around its origin, with profiles?: picks as solid.extrude takes them (default: its material, nested loops alternating, so two circles make a tube); anchor?: origin|center|centroid|top_left|top|top_right|left|right|bottom_left|bottom|bottom_right (the profile point that sits on each line, default origin); angle?: angle expr (the profile turned about the line; default 0: its y as near world up as the line allows, a vertical member's x along world X); mirror?: bool (the profile mirrored across its y axis); name?; body_name? (what the members are named after, then numbered: `Rail`, `Rail (2)`…; default the profile's description, `Rect Tube 40x40x3`, or the profile sketch's name); names?: {line id: name} (names to keep, as Edit Feature keeps them); \
+corners?: none|miter|butt (how members are cut where two lines end at one point: none (default) runs each square to its line's end; miter cuts both on the plane halving the corner; \
+butt runs one on to the other's outside and cuts the other to fit against it, a round tube's saddle too; unless none, a line ending on another's middle is cut to fit against it as well); \
+butt_flip?: bool (the later line's member runs through at butt corners, not the earlier one's); \
+joints?: [{lines: [id, id], trim: none|miter|butt, through?: id}] (corners cut differently from `corners`). One body per line, from its start to its end; each member keeps its name when other lines are added or deleted. Returns the feature and the bodies it made"
     )),
     CommandSpec::new("frame.profile.list", "Profile Library", list).icon("library")
         .noundo()
@@ -254,9 +258,46 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
             .collect::<Result<_>>()?,
         Some(_) => return Err(bad(cmd, format!("`names` must map up to {} line ids to names", frame::MAX_MEMBERS))),
     };
+    let corners: frame::CornerTrim = match p.get("corners") {
+        None | Some(Value::Null) => frame::CornerTrim::None,
+        Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad(cmd, "`corners` must be none, miter or butt"))?,
+    };
+    let butt_flip = match p.get("butt_flip") {
+        None | Some(Value::Null) => false,
+        Some(_) => bool_(p, "butt_flip").ok_or_else(|| bad(cmd, "`butt_flip` must be true or false"))?,
+    };
+    let joints: Vec<frame::JointRule> = match p.get("joints") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) if a.len() <= frame::MAX_MEMBERS * 2 => a
+            .iter()
+            .map(|j| {
+                let rule: frame::JointRule = serde_json::from_value(j.clone())
+                    .map_err(|_| bad(cmd, "each of `joints` must be {lines: [line id, line id], trim: none|miter|butt, through?: line id}"))?;
+                if rule.lines[0] == rule.lines[1] || rule.lines.iter().any(|l| l.is_empty() || l.len() > 256) {
+                    return Err(bad(cmd, "a joint is two different lines"));
+                }
+                if rule.through.as_ref().is_some_and(|t| !rule.lines.contains(t)) {
+                    return Err(bad(cmd, "a joint's `through` must be one of its two lines"));
+                }
+                Ok(rule)
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => return Err(bad(cmd, format!("`joints` must list up to {} corners", frame::MAX_MEMBERS * 2))),
+    };
     let base = body_name.clone().unwrap_or(default_name);
-    let mut kind =
-        FeatureKind::FrameMember { path_sketch: SketchId(path_sketch), lines, profile, anchor, angle, mirror, body_name, names: BTreeMap::new() };
+    let mut kind = FeatureKind::FrameMember {
+        path_sketch: SketchId(path_sketch),
+        lines,
+        profile,
+        anchor,
+        angle,
+        mirror,
+        body_name,
+        names: BTreeMap::new(),
+        corners,
+        butt_flip,
+        joints,
+    };
     // Each member's name is pinned to its line as the feature is made, so deleting or adding a
     // line later leaves the other members' names alone.
     let st = s.model.state();

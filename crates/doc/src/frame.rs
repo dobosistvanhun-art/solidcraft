@@ -279,6 +279,37 @@ pub enum MemberProfile {
     },
 }
 
+/// How the members meeting at a corner (two lines ending at one point) are cut there.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CornerTrim {
+    /// Each member runs from its line's start to its end, square (they overlap at corners).
+    #[default]
+    None,
+    /// Both members cut on the plane halving the corner (a 45° cut at a right angle).
+    Miter,
+    /// One member runs on to the outside of the other, square; the other stops against its side,
+    /// cut to its shape (a round tube's saddle too).
+    Butt,
+}
+
+impl CornerTrim {
+    pub fn is_none(&self) -> bool {
+        *self == CornerTrim::None
+    }
+}
+
+/// A corner treated differently from the feature's `corners`: the two lines meeting there, how
+/// they are cut, and for a butt joint the line whose member runs through (default the first of
+/// the feature's lines).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JointRule {
+    pub lines: [String; 2],
+    pub trim: CornerTrim,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
+}
+
 impl Anchor {
     pub fn is_origin(&self) -> bool {
         *self == Anchor::Origin

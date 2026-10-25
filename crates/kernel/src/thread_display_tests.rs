@@ -30,6 +30,7 @@ fn rev(e: &EdgeSpec) -> EdgeSpec {
         EdgeSpec::Chain { degree, ctrl } => EdgeSpec::Chain { degree: *degree, ctrl: ctrl.iter().rev().copied().collect::<Arc<[Vec3]>>() },
         EdgeSpec::Line { a, b } => EdgeSpec::Line { a: *b, b: *a },
         EdgeSpec::Arc { a, b, mid } => EdgeSpec::Arc { a: *b, b: *a, mid: *mid },
+        EdgeSpec::Conic { a, apex, b, w } => EdgeSpec::Conic { a: *b, apex: *apex, b: *a, w: *w },
     }
 }
 
@@ -40,7 +41,7 @@ fn line(a: Vec3, b: Vec3) -> EdgeSpec {
 fn ends(e: &EdgeSpec) -> (Vec3, Vec3) {
     match e {
         EdgeSpec::Chain { ctrl, .. } => (ctrl[0], ctrl[ctrl.len() - 1]),
-        EdgeSpec::Line { a, b } | EdgeSpec::Arc { a, b, .. } => (*a, *b),
+        EdgeSpec::Line { a, b } | EdgeSpec::Arc { a, b, .. } | EdgeSpec::Conic { a, b, .. } => (*a, *b),
     }
 }
 

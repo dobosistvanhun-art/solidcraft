@@ -744,3 +744,23 @@ fn zz_probe_angled_cut_through_a_tube() {
     }
     eprintln!("full {full:.1} area {:.1}", tube_area());
 }
+
+#[test]
+fn zz_probe_user_split() {
+    let Ok(text) = std::fs::read_to_string("/tmp/sc-in/user-doc.json") else { return };
+    let doc = solidcraft_doc::Document::from_json(&text).unwrap();
+    let t = std::time::Instant::now();
+    let mut s = Session::new(doc);
+    eprintln!("eval {:?}", t.elapsed());
+    for r in &s.model.results {
+        eprintln!("feature {} err {:?} warn {:?}", r.id, r.error, r.warning);
+    }
+    for b in bodies(&mut s) {
+        eprintln!("{} vol {:.1} min {:?} max {:?}", b.0, b.1, b.2, b.3);
+    }
+    let st = s.model.state();
+    for b in &st.bodies {
+        let m = b.mesh();
+        eprintln!("{} faces? tris {} edges {} mesh={}", b.name, m.triangles.len(), m.edges.len(), b.body.is_mesh());
+    }
+}

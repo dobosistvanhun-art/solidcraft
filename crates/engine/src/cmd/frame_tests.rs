@@ -735,7 +735,7 @@ fn zz_probe_angled_cut_through_a_tube() {
     run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-60, -60], "p1": [60, 60]}));
     run(&mut s, "sketch.finish", json!({}));
     let t = std::time::Instant::now();
-    let r = s.execute("solid.extrude", &json!({"sketch": "Cut", "direction": "two_sides", "extent": "all", "operation": "cut"}));
+    let r = s.execute("solid.extrude", &json!({"sketch": "Cut", "through_all": true, "distance2": 90, "operation": "cut"}));
     eprintln!("extrude {:?} in {:?}", r.as_ref().map(|_| "ok").map_err(|e| e.to_string()), t.elapsed());
     let res = s.model.results.last().map(|r| (r.error.clone(), r.warning.clone()));
     eprintln!("result {res:?}");

@@ -658,7 +658,9 @@ fn mitred_corners_meet_without_overlapping() {
         let len = if (b.3[0] - b.2[0]) > 500.0 { 600.0 } else { 400.0 };
         assert!(rel(b.1, tube_area() * len) < MEASURED, "{} {} vs {}", b.0, b.1, tube_area() * len);
     }
-    assert!(bs.iter().any(|b| near3(b.2, [-20.0, -20.0, -20.0]) && near3(b.3, [620.0, 20.0, 20.0])), "{bs:?}");
+    // The kernel cuts a rounded tube's corners within a few hundredths of a millimetre.
+    let close = |g: [f64; 3], w: [f64; 3]| g.iter().zip(w).all(|(g, w)| (g - w).abs() < 0.05);
+    assert!(bs.iter().any(|b| close(b.2, [-20.0, -20.0, -20.0]) && close(b.3, [620.0, 20.0, 20.0])), "{bs:?}");
     let i = run(&mut m, "inspect.interference", json!({}));
     assert_eq!(i["count"], 0, "{i}");
 }

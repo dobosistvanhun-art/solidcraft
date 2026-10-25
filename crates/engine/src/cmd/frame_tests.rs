@@ -724,3 +724,17 @@ fn a_tube_ending_on_another_is_cut_to_its_saddle() {
     assert!(v[1] < ring * 200.0 - 1.0 && v[1] > ring * 180.0, "{v:?} vs {}..{}", ring * 180.0, ring * 200.0);
 }
 
+
+#[test]
+fn zz_time_corners() {
+    for corners in ["none", "miter", "butt"] {
+        let mut m = Session::default();
+        rectangle_frame(&mut m);
+        let t = std::time::Instant::now();
+        run(&mut m, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": corners}));
+        eprintln!("{corners}: member {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let i = run(&mut m, "inspect.interference", json!({}));
+        eprintln!("{corners}: interference {:?} count {}", t.elapsed(), i["count"]);
+    }
+}

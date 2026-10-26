@@ -972,7 +972,9 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             let mid = (a + b) * 0.5;
             let at = match (place, ab.normalized()) {
                 (Some(q), Some(u)) => {
+                    // Between the extension lines it sits in the middle; outside them, where put.
                     let t = (q - a).dot(u);
+                    let t = if (0.0..=ab.len()).contains(&t) { ab.len() * 0.5 } else { t };
                     let half = text_width(text.chars().count()) * 0.5;
                     if t < -half - 1.0 {
                         out.line(a + u * (t - half), a, Style::Thin);

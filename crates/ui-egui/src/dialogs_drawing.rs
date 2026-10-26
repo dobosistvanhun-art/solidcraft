@@ -108,7 +108,9 @@ impl Pick {
 enum Want {
     Points,
     /// Points first, else straight edges and (`circles`) circles.
-    PointsOrEdges { circles: bool },
+    PointsOrEdges {
+        circles: bool,
+    },
     Circles,
     Sharps,
 }
@@ -394,7 +396,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
     let selected = k.selected.and_then(|v| d.view(v)).cloned();
     ui_kit::section(ui, "drw_views", "Views", true, |ui| {
         ui.horizontal_wrapped(|ui| {
-            for (tool, label) in [(Tool::Base, "Base view"), (Tool::Projected, "Projected view"), (Tool::Section, "Section"), (Tool::Detail, "Detail")] {
+            for (tool, label) in
+                [(Tool::Base, "Base view"), (Tool::Projected, "Projected view"), (Tool::Section, "Section"), (Tool::Detail, "Detail")]
+            {
                 if ui_kit::button(ui, crate::i18n::tr_label(label), ui_kit::Button::Small).clicked() {
                     k.set_tool(tool);
                 }
@@ -439,7 +443,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
             run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "scale": text}));
         }
         ui.horizontal(|ui| {
-            if !matches!(v.kind, ViewKind::Flat { .. }) && ui_kit::button(ui, crate::i18n::tr_label("Project from it"), ui_kit::Button::Small).clicked() {
+            if !matches!(v.kind, ViewKind::Flat { .. })
+                && ui_kit::button(ui, crate::i18n::tr_label("Project from it"), ui_kit::Button::Small).clicked()
+            {
                 k.parent = Some(v.id);
                 k.set_tool(Tool::Projected);
             }
@@ -764,11 +770,7 @@ fn side_of(lo: [f64; 2], hi: [f64; 2], at: [f64; 2]) -> &'static str {
 fn squared(first: [f64; 2], p: [f64; 2]) -> [f64; 2] {
     let (dx, dy) = (p[0] - first[0], p[1] - first[1]);
     let a = dy.atan2(dx).to_degrees().rem_euclid(90.0);
-    if !(4.0..=86.0).contains(&a) {
-        if dx.abs() >= dy.abs() { [p[0], first[1]] } else { [first[0], p[1]] }
-    } else {
-        p
-    }
+    if !(4.0..=86.0).contains(&a) { if dx.abs() >= dy.abs() { [p[0], first[1]] } else { [first[0], p[1]] } } else { p }
 }
 
 /// Where a view not yet put goes for the pointer at `at`: lined up with `parent`'s centre when
@@ -1008,7 +1010,17 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                 {
                     let side = side_of(lo, hi, at);
                     let parent_at = drawing(app, k).and_then(|dd| dd.view(parent)).map(|x| x.at);
-                    let place = lined(at, parent_at, if side == "left" || side == "right" { 'h' } else if side == "iso" { ' ' } else { 'v' });
+                    let place = lined(
+                        at,
+                        parent_at,
+                        if side == "left" || side == "right" {
+                            'h'
+                        } else if side == "iso" {
+                            ' '
+                        } else {
+                            'v'
+                        },
+                    );
                     let f = preview(app, k, json!({"drawing": did, "kind": "projected", "parent": parent, "side": side}));
                     frame_at(f, place);
                     if let Some(pa) = parent_at {
@@ -1109,7 +1121,11 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
             && dist(now, start) > 0.5
         {
             // The text goes where it was dragged: the dimension through that point.
-            let text = v["dims"].as_array().and_then(|a| a.iter().find(|x| x.get(0).and_then(Value::as_u64) == Some(dim))).and_then(|x| x.get(1)).and_then(read2);
+            let text = v["dims"]
+                .as_array()
+                .and_then(|a| a.iter().find(|x| x.get(0).and_then(Value::as_u64) == Some(dim)))
+                .and_then(|x| x.get(1))
+                .and_then(read2);
             if let Some(p) = text {
                 let to_at = [p[0] + now[0] - start[0], p[1] + now[1] - start[1]];
                 run(app, k, "drawing.dimension.edit", json!({"drawing": did, "dimension": dim, "place": to_at}));
@@ -1148,7 +1164,9 @@ fn dim_command(k: &DrawUi, drawing: u64, at: [f64; 2]) -> Option<Value> {
 fn dim_preview(painter: &egui::Painter, k: &DrawUi, v: &Value, at: [f64; 2], to: &dyn Fn([f64; 2]) -> Pos2, scale: f64, stroke: Stroke) {
     let Some((view, first)) = k.dim_picks.first().copied() else { return };
     let vs = view_frame(v, view).map(|f| f.2).unwrap_or(1.0).max(1e-9);
-    let font = FontId::proportional((3.5 * scale / 0.72).clamp(9.0, 40.0) as f32);
+    // The size the sheet's dimension text has on screen.
+    let size = (3.5 * scale / 0.72).clamp(9.0, 40.0) as f32;
+    let font = FontId::proportional(size);
     let label = |text: String| {
         painter.text(to(at) + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, text, font.clone(), stroke.color);
     };
@@ -1246,7 +1264,8 @@ fn press(app: &mut SolveApp, k: &mut DrawUi, v: &Value, at: [f64; 2], put: Optio
         }
         Tool::Projected => {
             if k.parent.is_none() {
-                k.parent = view_at(v, at).filter(|p| drawing(app, k).and_then(|d| d.view(*p)).is_some_and(|x| !matches!(x.kind, ViewKind::Flat { .. })));
+                k.parent =
+                    view_at(v, at).filter(|p| drawing(app, k).and_then(|d| d.view(*p)).is_some_and(|x| !matches!(x.kind, ViewKind::Flat { .. })));
                 if k.parent.is_none() {
                     k.status = Some(crate::i18n::tr_label("Click a view to project from").to_string());
                 }
@@ -1336,7 +1355,8 @@ mod tests {
         let mut h = editor();
         let d = h.app.session.doc.drawings[0].id;
         h.app.run("drawing.edit", json!({"drawing": d, "scale": "1:1"})).unwrap();
-        let front = h.app.run("drawing.view.base", json!({"drawing": d, "orientation": "front", "at": [120, 200]})).unwrap()["view"].as_u64().unwrap();
+        let front =
+            h.app.run("drawing.view.base", json!({"drawing": d, "orientation": "front", "at": [120, 200]})).unwrap()["view"].as_u64().unwrap();
         h.app.run("drawing.view.projected", json!({"drawing": d, "parent": front, "side": "below", "at": [120, 120]})).unwrap();
         h.app.run("drawing.view.projected", json!({"drawing": d, "parent": front, "side": "right", "at": [240, 200]})).unwrap();
         h.app.run("drawing.view.projected", json!({"drawing": d, "parent": front, "side": "iso", "at": [300, 110]})).unwrap();
@@ -1508,8 +1528,12 @@ mod tests {
     #[test]
     fn the_ribbon_dimension_kinds_open_the_tool_with_their_kind() {
         let mut h = with_views();
-        for (id, kind, arc) in [("drawing.dimension", 0, 0), ("drawing.dimension.vertical", 2, 0), ("drawing.dimension.diameter", 4, 0), ("drawing.dimension.arcs", 1, 3)]
-        {
+        for (id, kind, arc) in [
+            ("drawing.dimension", 0, 0),
+            ("drawing.dimension.vertical", 2, 0),
+            ("drawing.dimension.diameter", 4, 0),
+            ("drawing.dimension.arcs", 1, 3),
+        ] {
             h.app.dialog = None;
             h.step(&json!({"start": id})).unwrap();
             h.frames(2);
@@ -1538,7 +1562,8 @@ mod tests {
         let x = &d.dims[0];
         assert_eq!(x.kind, solidcraft_engine::doc::drawing::DimKind::Horizontal);
         let drawn = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
-        let texts: Vec<String> = drawn["prims"].as_array().unwrap().iter().filter(|p| p["type"] == "text").filter_map(|p| p["text"].as_str().map(String::from)).collect();
+        let texts: Vec<String> =
+            drawn["prims"].as_array().unwrap().iter().filter(|p| p["type"] == "text").filter_map(|p| p["text"].as_str().map(String::from)).collect();
         assert!(texts.iter().any(|t| t == "100"), "{texts:?}");
         // Its text sits where it was put.
         let at = drawn["dims"][0][1].clone();

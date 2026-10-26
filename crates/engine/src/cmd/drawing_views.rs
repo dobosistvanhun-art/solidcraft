@@ -185,7 +185,10 @@ fn whole_circles(m: &Model) -> Vec<(Vec3, f64, Vec3)> {
     for circles in &m.circles {
         for c in circles.iter().flatten().take(20_000) {
             let ax: Vec3 = *c.axis;
-            match groups.iter_mut().find(|(k, r, a, _)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && a.dot(ax).abs() > 0.999999) {
+            match groups
+                .iter_mut()
+                .find(|(k, r, a, _)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && a.dot(ax).abs() > 0.999999)
+            {
                 Some(g) => g.3 += c.angle,
                 None => groups.push((c.center, c.radius, ax, c.angle)),
             }
@@ -204,7 +207,11 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
     // Whole circles, though the model may hold one as two or more arcs: the arcs about one centre
     // and axis, of one radius, whose angles make a whole turn (in 3D, per body).
     let whole = whole_circles(m);
-    let is_whole = |c: &EdgeCircle| whole.iter().any(|(k, r, ax)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && ax.dot(*c.axis).abs() > 0.999999);
+    let is_whole = |c: &EdgeCircle| {
+        whole
+            .iter()
+            .any(|(k, r, ax)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && ax.dot(*c.axis).abs() > 0.999999)
+    };
     for ((_, _, mesh), circles) in m.bodies.iter().zip(&m.circles) {
         for (i, e) in mesh.edges.iter().enumerate().take(20_000) {
             let (Some(a3), Some(b3)) = (e.first(), e.last()) else { continue };
@@ -220,7 +227,10 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
                     continue;
                 }
                 let full = is_whole(&c);
-                if edges.iter().any(|x| x.kind == "circle" && x.a.dist(center) < tol && x.r.is_some_and(|r| (r - c.radius).abs() < tol) && x.full == full) {
+                if edges
+                    .iter()
+                    .any(|x| x.kind == "circle" && x.a.dist(center) < tol && x.r.is_some_and(|r| (r - c.radius).abs() < tol) && x.full == full)
+                {
                     continue;
                 }
                 edges.push(PickEdge { kind: "circle", a: center, b: None, r: Some(c.radius), full, hidden: vis < 2 });
@@ -239,7 +249,10 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
             if vis == 0 {
                 continue;
             }
-            if edges.iter().any(|x| x.kind == "line" && x.b.is_some_and(|xb| (x.a.dist(a) < tol && xb.dist(b) < tol) || (x.a.dist(b) < tol && xb.dist(a) < tol))) {
+            if edges
+                .iter()
+                .any(|x| x.kind == "line" && x.b.is_some_and(|xb| (x.a.dist(a) < tol && xb.dist(b) < tol) || (x.a.dist(b) < tol && xb.dist(a) < tol)))
+            {
                 continue;
             }
             edges.push(PickEdge { kind: "line", a, b: Some(b), r: None, full: false, hidden: vis < 2 });
@@ -610,10 +623,8 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
         notes.push(((a + e) * 0.5, angle, format!("{dir} {}° R{}", number(b.angle_deg), number(b.radius))));
     }
     // Picking: the outline's corners and arc ends, the holes' centres; its straight lines and arcs.
-    let mut points: Vec<PickPoint> = snaps
-        .iter()
-        .map(|sn| PickPoint { at: sn.at, kind: if sn.radius.is_some() { "center" } else { "end" }, hidden: false })
-        .collect();
+    let mut points: Vec<PickPoint> =
+        snaps.iter().map(|sn| PickPoint { at: sn.at, kind: if sn.radius.is_some() { "center" } else { "end" }, hidden: false }).collect();
     points.dedup_by(|a, b| a.kind == b.kind && a.at.dist(b.at) < 1e-6);
     let mut edges: Vec<PickEdge> = Vec::new();
     for l in &loops {
@@ -994,8 +1005,9 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             // A leader at 45° (turned by the offset's sign), through the centre for a diameter.
             // Toward where it was put, else at 45° (turned by the offset's sign).
             let toward = place.and_then(|q| (q - *c).normalized());
-            let dir = toward
-                .unwrap_or_else(|| if d.offset >= 0.0 { Vec2::new(1.0, 1.0) } else { Vec2::new(-1.0, 1.0) }.normalized().unwrap_or(Vec2::new(1.0, 0.0)));
+            let dir = toward.unwrap_or_else(|| {
+                if d.offset >= 0.0 { Vec2::new(1.0, 1.0) } else { Vec2::new(-1.0, 1.0) }.normalized().unwrap_or(Vec2::new(1.0, 0.0))
+            });
             let tip = *c + dir * rs;
             let out_end = match place {
                 Some(q) if toward.is_some() && (q - *c).len() > rs + 2.0 => q,
@@ -1334,8 +1346,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     out.text(Vec2::new((min.x + max.x) * 0.5, min.y - 8.0), 5.0, 0.0, name, Align::Center);
                 }
                 let snaps = g.snaps.iter().map(|sn| Snap { at: to_sheet(sn.at), ..sn.clone() }).collect();
-                let points =
-                    g.points.iter().filter(|x| v.hidden || !x.hidden).map(|x| PickPoint { at: to_sheet(x.at), ..x.clone() }).collect();
+                let points = g.points.iter().filter(|x| v.hidden || !x.hidden).map(|x| PickPoint { at: to_sheet(x.at), ..x.clone() }).collect();
                 let edges = g
                     .edges
                     .iter()

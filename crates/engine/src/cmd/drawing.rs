@@ -588,7 +588,8 @@ fn view_edit(s: &mut Session, p: &Value) -> Result<Value> {
         // The views projected or cut from it go with it.
         if delta != [0.0, 0.0] && p.get("at").is_some() {
             let carried: Vec<u64> = d.descendants(id).into_iter().skip(1).collect();
-            for w in d.views.iter_mut().filter(|w| carried.contains(&w.id) && matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. })) {
+            for w in d.views.iter_mut().filter(|w| carried.contains(&w.id) && matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. }))
+            {
                 w.at = [w.at[0] + delta[0], w.at[1] + delta[1]];
             }
         }

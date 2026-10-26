@@ -369,7 +369,10 @@ impl Drawing {
                         _ => true,
                     }
             })
-            && self.dims.iter().all(|d| d.offset.is_finite() && d.at.is_none_or(|p| finite2(&p)) && d.refs.len() <= 3 && d.refs.iter().all(|r| r.point.is_finite()))
+            && self
+                .dims
+                .iter()
+                .all(|d| d.offset.is_finite() && d.at.is_none_or(|p| finite2(&p)) && d.refs.len() <= 3 && d.refs.iter().all(|r| r.point.is_finite()))
             && self.notes.iter().all(|n| finite2(&n.at) && n.height.is_finite() && n.height > 0.0 && n.height < 100.0)
     }
 }

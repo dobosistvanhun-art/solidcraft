@@ -395,8 +395,10 @@ fn views_put_by_hand_keep_in_line_with_their_parent() {
     let front = run(&mut s, "drawing.view.base", json!({"drawing": id, "orientation": "front", "at": [120, 200]}))["view"].as_u64().unwrap();
     let f = run(&mut s, "drawing.view.preview", json!({"drawing": id, "kind": "projected", "parent": front, "side": "below"}));
     assert!((f["max"][1].as_f64().unwrap() - 25.0).abs() < 0.01, "the top view is 50 deep: {f}");
-    let side = run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "right", "at": [260, 207]}))["view"].as_u64().unwrap();
-    let top = run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "below", "at": [125, 100]}))["view"].as_u64().unwrap();
+    let side =
+        run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "right", "at": [260, 207]}))["view"].as_u64().unwrap();
+    let top =
+        run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "below", "at": [125, 100]}))["view"].as_u64().unwrap();
     let at = |s: &Session, v: u64| s.doc.drawings[0].view(v).map(|x| x.at).unwrap();
     assert_eq!(at(&s, side), [260.0, 200.0]);
     assert_eq!(at(&s, top), [120.0, 100.0]);
@@ -429,7 +431,9 @@ fn dimensions_are_put_where_asked_and_pick_only_what_is_there() {
     let kind = |s: &Session| s.doc.drawings[0].dims.last().map(|d| d.kind);
     use solidcraft_doc::drawing::DimKind;
     // Diagonal corners: above them horizontal, beside them vertical, off a corner aligned.
-    for (place, want, text) in [([200.0, 190.0], DimKind::Horizontal, "100"), ([265.0, 150.0], DimKind::Vertical, "50"), ([270.0, 190.0], DimKind::Aligned, "111,8")] {
+    for (place, want, text) in
+        [([200.0, 190.0], DimKind::Horizontal, "100"), ([265.0, 150.0], DimKind::Vertical, "50"), ([270.0, 190.0], DimKind::Aligned, "111,8")]
+    {
         run(&mut s, "drawing.dimension", json!({"drawing": id, "view": top, "kind": "auto", "points": [[150, 125], [250, 175]], "place": place}));
         assert_eq!(kind(&s), Some(want), "{place:?}");
         let r = run(&mut s, "drawing.render", json!({"drawing": id}));
@@ -444,9 +448,13 @@ fn dimensions_are_put_where_asked_and_pick_only_what_is_there() {
     run(&mut s, "drawing.view.edit", json!({"drawing": id, "view": top, "at": [210, 150]}));
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));
     assert!((r["dims"][0][1][0].as_f64().unwrap() - 210.0).abs() < 0.01);
+    // Below the view, between its ends: its text in the middle; past an end, where it was put.
     run(&mut s, "drawing.dimension.edit", json!({"drawing": id, "dimension": first, "place": [180, 110]}));
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));
-    assert!((r["dims"][0][1][0].as_f64().unwrap() - 180.0).abs() < 0.01 && (r["dims"][0][1][1].as_f64().unwrap() - 111.0).abs() < 0.01);
+    assert!((r["dims"][0][1][0].as_f64().unwrap() - 210.0).abs() < 0.01 && (r["dims"][0][1][1].as_f64().unwrap() - 111.0).abs() < 0.01);
+    run(&mut s, "drawing.dimension.edit", json!({"drawing": id, "dimension": first, "place": [290, 110]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    assert!((r["dims"][0][1][0].as_f64().unwrap() - 290.0).abs() < 0.01);
     // A diameter's leader out to where it was put.
     run(&mut s, "drawing.dimension", json!({"drawing": id, "view": top, "kind": "diameter", "points": [[220, 150]], "place": [240, 190]}));
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));

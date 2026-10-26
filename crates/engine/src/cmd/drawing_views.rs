@@ -178,6 +178,22 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     (a + ab * t - p).len()
 }
 
+/// The whole circles of the model's edges (centre, radius, axis): arcs about one centre and axis,
+/// of one radius, making a whole turn between them.
+fn whole_circles(m: &Model) -> Vec<(Vec3, f64, Vec3)> {
+    let mut groups: Vec<(Vec3, f64, Vec3, f64)> = Vec::new();
+    for circles in &m.circles {
+        for c in circles.iter().flatten().take(20_000) {
+            let ax: Vec3 = *c.axis;
+            match groups.iter_mut().find(|(k, r, a, _)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && a.dot(ax).abs() > 0.999999) {
+                Some(g) => g.3 += c.angle,
+                None => groups.push((c.center, c.radius, ax, c.angle)),
+            }
+        }
+    }
+    groups.into_iter().filter(|g| g.3 >= std::f64::consts::TAU - 1e-6).map(|(k, r, a, _)| (k, r, a)).collect()
+}
+
 /// The points and edges of a view a pointer may pick (view coordinates), each kept only where the
 /// view draws a line (`radius`: the model's, for the tolerance).
 fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[Snap], radius: f64) -> (Vec<PickPoint>, Vec<PickEdge>) {
@@ -185,6 +201,10 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
     let grid = LineGrid::new(lines, (radius / 40.0).max(1e-3));
     let on = |p: Vec2| grid.on(lines, p, tol);
     let mut edges: Vec<PickEdge> = Vec::new();
+    // Whole circles, though the model may hold one as two or more arcs: the arcs about one centre
+    // and axis, of one radius, whose angles make a whole turn (in 3D, per body).
+    let whole = whole_circles(m);
+    let is_whole = |c: &EdgeCircle| whole.iter().any(|(k, r, ax)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && ax.dot(*c.axis).abs() > 0.999999);
     for ((_, _, mesh), circles) in m.bodies.iter().zip(&m.circles) {
         for (i, e) in mesh.edges.iter().enumerate().take(20_000) {
             let (Some(a3), Some(b3)) = (e.first(), e.last()) else { continue };
@@ -199,7 +219,7 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
                 if vis == 0 {
                     continue;
                 }
-                let full = c.angle >= std::f64::consts::TAU - 1e-6;
+                let full = is_whole(&c);
                 if edges.iter().any(|x| x.kind == "circle" && x.a.dist(center) < tol && x.r.is_some_and(|r| (r - c.radius).abs() < tol) && x.full == full) {
                     continue;
                 }
@@ -230,8 +250,9 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
     let mut seams: Vec<Vec3> = Vec::new();
     for circles in &m.circles {
         for c in circles.iter().flatten().take(20_000) {
-            if c.angle >= std::f64::consts::TAU - 1e-6 {
+            if is_whole(c) {
                 seams.push(c.start);
+                seams.push(c.end);
             }
         }
     }

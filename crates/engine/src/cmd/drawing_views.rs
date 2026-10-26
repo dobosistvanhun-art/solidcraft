@@ -89,6 +89,180 @@ pub struct ViewPlaced {
     /// The picking points (sheet mm) and the model point each stands for.
     #[serde(skip)]
     pub snaps: Vec<Snap>,
+    /// What a pointer may pick in it, as drawn (sheet mm): the points (edge ends, circle centres,
+    /// virtual sharps) and the edges (straight ones, circles and arcs seen face on). Only what
+    /// the view shows: hidden edges only when it draws them.
+    pub points: Vec<PickPoint>,
+    pub edges: Vec<PickEdge>,
+}
+
+/// A point a pointer may pick in a view: `kind` end | center | sharp.
+#[derive(Clone, Debug, Serialize)]
+pub struct PickPoint {
+    pub at: Vec2,
+    pub kind: &'static str,
+    #[serde(skip)]
+    hidden: bool,
+}
+
+/// An edge a pointer may pick in a view: a straight one (`a`–`b`) or a circle or arc seen face on
+/// (centre `a`, radius `r`, `full` for a whole circle), in sheet mm.
+#[derive(Clone, Debug, Serialize)]
+pub struct PickEdge {
+    pub kind: &'static str,
+    pub a: Vec2,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<Vec2>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r: Option<f64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
+    #[serde(skip)]
+    hidden: bool,
+}
+
+/// The drawn lines of a view, bucketed, to tell whether a point lies on one (and on a visible one).
+struct LineGrid {
+    cell: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl LineGrid {
+    fn new(lines: &[(Vec2, Vec2, Style)], cell: f64) -> LineGrid {
+        let mut cells: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+        let key = |x: f64| (x / cell).floor() as i64;
+        for (i, (a, b, style)) in lines.iter().enumerate().take(400_000) {
+            // The model's own lines only (not hatching, a detail's circle or centre lines).
+            if !matches!(style, Style::Visible | Style::Hidden) {
+                continue;
+            }
+            let (x0, x1) = (key(a.x.min(b.x)), key(a.x.max(b.x)));
+            let (y0, y1) = (key(a.y.min(b.y)), key(a.y.max(b.y)));
+            if (x1 - x0 + 1) * (y1 - y0 + 1) > 4096 {
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    cells.entry((x, y)).or_default().push(i);
+                }
+            }
+        }
+        LineGrid { cell, cells }
+    }
+
+    /// 2 when a visible line passes within `tol` of `p`, 1 when only a hidden one does, else 0.
+    fn on(&self, lines: &[(Vec2, Vec2, Style)], p: Vec2, tol: f64) -> u8 {
+        let (cx, cy) = ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64);
+        let mut best = 0;
+        for x in cx - 1..=cx + 1 {
+            for y in cy - 1..=cy + 1 {
+                for &i in self.cells.get(&(x, y)).into_iter().flatten() {
+                    let Some((a, b, style)) = lines.get(i) else { continue };
+                    if seg_dist(p, *a, *b) <= tol {
+                        best = best.max(if *style == Style::Hidden { 1 } else { 2 });
+                        if best == 2 {
+                            return 2;
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+}
+
+fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let ab = b - a;
+    let l2 = ab.dot(ab);
+    let t = if l2 > 0.0 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (a + ab * t - p).len()
+}
+
+/// The points and edges of a view a pointer may pick (view coordinates), each kept only where the
+/// view draws a line (`radius`: the model's, for the tolerance).
+fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[Snap], radius: f64) -> (Vec<PickPoint>, Vec<PickEdge>) {
+    let tol = (radius * 2e-3).max(1e-4);
+    let grid = LineGrid::new(lines, (radius / 40.0).max(1e-3));
+    let on = |p: Vec2| grid.on(lines, p, tol);
+    let mut edges: Vec<PickEdge> = Vec::new();
+    for ((_, _, mesh), circles) in m.bodies.iter().zip(&m.circles) {
+        for (i, e) in mesh.edges.iter().enumerate().take(20_000) {
+            let (Some(a3), Some(b3)) = (e.first(), e.last()) else { continue };
+            if let Some(c) = circles.get(i).copied().flatten() {
+                // Only a circle seen face on draws as one.
+                if c.axis.dot(basis.b).abs() < 0.999 {
+                    continue;
+                }
+                let center = basis.project(c.center);
+                let mid = basis.project(e.get(e.len() / 2).copied().unwrap_or(c.start));
+                let vis = on(mid).max(on(basis.project(c.start)));
+                if vis == 0 {
+                    continue;
+                }
+                let full = c.angle >= std::f64::consts::TAU - 1e-6;
+                if edges.iter().any(|x| x.kind == "circle" && x.a.dist(center) < tol && x.r.is_some_and(|r| (r - c.radius).abs() < tol) && x.full == full) {
+                    continue;
+                }
+                edges.push(PickEdge { kind: "circle", a: center, b: None, r: Some(c.radius), full, hidden: vis < 2 });
+                continue;
+            }
+            // A straight edge: every point of it on the line between its ends.
+            let straight = e.len() >= 2 && e.iter().all(|p| p.dist_to_segment(*a3, *b3) < tol);
+            if !straight {
+                continue;
+            }
+            let (a, b) = (basis.project(*a3), basis.project(*b3));
+            if a.dist(b) < tol * 4.0 {
+                continue; // seen end on
+            }
+            let vis = on((a + b) * 0.5).min(on(a + (b - a) * 0.25).max(on(a + (b - a) * 0.75)));
+            if vis == 0 {
+                continue;
+            }
+            if edges.iter().any(|x| x.kind == "line" && x.b.is_some_and(|xb| (x.a.dist(a) < tol && xb.dist(b) < tol) || (x.a.dist(b) < tol && xb.dist(a) < tol))) {
+                continue;
+            }
+            edges.push(PickEdge { kind: "line", a, b: Some(b), r: None, full: false, hidden: vis < 2 });
+        }
+    }
+    // A whole circle's seam (its one vertex, and the ends of the seam line of a cylinder through
+    // it) is no corner of the part: not a point to measure to.
+    let mut seams: Vec<Vec3> = Vec::new();
+    for circles in &m.circles {
+        for c in circles.iter().flatten().take(20_000) {
+            if c.angle >= std::f64::consts::TAU - 1e-6 {
+                seams.push(c.start);
+            }
+        }
+    }
+    let seam_tol = (radius * 1e-6).max(1e-9);
+    let mut points: Vec<PickPoint> = Vec::new();
+    for sn in snaps {
+        if !sn.sharp && sn.radius.is_none() && seams.iter().any(|q| q.dist(sn.r.point) < seam_tol) {
+            continue;
+        }
+        let kind = if sn.sharp {
+            "sharp"
+        } else if sn.radius.is_some() {
+            "center"
+        } else {
+            "end"
+        };
+        let vis = match kind {
+            "sharp" => 2,
+            // A centre counts where its circle is drawn.
+            "center" => edges.iter().filter(|x| x.kind == "circle" && x.a.dist(sn.at) < tol).map(|x| if x.hidden { 1 } else { 2 }).max().unwrap_or(0),
+            _ => on(sn.at),
+        };
+        if vis == 0 || points.iter().any(|x| x.kind == kind && x.at.dist(sn.at) < tol) {
+            continue;
+        }
+        points.push(PickPoint { at: sn.at, kind, hidden: vis < 2 });
+        if points.len() > 50_000 {
+            break;
+        }
+    }
+    (points, edges)
 }
 
 /// A point a dimension may measure, as it lands in a view.
@@ -298,6 +472,9 @@ pub(crate) struct ViewGeom {
     marks: Vec<(Vec2, f64)>,
     /// Texts along lines (a flat pattern's bend notes): where (view coordinates), at what angle.
     notes: Vec<(Vec2, f64, String)>,
+    /// What a pointer may pick (view coordinates).
+    points: Vec<PickPoint>,
+    edges: Vec<PickEdge>,
 }
 
 /// At most this many line segments in a flat pattern view.
@@ -411,7 +588,33 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
         let dir = if b.up { "UP" } else { "DOWN" };
         notes.push(((a + e) * 0.5, angle, format!("{dir} {}° R{}", number(b.angle_deg), number(b.radius))));
     }
-    Ok(ViewGeom { basis, lines, snaps, marks, notes })
+    // Picking: the outline's corners and arc ends, the holes' centres; its straight lines and arcs.
+    let mut points: Vec<PickPoint> = snaps
+        .iter()
+        .map(|sn| PickPoint { at: sn.at, kind: if sn.radius.is_some() { "center" } else { "end" }, hidden: false })
+        .collect();
+    points.dedup_by(|a, b| a.kind == b.kind && a.at.dist(b.at) < 1e-6);
+    let mut edges: Vec<PickEdge> = Vec::new();
+    for l in &loops {
+        let round = matches!(l.segs.first(), Some(Seg2::Arc { .. }))
+            && l.segs.iter().all(|g| matches!(g, Seg2::Arc { .. }))
+            && l.segs.iter().map(|g| if let Seg2::Arc { sweep, .. } = g { *sweep } else { 0.0 }).sum::<f64>().abs() > std::f64::consts::TAU - 1e-6;
+        for g in &l.segs {
+            match *g {
+                Seg2::Line { a, b } => edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false }),
+                Seg2::Arc { center, radius, .. } => {
+                    if !edges.iter().any(|x| x.kind == "circle" && x.a.dist(center - c) < 1e-6 && x.r == Some(radius)) {
+                        edges.push(PickEdge { kind: "circle", a: center - c, b: None, r: Some(radius), full: round, hidden: false });
+                    }
+                }
+                _ => {}
+            }
+        }
+        if edges.len() > 50_000 {
+            break;
+        }
+    }
+    Ok(ViewGeom { basis, lines, snaps, marks, notes, points, edges })
 }
 
 fn circles_of(body: &solidcraft_kernel::Body, mesh: &Arc<Mesh>) -> Arc<Vec<Option<EdgeCircle>>> {
@@ -670,7 +873,13 @@ impl Out<'_> {
 const TEXT: f64 = 3.5;
 
 /// A dimension drawn on the sheet.
-fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale: f64) {
+/// Roughly how wide a dimension text of `chars` characters is (sheet mm).
+fn text_width(chars: usize) -> f64 {
+    chars as f64 * TEXT * 0.62
+}
+
+/// A dimension drawn on the sheet. `place`: where it was put (sheet mm), else `offset` decides.
+fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale: f64, place: Option<Vec2>) {
     let gap = 1.0;
     let over = 2.0;
     match d.kind {
@@ -694,21 +903,26 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             let (dir, value) = match d.kind {
                 DimKind::Horizontal => (Vec2::new(1.0, 0.0), (p2.x - p1.x).abs() / scale),
                 DimKind::Vertical => (Vec2::new(0.0, 1.0), (p2.y - p1.y).abs() / scale),
-                _ if arcs => (axis, (*p2 - *p1).len() / scale),
-                _ => ((*p2 - *p1).normalized().unwrap_or(Vec2::new(1.0, 0.0)), m1.dist(*m2)),
+                // The distance as the view shows it (two points at different depths measure
+                // their projection, as on paper; a flat pattern's points are flat already).
+                _ => ((*p2 - *p1).normalized().unwrap_or(axis), (*p2 - *p1).len() / scale),
             };
+            let _ = (m1, m2, arcs);
             let n = Vec2::new(-dir.y, dir.x);
-            // The dimension line stands `offset` off the outer of the two points.
+            // The dimension line runs through where it was put, else `offset` off the outer of
+            // the two points.
             let (s1, s2) = (p1.dot(n), p2.dot(n));
-            let base = if d.offset >= 0.0 { s1.max(s2) } else { s1.min(s2) };
-            let level = base + d.offset;
+            let level = match place {
+                Some(q) => q.dot(n),
+                None => (if d.offset >= 0.0 { s1.max(s2) } else { s1.min(s2) }) + d.offset,
+            };
             let foot = |p: Vec2| p + n * (level - p.dot(n));
             let (a, b) = (foot(*p1), foot(*p2));
-            let side = if d.offset >= 0.0 { 1.0 } else { -1.0 };
             for (p, f) in [(*p1, a), (*p2, b)] {
                 let along = f - p;
                 if along.len() > gap {
-                    out.line(p + along.normalized().unwrap_or(n) * gap, f + n * (over * side), Style::Thin);
+                    let u = along.normalized().unwrap_or(n);
+                    out.line(p + u * gap, f + u * over, Style::Thin);
                 }
             }
             out.line(a, b, Style::Thin);
@@ -731,16 +945,39 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
                 angle += 180.0;
             }
             let up = Vec2::new(-(angle.to_radians().sin()), angle.to_radians().cos());
-            out.text((a + b) * 0.5 + up * 1.0, TEXT, angle, dim_text(d, number(value)), Align::Center);
+            let text = dim_text(d, number(value));
+            // The text where it was put along the line (the line carried on to it when it is
+            // outside), else in the middle.
+            let mid = (a + b) * 0.5;
+            let at = match (place, ab.normalized()) {
+                (Some(q), Some(u)) => {
+                    let t = (q - a).dot(u);
+                    let half = text_width(text.chars().count()) * 0.5;
+                    if t < -half - 1.0 {
+                        out.line(a + u * (t - half), a, Style::Thin);
+                    } else if t > ab.len() + half + 1.0 {
+                        out.line(b, a + u * (t + half), Style::Thin);
+                    }
+                    a + u * t
+                }
+                _ => mid,
+            };
+            out.text(at + up * 1.0, TEXT, angle, text, Align::Center);
         }
         DimKind::Diameter | DimKind::Radius => {
             let Some((c, radius, _)) = pts.first() else { return };
             let Some(r) = *radius else { return };
             let rs = r * scale;
             // A leader at 45° (turned by the offset's sign), through the centre for a diameter.
-            let dir = if d.offset >= 0.0 { Vec2::new(1.0, 1.0) } else { Vec2::new(-1.0, 1.0) }.normalized().unwrap_or(Vec2::new(1.0, 0.0));
+            // Toward where it was put, else at 45° (turned by the offset's sign).
+            let toward = place.and_then(|q| (q - *c).normalized());
+            let dir = toward
+                .unwrap_or_else(|| if d.offset >= 0.0 { Vec2::new(1.0, 1.0) } else { Vec2::new(-1.0, 1.0) }.normalized().unwrap_or(Vec2::new(1.0, 0.0)));
             let tip = *c + dir * rs;
-            let out_end = tip + dir * (8.0 + d.offset.abs());
+            let out_end = match place {
+                Some(q) if toward.is_some() && (q - *c).len() > rs + 2.0 => q,
+                _ => tip + dir * (8.0 + d.offset.abs()),
+            };
             let (value, start) =
                 if d.kind == DimKind::Diameter { (format!("Ø{}", number(2.0 * r)), *c - dir * rs) } else { (format!("R{}", number(r)), *c) };
             out.line(start, out_end, Style::Thin);
@@ -764,7 +1001,7 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             while sweep > std::f64::consts::PI {
                 sweep -= std::f64::consts::TAU;
             }
-            let r = (10.0 + d.offset.abs()).max(5.0);
+            let r = place.map(|q| (q - *c).len()).filter(|r| *r > 2.0).unwrap_or((10.0 + d.offset.abs()).max(5.0));
             let k = 24;
             let at = |t: f64| *c + Vec2::new((a1 + sweep * t).cos(), (a1 + sweep * t).sin()) * r;
             for i in 0..k {
@@ -1018,7 +1255,8 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     }
                 }
             }
-            Ok(ViewGeom { basis, lines, snaps, marks, notes: Vec::new() })
+            let (points, edges) = pickables(&m, &basis, &lines, &snaps, radius);
+            Ok(ViewGeom { basis, lines, snaps, marks, notes: Vec::new(), points, edges })
         };
         // A flat pattern is drawn from the sheet metal body each time (cheap: no projection).
         let geom = match &v.kind {
@@ -1073,7 +1311,15 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     out.text(Vec2::new((min.x + max.x) * 0.5, min.y - 8.0), 5.0, 0.0, name, Align::Center);
                 }
                 let snaps = g.snaps.iter().map(|sn| Snap { at: to_sheet(sn.at), ..sn.clone() }).collect();
-                drawn.views.push(ViewPlaced { id: v.id, min, max, scale, basis, snaps });
+                let points =
+                    g.points.iter().filter(|x| v.hidden || !x.hidden).map(|x| PickPoint { at: to_sheet(x.at), ..x.clone() }).collect();
+                let edges = g
+                    .edges
+                    .iter()
+                    .filter(|x| v.hidden || !x.hidden)
+                    .map(|x| PickEdge { a: to_sheet(x.a), b: x.b.map(&to_sheet), r: x.r.map(|r| r * scale), ..x.clone() })
+                    .collect();
+                drawn.views.push(ViewPlaced { id: v.id, min, max, scale, basis, snaps, points, edges });
                 bases.insert(v.id, basis);
             }
             Err(e) => drawn.errors.push((v.id, e)),
@@ -1155,7 +1401,8 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
             out.prims.push(Prim::Fill { points: (0..8).map(|k| xs + Vec2::new((k as f64 * 0.785).cos(), (k as f64 * 0.785).sin()) * 0.5).collect() });
         }
         let before = out.prims.len();
-        draw_dim(&mut out, dim, &pts, pv.scale);
+        let place = dim.at.map(|p| at + Vec2::new(p[0], p[1]) * pv.scale);
+        draw_dim(&mut out, dim, &pts, pv.scale, place);
         if let Some(Prim::Text { at, .. }) = out.prims.get(before..).and_then(|ps| ps.iter().rev().find(|p| matches!(p, Prim::Text { .. }))) {
             drawn.dims.push((dim.id, *at));
         }

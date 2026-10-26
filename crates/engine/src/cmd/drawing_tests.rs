@@ -381,3 +381,74 @@ fn a_flat_pattern_view_shows_the_outline_and_bend_lines_and_takes_dimensions() {
     assert!(p.execute("drawing.view.flat", &json!({"drawing": d["drawing"]})).is_err());
     assert!(s.execute("drawing.view.flat", &json!({"drawing": id, "body": "nope"})).is_err());
 }
+
+/// Views put by hand on an empty sheet: a projected view keeps in line with its parent, and
+/// moving the parent takes its projected views along. A view's frame can be had before it is put.
+#[test]
+fn views_put_by_hand_keep_in_line_with_their_parent() {
+    let mut s = plate();
+    let id = run(&mut s, "drawing.create", json!({"name": "D", "scale": "1:1", "views": "none"}))["drawing"].as_u64().unwrap();
+    assert!(s.doc.drawings[0].views.is_empty());
+    let f = run(&mut s, "drawing.view.preview", json!({"drawing": id, "kind": "base", "orientation": "front"}));
+    assert!((f["max"][0].as_f64().unwrap() - 50.0).abs() < 0.01 && (f["min"][1].as_f64().unwrap() + 10.0).abs() < 0.01, "{f}");
+    assert!(s.doc.drawings[0].views.is_empty(), "a preview puts nothing");
+    let front = run(&mut s, "drawing.view.base", json!({"drawing": id, "orientation": "front", "at": [120, 200]}))["view"].as_u64().unwrap();
+    let f = run(&mut s, "drawing.view.preview", json!({"drawing": id, "kind": "projected", "parent": front, "side": "below"}));
+    assert!((f["max"][1].as_f64().unwrap() - 25.0).abs() < 0.01, "the top view is 50 deep: {f}");
+    let side = run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "right", "at": [260, 207]}))["view"].as_u64().unwrap();
+    let top = run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "below", "at": [125, 100]}))["view"].as_u64().unwrap();
+    let at = |s: &Session, v: u64| s.doc.drawings[0].view(v).map(|x| x.at).unwrap();
+    assert_eq!(at(&s, side), [260.0, 200.0]);
+    assert_eq!(at(&s, top), [120.0, 100.0]);
+    // Dragged off its line, a projected view only slides along it.
+    run(&mut s, "drawing.view.edit", json!({"drawing": id, "view": side, "at": [280, 150]}));
+    assert_eq!(at(&s, side), [280.0, 200.0]);
+    // The parent takes them along.
+    run(&mut s, "drawing.view.edit", json!({"drawing": id, "view": front, "at": [130, 205]}));
+    assert_eq!((at(&s, front), at(&s, side), at(&s, top)), ([130.0, 205.0], [290.0, 205.0], [130.0, 105.0]));
+}
+
+/// A dimension measures only what is under its points (not a point some way off in the air);
+/// `place` puts it, and `auto` takes horizontal, vertical or aligned from where it is put.
+#[test]
+fn dimensions_are_put_where_asked_and_pick_only_what_is_there() {
+    let mut s = plate();
+    let id = run(&mut s, "drawing.create", json!({"name": "D", "scale": "1:1", "views": "none"}))["drawing"].as_u64().unwrap();
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": id, "orientation": "top", "at": [200, 150]}))["view"].as_u64().unwrap();
+    // The top view: 100 × 50 from (150, 125) to (250, 175).
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    let v = &r["views"][0];
+    let lines = v["edges"].as_array().unwrap().iter().filter(|e| e["kind"] == "line").count();
+    let circles: Vec<&Value> = v["edges"].as_array().unwrap().iter().filter(|e| e["kind"] == "circle").collect();
+    assert_eq!(lines, 4, "the outline's four edges: {}", v["edges"]);
+    assert!(circles.len() == 1 && circles[0]["full"] == true && (circles[0]["r"].as_f64().unwrap() - 10.0).abs() < 1e-6, "{circles:?}");
+    let corners = v["points"].as_array().unwrap().iter().filter(|p| p["kind"] == "end").count();
+    assert_eq!(corners, 4, "the corners, not the hole's seam: {}", v["points"]);
+    // 5 mm off a corner is in the air.
+    assert!(s.execute("drawing.dimension", &json!({"drawing": id, "view": top, "kind": "auto", "points": [[145, 120], [250, 125]]})).is_err());
+    let kind = |s: &Session| s.doc.drawings[0].dims.last().map(|d| d.kind);
+    use solidcraft_doc::drawing::DimKind;
+    // Diagonal corners: above them horizontal, beside them vertical, off a corner aligned.
+    for (place, want, text) in [([200.0, 190.0], DimKind::Horizontal, "100"), ([265.0, 150.0], DimKind::Vertical, "50"), ([270.0, 190.0], DimKind::Aligned, "111,8")] {
+        run(&mut s, "drawing.dimension", json!({"drawing": id, "view": top, "kind": "auto", "points": [[150, 125], [250, 175]], "place": place}));
+        assert_eq!(kind(&s), Some(want), "{place:?}");
+        let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+        assert!(texts(&r).iter().any(|t| t == text), "{text}: {:?}", texts(&r));
+    }
+    // A horizontal one's line and text through where it was put.
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    let at = &r["dims"][0][1];
+    assert!((at[0].as_f64().unwrap() - 200.0).abs() < 0.01 && (at[1].as_f64().unwrap() - 191.0).abs() < 0.01, "{at}");
+    // Moving the view moves its dimensions; placing one again moves it.
+    let first = s.doc.drawings[0].dims[0].id;
+    run(&mut s, "drawing.view.edit", json!({"drawing": id, "view": top, "at": [210, 150]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    assert!((r["dims"][0][1][0].as_f64().unwrap() - 210.0).abs() < 0.01);
+    run(&mut s, "drawing.dimension.edit", json!({"drawing": id, "dimension": first, "place": [180, 110]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    assert!((r["dims"][0][1][0].as_f64().unwrap() - 180.0).abs() < 0.01 && (r["dims"][0][1][1].as_f64().unwrap() - 111.0).abs() < 0.01);
+    // A diameter's leader out to where it was put.
+    run(&mut s, "drawing.dimension", json!({"drawing": id, "view": top, "kind": "diameter", "points": [[220, 150]], "place": [240, 190]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    assert!(texts(&r).iter().any(|t| t == "Ø20"));
+}

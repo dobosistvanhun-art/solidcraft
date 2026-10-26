@@ -42,8 +42,13 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("drawing.view.detail", "Detail View", view_detail).at(TAB, "VIEWS").icon("inspect").params(
         "drawing; parent (view id); center: [x, y] on the sheet; radius: sheet mm; scale? (default twice the parent's); at?; label? → view id",
     ),
-    CommandSpec::new("drawing.view.edit", "Edit View", view_edit).icon("edit").params(
-        "drawing; view; at?: [x, y]; scale? (empty: the drawing's); hidden?; flip? (section); orientation? (base view); label?",
+    CommandSpec::new("drawing.view.preview", "Preview View", view_preview).icon("camera").noundo().params(
+        "drawing; kind: base (orientation) | projected (parent, side) | section (parent, line) | detail (parent, center, radius); scale? \
+         → min, max: the frame it would have on the sheet about its centre (mm), for placing it by hand",
+    ),
+        CommandSpec::new("drawing.view.edit", "Edit View", view_edit).icon("edit").params(
+        "drawing; view; at?: [x, y] (the views projected or cut from it go with it; a projected view keeps in line with its parent); \
+         scale? (empty: the drawing's); hidden?; flip? (section); orientation? (base view); label?",
     ),
     CommandSpec::new("drawing.view.delete", "Delete View", view_delete).icon("delete").params("drawing; view — with the views made from it and their dimensions"),
     CommandSpec::new("drawing.dimension", "Dimension", dimension).at(TAB, "ANNOTATE").icon("dimension").params(
@@ -51,7 +56,10 @@ pub static COMMANDS: &[CommandSpec] = &[
          edge end or circle centre of the model in that view (diameter, radius: one point on the circle; angle: the vertex, then a point on each side); \
          offset?: sheet mm (default 10); text? (`<>` is the value); tolerance? (±0.1, +0.2/-0.1, H7); \
          arc?: center (default) | min | max — a linear dimension to circles or arcs (its points on them) measures between their centres, near sides or far sides; \
-         sharp — its points are virtual sharps (click at the corner a round took away): the corner as if it weren't rounded → dimension id",
+         sharp — its points are virtual sharps (click at the corner a round took away): the corner as if it weren't rounded; \
+         place?: [x, y] on the sheet — where it goes (the dimension line through it, its text there; a diameter's leader out to it), \
+         else offset; kind auto: horizontal, vertical or aligned by where it is put (above or below the points, beside them, off a corner). \
+         Each point must be within 3 mm of a model point in the view → dimension id",
     ),
     CommandSpec::new("drawing.note", "Note", note).at(TAB, "ANNOTATE").icon("text").params("drawing; at: [x, y]; text (lines); height? (mm, default 3.5) → note id"),
     CommandSpec::new("drawing.dimension.horizontal", "Horizontal Dimension", dim_horizontal).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind horizontal"),
@@ -63,7 +71,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("drawing.dimension.arcs", "Arc to Arc Dimension", dim_arcs).at(TAB, "ANNOTATE").icon("dimension").params(
         "as drawing.dimension between two circles or arcs (a point on each): kind? horizontal (default) | vertical | aligned; arc?: max (over their far sides, default) | min (between their near sides) | center",
     ),
-    CommandSpec::new("drawing.dimension.edit", "Edit Dimension", dimension_edit).icon("edit").params("drawing; dimension; offset?; text?; tolerance?; arc?: center|min|max"),
+    CommandSpec::new("drawing.dimension.edit", "Edit Dimension", dimension_edit).icon("edit").params(
+        "drawing; dimension; place?: [x, y] on the sheet (where it goes; null: by its offset); offset?; text?; tolerance?; arc?: center|min|max",
+    ),
     CommandSpec::new("drawing.dimension.delete", "Delete Dimension", dimension_delete).icon("delete").params("drawing; dimension"),
     CommandSpec::new("drawing.note.edit", "Edit Note", note_edit).icon("edit").params("drawing; note; at?; text?; height?"),
     CommandSpec::new("drawing.note.delete", "Delete Note", note_delete).icon("delete").params("drawing; note"),
@@ -453,7 +463,63 @@ fn view_projected(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`side` must be right, left, above, below or iso"));
     }
     let place = if side == "iso" { "right".to_string() } else { side.clone() };
-    add_view(s, p, cmd, ViewKind::Projected { parent, side }, |s, d| beside(s, d, parent, &place), false)
+    // Put by hand: kept in line with the parent.
+    let mut q = p.clone();
+    if let Some(at) = point(p.get("at"))
+        && side != "iso"
+        && let Some(pat) = s.doc.drawings.get(find(s, p, cmd)?).and_then(|d| d.view(parent)).map(|v| v.at)
+    {
+        let at = if side == "left" || side == "right" { [at[0], pat[1]] } else { [pat[0], at[1]] };
+        q["at"] = json!(at);
+    }
+    add_view(s, &q, cmd, ViewKind::Projected { parent, side }, |s, d| beside(s, d, parent, &place), false)
+}
+
+/// The frame a view would have (sheet mm about its centre) before it is put on the sheet.
+fn view_preview(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "drawing.view.preview";
+    let i = find(s, p, cmd)?;
+    let mut d = s.doc.drawings.get(i).cloned().ok_or_else(|| bad(cmd, "no such drawing"))?;
+    let kind = match str_(p, "kind").unwrap_or("base") {
+        "base" => {
+            let o = str_(p, "orientation").unwrap_or("front").trim().to_ascii_lowercase();
+            if dv::orientation(&o).is_none() {
+                return Err(bad(cmd, "unknown orientation"));
+            }
+            ViewKind::Base { orientation: o }
+        }
+        "projected" => ViewKind::Projected { parent: parent_of(s, p, cmd)?, side: str_(p, "side").unwrap_or("right").trim().to_ascii_lowercase() },
+        "section" => {
+            let parent = parent_of(s, p, cmd)?;
+            let line = p.get("line").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`line` must be two sheet points"))?;
+            let (Some(a), Some(b)) = (point(line.first()), point(line.get(1))) else { return Err(bad(cmd, "`line` must be two sheet points")) };
+            let (Some(va), Some(vb)) = (to_view(&d, parent, a), to_view(&d, parent, b)) else { return Err(bad(cmd, "no such parent view")) };
+            ViewKind::Section { parent, a: va, b: vb, flip: bool_(p, "flip").unwrap_or(false) }
+        }
+        "detail" => {
+            let parent = parent_of(s, p, cmd)?;
+            let c = point(p.get("center")).ok_or_else(|| bad(cmd, "`center` must be [x, y]"))?;
+            let r = num(p, "radius").filter(|r| *r > 0.1 && *r < 1e4).ok_or_else(|| bad(cmd, "`radius` must be a positive length"))?;
+            let center = to_view(&d, parent, c).ok_or_else(|| bad(cmd, "no such parent view"))?;
+            let ps = d.view(parent).map(|v| d.view_scale(v)).unwrap_or(1.0);
+            ViewKind::Detail { parent, center, radius: r / ps }
+        }
+        other => return Err(bad(cmd, format!("unknown `kind` {other}: base, projected, section or detail"))),
+    };
+    if d.views.len() >= MAX_ITEMS {
+        return Err(bad(cmd, "too many views"));
+    }
+    let id = d.take_id();
+    let mut v = DrawView { id, kind, at: [0.0, 0.0], scale: None, label: String::new(), hidden: false };
+    common_view_params(&mut v, p, cmd)?;
+    v.at = [0.0, 0.0];
+    d.views.push(v);
+    let drawn = dv::draw(s, &d);
+    if let Some((_, e)) = drawn.errors.iter().find(|(x, _)| *x == id) {
+        return Err(bad(cmd, e.clone()));
+    }
+    let pv = drawn.views.iter().find(|x| x.id == id).ok_or_else(|| bad(cmd, "the view couldn't be drawn"))?;
+    Ok(json!({"min": [pv.min.x, pv.min.y], "max": [pv.max.x, pv.max.y]}))
 }
 
 /// A sheet point in a view's own coordinates (model mm about its centre).
@@ -502,8 +568,31 @@ fn view_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let i = find(s, p, cmd)?;
     change(s, i, |d| {
         let vi = view_index(d, p, cmd)?;
+        let before = d.views.get(vi).map(|v| v.at).unwrap_or([0.0, 0.0]);
+        // A projected view stays lined up with its parent: beside it only across, above or
+        // below it only up and down.
+        let lined_up = d.views.get(vi).and_then(|v| match &v.kind {
+            ViewKind::Projected { parent, side } if side != "iso" => d.view(*parent).map(|pv| (pv.at, side.clone())),
+            _ => None,
+        });
         let v = d.views.get_mut(vi).ok_or_else(|| bad(cmd, "no such view"))?;
         common_view_params(v, p, cmd)?;
+        if let Some((pat, side)) = lined_up {
+            if side == "left" || side == "right" {
+                v.at[1] = pat[1];
+            } else {
+                v.at[0] = pat[0];
+            }
+        }
+        let (id, delta) = (v.id, [v.at[0] - before[0], v.at[1] - before[1]]);
+        // The views projected or cut from it go with it.
+        if delta != [0.0, 0.0] && p.get("at").is_some() {
+            let carried: Vec<u64> = d.descendants(id).into_iter().skip(1).collect();
+            for w in d.views.iter_mut().filter(|w| carried.contains(&w.id) && matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. })) {
+                w.at = [w.at[0] + delta[0], w.at[1] + delta[1]];
+            }
+        }
+        let v = d.views.get_mut(vi).ok_or_else(|| bad(cmd, "no such view"))?;
         if let Some(f) = bool_(p, "flip") {
             match &mut v.kind {
                 ViewKind::Section { flip, .. } => *flip = f,
@@ -541,16 +630,40 @@ fn view_delete(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-fn kind_of(p: &Value, cmd: &str) -> Result<DimKind> {
-    Ok(match str_(p, "kind").unwrap_or("horizontal").trim().to_ascii_lowercase().as_str() {
+/// `kind`; `auto` (a linear dimension that takes its direction from where it is put) is None.
+fn kind_of(p: &Value, cmd: &str) -> Result<Option<DimKind>> {
+    if str_(p, "kind").is_some_and(|k| k.trim().eq_ignore_ascii_case("auto")) {
+        return Ok(None);
+    }
+    Ok(Some(match str_(p, "kind").unwrap_or("horizontal").trim().to_ascii_lowercase().as_str() {
         "horizontal" => DimKind::Horizontal,
         "vertical" => DimKind::Vertical,
         "aligned" | "linear" => DimKind::Aligned,
         "diameter" => DimKind::Diameter,
         "radius" => DimKind::Radius,
         "angle" | "angular" => DimKind::Angle,
-        _ => return Err(bad(cmd, "`kind` must be horizontal, vertical, aligned, diameter, radius or angle")),
-    })
+        _ => return Err(bad(cmd, "`kind` must be auto, horizontal, vertical, aligned, diameter, radius or angle")),
+    }))
+}
+
+/// A linear dimension's direction from where it is put, as one drags it out on paper: above or
+/// below the two points (between them across) horizontal, beside them vertical, off a corner of
+/// their box (or for points on one slanting line, beside it) aligned.
+fn auto_kind(p1: Vec2, p2: Vec2, place: Option<Vec2>) -> DimKind {
+    let (dx, dy) = ((p2.x - p1.x).abs(), (p2.y - p1.y).abs());
+    if dy < 1e-6 {
+        return DimKind::Horizontal;
+    }
+    if dx < 1e-6 {
+        return DimKind::Vertical;
+    }
+    let Some(q) = place else { return DimKind::Aligned };
+    let within = |v: f64, a: f64, b: f64| v >= a.min(b) - 1e-9 && v <= a.max(b) + 1e-9;
+    match (within(q.x, p1.x, p2.x), within(q.y, p1.y, p2.y)) {
+        (true, false) => DimKind::Horizontal,
+        (false, true) => DimKind::Vertical,
+        _ => DimKind::Aligned,
+    }
 }
 
 fn text_param(p: &Value, k: &str, cmd: &str) -> Result<Option<String>> {
@@ -565,7 +678,13 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "drawing.dimension";
     let i = find(s, p, cmd)?;
     let view = id_of(p, "view", cmd)?;
-    let kind = kind_of(p, cmd)?;
+    let kind_given = kind_of(p, cmd)?;
+    // Auto takes two points like a linear one; its kind is settled once they are known.
+    let kind = kind_given.unwrap_or(DimKind::Aligned);
+    let place = match p.get("place") {
+        None | Some(Value::Null) => None,
+        v => Some(point(v).ok_or_else(|| bad(cmd, "`place` must be [x, y] on the sheet (mm)"))?),
+    };
     let pts: Vec<[f64; 2]> = p.get("points").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| point(Some(v))).collect()).unwrap_or_default();
     let want = match kind {
         DimKind::Diameter | DimKind::Radius => 1,
@@ -592,6 +711,7 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
     let on_arcs = arc_given.is_some() && !sharps;
     let circles = matches!(kind, DimKind::Diameter | DimKind::Radius) || on_arcs;
     let mut refs: Vec<DimRef> = Vec::new();
+    let mut sheet_pts: Vec<Vec2> = Vec::new();
     for (k, at) in pts.iter().enumerate() {
         let mode = if sharps {
             dv::PickMode::Sharps
@@ -600,7 +720,8 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
         } else {
             dv::PickMode::Points
         };
-        let snap = dv::pick(pv, Vec2::new(at[0], at[1]), 6.0, mode).ok_or_else(|| {
+        // Only what is under the point (a point picked in the air measures nothing).
+        let snap = dv::pick(pv, Vec2::new(at[0], at[1]), PICK_REACH, mode).ok_or_else(|| {
             bad(
                 cmd,
                 match mode {
@@ -610,8 +731,16 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
                 },
             )
         })?;
+        sheet_pts.push(snap.at);
         refs.push(snap.r);
     }
+    let kind = match kind_given {
+        Some(k) => k,
+        None => match (sheet_pts.first(), sheet_pts.get(1)) {
+            (Some(a), Some(b)) => auto_kind(*a, *b, place.map(|q| Vec2::new(q[0], q[1]))),
+            _ => DimKind::Aligned,
+        },
+    };
     if (!circles || on_arcs) && kind != DimKind::Angle && refs.first().map(|r| r.point) == refs.get(1).map(|r| r.point) {
         return Err(bad(cmd, "both points are the same"));
     }
@@ -621,9 +750,14 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let text = text_param(p, "text", cmd)?.unwrap_or_default();
     let tolerance = text_param(p, "tolerance", cmd)?.unwrap_or_default();
+    // Where it was put, in the view's own coordinates (it moves with the view).
+    let at = match place {
+        Some(q) => Some(to_view(&d, view, q).ok_or_else(|| bad(cmd, "no such view"))?),
+        None => None,
+    };
     change(s, i, |d| {
         let id = d.take_id();
-        d.dims.push(DrawDim { id, view, kind, refs, offset, text, tolerance, arc });
+        d.dims.push(DrawDim { id, view, kind, refs, offset, text, tolerance, arc, at });
         Ok(json!({"dimension": id}))
     })
 }
@@ -639,6 +773,9 @@ fn arc_param(p: &Value, cmd: &str) -> Result<Option<String>> {
         },
     }
 }
+
+/// How far from a picked point (sheet mm) the model point it stands for may be.
+const PICK_REACH: f64 = 3.0;
 
 fn dim_index(d: &Drawing, p: &Value, cmd: &str) -> Result<usize> {
     let id = id_of(p, "dimension", cmd)?;
@@ -691,7 +828,9 @@ fn dimension_edit(s: &mut Session, p: &Value) -> Result<Value> {
             if o.abs() >= 1e4 {
                 return Err(bad(cmd, "`offset` is too large"));
             }
+            // An offset puts it by the offset again, not where it was put.
             x.offset = o;
+            x.at = None;
         }
         if let Some(t) = text_param(p, "text", cmd)? {
             x.text = t;
@@ -702,6 +841,18 @@ fn dimension_edit(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(a) = arc_param(p, cmd)? {
             x.arc = a;
         }
+        match p.get("place") {
+            None => {}
+            Some(Value::Null) => x.at = None,
+            v => {
+                let q = point(v).ok_or_else(|| bad(cmd, "`place` must be [x, y] on the sheet (mm)"))?;
+                let view = x.view;
+                let vp = d.view(view).map(|v| (v.at, d.view_scale(v))).ok_or_else(|| bad(cmd, "its view is missing"))?;
+                let x = d.dims.get_mut(k).ok_or_else(|| bad(cmd, "no such dimension"))?;
+                x.at = Some([(q[0] - vp.0[0]) / vp.1, (q[1] - vp.0[1]) / vp.1]);
+            }
+        }
+        let x = d.dims.get(k).ok_or_else(|| bad(cmd, "no such dimension"))?;
         Ok(json!({"dimension": x.id}))
     })
 }

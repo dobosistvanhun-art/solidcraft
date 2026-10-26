@@ -210,6 +210,11 @@ pub struct DrawDim {
     /// near side of it (`min`: between the arcs) or the far side (`max`: over them).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub arc: String,
+    /// Where it was put, in its view's own coordinates (model mm about the view's centre, so it
+    /// moves with the view): a linear dimension's line runs through it and its text sits there; a
+    /// diameter's or radius' leader runs out to it; an angle's arc passes through it. None: `offset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
 }
 
 /// A note on the sheet.
@@ -364,7 +369,7 @@ impl Drawing {
                         _ => true,
                     }
             })
-            && self.dims.iter().all(|d| d.offset.is_finite() && d.refs.len() <= 3 && d.refs.iter().all(|r| r.point.is_finite()))
+            && self.dims.iter().all(|d| d.offset.is_finite() && d.at.is_none_or(|p| finite2(&p)) && d.refs.len() <= 3 && d.refs.iter().all(|r| r.point.is_finite()))
             && self.notes.iter().all(|n| finite2(&n.at) && n.height.is_finite() && n.height > 0.0 && n.height < 100.0)
     }
 }

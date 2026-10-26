@@ -2052,6 +2052,8 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
                     crate::select_other::close(app);
                 } else if app.tool.is_some() {
                     crate::tools::finish(app);
+                } else if crate::dialogs_drawing::escape(app) {
+                    // The drawing editor stepped back (its picks, then its tool), staying open.
                 } else if app.dialog.is_some() {
                     crate::dialogs::cancel(app);
                 } else if !app.session.selection.is_empty() || app.session.active_sketch.is_none() {

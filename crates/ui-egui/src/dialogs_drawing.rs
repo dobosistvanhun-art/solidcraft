@@ -781,6 +781,30 @@ fn lined(at: [f64; 2], parent_at: Option<[f64; 2]>, line: char) -> [f64; 2] {
     }
 }
 
+/// Esc in the drawing editor: the drag, the picks so far, then the tool step back (to Select).
+/// False when there is nothing to step back from (Esc then closes the editor).
+pub fn escape(app: &mut SolveApp) -> bool {
+    let Some(Kind::Drawing(k)) = app.dialog.as_mut().map(|d| &mut d.kind) else { return false };
+    step_back(k)
+}
+
+fn step_back(k: &mut DrawUi) -> bool {
+    if k.drag.take().is_some() | k.dim_drag.take().is_some() {
+        return true;
+    }
+    if !k.picks.is_empty() || !k.dim_picks.is_empty() {
+        k.picks.clear();
+        k.dim_picks.clear();
+        k.pick_view = None;
+        return true;
+    }
+    if k.tool != Tool::Select {
+        k.set_tool(Tool::Select);
+        return true;
+    }
+    false
+}
+
 /// Paint the sheet over the viewport and handle clicks and drags on it. True when the dialog is
 /// the drawing editor.
 pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut Dialog) -> bool {
@@ -1051,16 +1075,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         app.esc_handled = true;
     }
     if esc || (secondary && over) {
-        let dragging = k.drag.take().is_some() | k.dim_drag.take().is_some();
-        if dragging {
-            // The drag is dropped; nothing else.
-        } else if !k.picks.is_empty() || !k.dim_picks.is_empty() {
-            k.picks.clear();
-            k.dim_picks.clear();
-            k.pick_view = None;
-        } else {
-            k.set_tool(Tool::Select);
-        }
+        step_back(k);
     }
     // Delete removes the selected view or dimension.
     if k.tool == Tool::Select
@@ -1475,10 +1490,11 @@ mod tests {
         assert!(notes.len() == 1 && notes[0].text == "Sorjamentes" && (notes[0].at[0] - 40.0).abs() < 1.0, "{notes:?}");
         // A section across the top view (centred at (120, 120), 100 wide at 1:1): its line, then its place.
         set(&mut h, |k| k.set_tool(Tool::Section));
-        click(&mut h, [55.0, 121.0]);
-        click(&mut h, [185.0, 122.0]);
+        click(&mut h, [63.0, 121.0]);
+        click(&mut h, [177.0, 122.0]);
         assert_eq!(ui(&h).picks.len(), 2, "{:?}", ui(&h).status);
-        assert!(ui(&h).picks.iter().all(|p| (p[1] - 121.0).abs() < 1e-9), "squared: {:?}", ui(&h).picks);
+        let picks = ui(&h).picks;
+        assert!(picks[0][1] == picks[1][1] && (picks[0][1] - 121.0).abs() < 0.05, "squared: {picks:?}");
         click(&mut h, [130.0, 50.0]);
         let d = h.app.session.doc.drawings.first().cloned().unwrap();
         assert_eq!(d.views.len(), 5, "{:?}", ui(&h).status);

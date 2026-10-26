@@ -127,6 +127,11 @@ const COMMANDS: &[Command] = &[
     Command { name: "save-stress", usage: USAGE_SAVE_STRESS, listed: false },
 ];
 
+/// The Fúzió build's allocator (feature `mimalloc`): faster for the kernel's many small allocations.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     logger::init(&mut args);

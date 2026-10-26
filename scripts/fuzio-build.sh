@@ -8,7 +8,8 @@
 # Manager (Start menu entry; a later run updates it in place). Inside the box (Fejlesztő terminál)
 # it only builds: target/fuzio/solidcraft-fuzio.tar.gz.
 #
-# The first build takes 30–60 minutes; later ones only rebuild what changed.
+# The first build takes 30–60 minutes; later ones only rebuild what changed. The build is made for
+# the machine it runs on (see "Fordítás" below).
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,12 +50,23 @@ git -C "$SRC" pull --ff-only || echo "  (nem sikerült frissíteni — a meglév
 
 echo "==> Fordítás (az első 30–60 perc)"
 cd "$SRC"
-nice cargo build --release -p solidcraft
+# Optimised for this machine: code for its own CPU (on the ZBook Haswell: AVX2, FMA), the mimalloc
+# allocator and the `fuzio` profile (Cargo.toml). SOLIDCRAFT_CPU=x86-64-v2 builds a binary that
+# also runs on older machines.
+CPU="${SOLIDCRAFT_CPU:-native}"
+echo "  CPU: $CPU ($(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//'))"
+JOBS="$(nproc 2>/dev/null || echo 4)"
+# Thin LTO of the app needs about 1.5 GB per job; keep the build within the memory there is.
+MEM_GB="$(awk '/MemAvailable/ {print int($2/1048576)}' /proc/meminfo 2>/dev/null || echo 8)"
+[ "$MEM_GB" -lt 4 ] && MEM_GB=4
+MAXJ=$(( MEM_GB * 2 / 3 ))
+[ "$JOBS" -gt "$MAXJ" ] && JOBS="$MAXJ"
+RUSTFLAGS="-C target-cpu=$CPU ${RUSTFLAGS:-}" nice cargo build --profile fuzio -j "$JOBS" -p solidcraft --features mimalloc
 
 echo "==> Csomag"
 rm -rf "$OUT/pkg"
 mkdir -p "$OUT/pkg/solidcraft"
-cp target/release/solidcraft "$OUT/pkg/solidcraft/solidcraft"
+cp target/fuzio/solidcraft "$OUT/pkg/solidcraft/solidcraft"
 strip "$OUT/pkg/solidcraft/solidcraft" || true
 cp assets/icons/app/linux/exports/hicolor/256x256/apps/ai.storyteller.solidcraft.png "$OUT/pkg/solidcraft/solidcraft.png" 2>/dev/null \
     || cp assets/icons/app/linux/exports/hicolor/512x512/apps/ai.storyteller.solidcraft.png "$OUT/pkg/solidcraft/solidcraft.png"

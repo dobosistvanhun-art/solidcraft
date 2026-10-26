@@ -147,6 +147,13 @@ codegen-units = 16
 # binary). See docs/crash-reports.md.
 debug = "line-tables-only"
 
+# Fúzió build (scripts/fuzio-build.sh): the release build with fewer codegen units (a little
+# faster code for a longer build; line tables stay for crash reports). The script also builds
+# for the CPU it runs on (`-C target-cpu=native`) and with mimalloc.
+[profile.fuzio]
+inherits = "release"
+codegen-units = 4
+
 # truck-shapeops with SolidCraft fixes (Apache-2.0, see vendor/truck-shapeops and ATTRIBUTION.md).
 [patch.crates-io]
 truck-geometry = { path = "vendor/truck-geometry" }

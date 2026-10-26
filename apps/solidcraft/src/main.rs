@@ -574,6 +574,11 @@ fn app_viewport() -> Result<egui::ViewportBuilder, eframe::Error> {
 /// The window's app id: it names the desktop entry, so it is the packages' reverse-DNS id.
 const APP_ID: &str = solidcraft_engine::io::APP_ID;
 
+/// The Fúzió build's allocator (feature `mimalloc`): faster for the kernel's many small allocations.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     objc2_foundation::NSProcessInfo::processInfo().setProcessName(objc2_foundation::ns_string!("SolidCraft"));

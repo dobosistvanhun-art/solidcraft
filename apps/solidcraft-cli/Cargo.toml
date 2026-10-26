@@ -23,8 +23,12 @@ path = "src/alias.rs"
 default = ["raytrace-cpu"]
 bundled-render-library = ["solidcraft-engine/bundled-render-library"]
 raytrace-cpu = ["solidcraft-engine/raytrace-cpu"]
+# mimalloc as the memory allocator: the geometry kernel allocates many small, short-lived
+# objects, which it serves faster than the system allocator (the Fúzió build turns it on).
+mimalloc = ["dep:mimalloc"]
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false, optional = true }
 solidcraft-engine = { workspace = true }
 solidcraft-gpu = { workspace = true }
 solidcraft-mcp = { workspace = true }

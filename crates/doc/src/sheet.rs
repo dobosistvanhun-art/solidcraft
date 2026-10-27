@@ -338,7 +338,7 @@ impl SheetRule {
 }
 
 /// How readily a sheet material yields in a bend, which sets where its neutral fibre lies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MaterialClass {
     /// Soft aluminium, copper.
@@ -484,6 +484,9 @@ pub struct RuleValues {
     pub corner_relief_shape: ReliefShape,
     pub hem_gap: f64,
     pub gap: f64,
+    /// The K-factor is worked out (`auto`) for this material class: each bend from its own radius
+    /// over the thickness ([`auto_k_factor`]); `k_factor` is the rule radius's.
+    pub k_auto: Option<MaterialClass>,
 }
 
 impl Document {
@@ -525,6 +528,7 @@ impl Document {
             })?,
             hem_gap: with_t(&r.hem_gap, Kind::Length)?,
             gap: with_t(&r.gap, Kind::Length)?,
+            k_auto: is_auto_k(&r.k_factor).then_some(class),
         };
         if !(0.0..=1.0).contains(&v.k_factor) || v.bend_radius < 0.0 {
             return Err(DocError::Invalid("the K-factor must be 0…1 and the bend radius positive".into()));
@@ -591,6 +595,11 @@ pub struct SheetBody {
     pub rule: String,
     pub t: f64,
     pub k: f64,
+    /// An `auto` K-factor's material class: each bend then takes the K-factor of its own radius
+    /// (a flange with a radius of its own unfolds by it); `k` is the rule radius's. None: `k` for
+    /// every bend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k_auto: Option<MaterialClass>,
     /// The flat frame: base panel bottom face; z = thickness direction.
     pub frame: Plane,
     pub base: Region2,
@@ -825,6 +834,9 @@ pub struct BendInfo {
     pub angle_deg: f64,
     pub radius: f64,
     pub up: bool,
+    /// Its K-factor (a bend with a radius of its own may have its own).
+    #[serde(default)]
+    pub k: f64,
     pub allowance: f64,
     pub length: f64,
     /// Centre line in flat coordinates.
@@ -1052,9 +1064,18 @@ impl SheetBody {
         }
     }
 
+    /// The K-factor of a bend of inner radius `radius`: from that radius when the rule works it
+    /// out (`auto`), else the rule's.
+    pub fn k_at(&self, radius: f64) -> f64 {
+        match self.k_auto {
+            Some(class) => auto_k_factor(class, radius, self.t),
+            None => self.k,
+        }
+    }
+
     /// Bend allowance of a flange.
     pub fn allowance(&self, f: &SheetFlange) -> f64 {
-        f.angle.abs() * (f.radius + self.k * self.t)
+        f.angle.abs() * (f.radius + self.k_at(f.radius) * self.t)
     }
 
     /// Fold transform of flange `i`'s panel (flat 3D coordinates → folded, in the flat frame).
@@ -1197,7 +1218,7 @@ impl SheetBody {
                 let Some(f) = self.flanges.get(i) else { return Vec3::ZERO };
                 let s = (q - f.p).dot(f.n);
                 let q0 = q - f.n * s;
-                let neutral = (f.radius + self.k * self.t).max(1e-12);
+                let neutral = (f.radius + self.k_at(f.radius) * self.t).max(1e-12);
                 let phi = (s / neutral).clamp(0.0, f.angle.abs());
                 let (axis_o, k, turn) = self.bend_axis(f);
                 let m = mat_mul(&self.world(f.parent), &rot_about(axis_o, k, turn.signum() * phi));
@@ -1213,7 +1234,7 @@ impl SheetBody {
     fn zone_point(&self, f: &SheetFlange, q: Vec2, z: f64) -> (Vec3, [Vec3; 3], Vec3) {
         let s = (q - f.p).dot(f.n);
         let u = (q - f.p).dot(f.d);
-        let neutral = (f.radius + self.k * self.t).max(1e-12);
+        let neutral = (f.radius + self.k_at(f.radius) * self.t).max(1e-12);
         let phi = s / neutral;
         let (axis_o, k, turn) = self.bend_axis(f);
         let sigma = if turn < 0.0 { -1.0 } else { 1.0 };
@@ -1514,7 +1535,7 @@ impl SheetBody {
                             (s0, s1) = ((s0 - pad).max(0.0), (s1 + pad).min(self.allowance(f)));
                             (u0, u1) = (u0 - pad, u1 + pad);
                         }
-                        let neutral = (f.radius + self.k * self.t).max(1e-12);
+                        let neutral = (f.radius + self.k_at(f.radius) * self.t).max(1e-12);
                         let (axis_o, k, turn) = self.bend_axis(f);
                         let wp = self.world(f.parent);
                         let q = |u: f64| f.p + f.n * s0 + f.d * u;
@@ -2111,6 +2132,7 @@ impl SheetBody {
                     angle_deg: f.angle.abs().to_degrees(),
                     radius: f.radius,
                     up: f.angle >= 0.0,
+                    k: self.k_at(f.radius),
                     allowance: ba,
                     length: s1 - s0,
                     start: if s0 > 0.0 { a + f.d * s0 } else { a },
@@ -4661,6 +4683,7 @@ pub fn base_flange(body: &str, rule: &str, rv: &RuleValues, plane: Plane, region
         rule: rule.into(),
         t: rv.thickness,
         k: rv.k_factor,
+        k_auto: rv.k_auto,
         frame: plane,
         base: Region2 { outer: region.outer, holes: Vec::new() },
         flanges: Vec::new(),
@@ -4721,6 +4744,7 @@ pub fn contour_flange(body: &str, rule: &str, rv: &RuleValues, plane: &Plane, pt
         rule: rule.into(),
         t,
         k: rv.k_factor,
+        k_auto: rv.k_auto,
         frame,
         base: Region2 { outer: Loop2 { segs: Vec::new() }, holes: Vec::new() },
         flanges: Vec::new(),

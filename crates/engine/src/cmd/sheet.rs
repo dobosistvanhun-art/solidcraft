@@ -609,7 +609,7 @@ fn flat_json(sh: &SheetBody) -> Result<Value> {
         .iter()
         .map(|b| {
             json!({"bend": b.index, "angle_deg": b.angle_deg, "radius": b.radius, "direction": if b.up { "up" } else { "down" },
-                "allowance": b.allowance, "length": b.length, "start": pt(&b.start), "end": pt(&b.end)})
+                "k_factor": b.k, "allowance": b.allowance, "length": b.length, "start": pt(&b.start), "end": pt(&b.end)})
         })
         .collect();
     let pockets: Vec<Value> = sh
@@ -975,7 +975,7 @@ fn export_bend_table(s: &mut Session, p: &Value) -> Result<Value> {
                 quote(&sh.body),
                 quote(&sh.rule),
                 sh.t,
-                sh.k,
+                b.k,
                 b.index,
                 b.angle_deg,
                 if b.up { "up" } else { "down" },

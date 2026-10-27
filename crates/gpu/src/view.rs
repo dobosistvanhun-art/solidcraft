@@ -1948,7 +1948,7 @@ pub const FACE_STEPS: i32 = 8;
 /// let a washer 12 mm behind a plate show through it (#1434). A thicker line (a selected edge,
 /// 3.5 px) may lose its outer edge on one side where it lies on a steep face. The section cap,
 /// which writes its own depth, adds the same in the shader.
-pub const FACE_SLOPE: f32 = 1.0;
+pub const FACE_SLOPE: f32 = 0.0;
 /// The removed material of a preview, drawn translucent: behind the faces it shares with the new
 /// shape, so twice [`FACE_BIAS`].
 const GHOST_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: 2 * FACE_STEPS, slope_scale: 2.0 * FACE_SLOPE, clamp: 0.0 };

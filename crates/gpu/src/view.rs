@@ -2025,7 +2025,9 @@ pub fn tessellation(adapter: &wgpu::Adapter, device: &wgpu::Device, queue: &wgpu
         return None;
     }
     let info = adapter.get_info();
-    if hangs_on_gpu_tessellation(info.backend, &info.name) || std::env::var_os("SOLIDCRAFT_CPU_TESS").is_some() {
+    let forced = std::env::var_os("SOLIDCRAFT_GPU_TESS").is_some_and(|v| v != "0");
+    let unreliable = hangs_on_gpu_tessellation(info.backend, &info.name) || misdraws_gpu_tessellation(info.backend, info.vendor, &info.driver_info);
+    if (unreliable && !forced) || std::env::var_os("SOLIDCRAFT_CPU_TESS").is_some() {
         log::warn!("bodies are built on the CPU on {} ({:?})", info.name, info.backend);
         return None;
     }
@@ -2040,9 +2042,21 @@ pub fn tessellation(adapter: &wgpu::Adapter, device: &wgpu::Device, queue: &wgpu
 
 /// A device whose driver hangs on the evaluation shader, so bodies are built on the CPU there:
 /// the AMD FirePro D300/D500/D700 (Mac Pro 2013, Tahiti) under Metal, where macOS resets the GPU
-/// and the whole desktop freezes. `SOLIDCRAFT_CPU_TESS=1` forces CPU evaluation on any device.
+/// and the whole desktop freezes. `SOLIDCRAFT_CPU_TESS=1` forces CPU evaluation on any device
+/// (see also [`misdraws_gpu_tessellation`]).
 pub fn hangs_on_gpu_tessellation(backend: wgpu::Backend, name: &str) -> bool {
     backend == wgpu::Backend::Metal && name.contains("FirePro")
+}
+
+/// A device whose driver runs the evaluation shader but gets it wrong, so bodies are built on the
+/// CPU there: NVIDIA's legacy Vulkan drivers (the 470 series and older, the last for Kepler cards
+/// such as the Quadro K1100M) draw curved faces with misplaced vertices — a tube shows a coarse
+/// polygon round it and torn slivers along its edges, where the CPU-built mesh of the same plan
+/// is right. `SOLIDCRAFT_GPU_TESS=1` evaluates on such a device anyway (to compare).
+pub fn misdraws_gpu_tessellation(backend: wgpu::Backend, vendor: u32, driver_info: &str) -> bool {
+    const NVIDIA: u32 = 0x10de;
+    let major = driver_info.trim().split('.').next().and_then(|m| m.parse::<u32>().ok());
+    backend == wgpu::Backend::Vulkan && vendor == NVIDIA && major.is_some_and(|m| m <= 470)
 }
 
 /// Whether [`Renderer::prepare`] may blit the picture it drew last instead of drawing the frame
@@ -2777,6 +2791,18 @@ mod tests {
         assert!(!super::hangs_on_gpu_tessellation(wgpu::Backend::Metal, "Apple M2"));
         assert!(!super::hangs_on_gpu_tessellation(wgpu::Backend::Metal, "AMD Radeon Pro 560X"));
         assert!(!super::hangs_on_gpu_tessellation(wgpu::Backend::Vulkan, "AMD FirePro W5100"));
+    }
+
+    /// NVIDIA's legacy Vulkan drivers (470 and older: Kepler cards) build bodies on the CPU; newer
+    /// NVIDIA drivers, other vendors and NVIDIA under OpenGL keep GPU evaluation.
+    #[test]
+    fn legacy_nvidia_vulkan_builds_bodies_on_the_cpu() {
+        assert!(super::misdraws_gpu_tessellation(wgpu::Backend::Vulkan, 0x10de, "470.256.02"));
+        assert!(super::misdraws_gpu_tessellation(wgpu::Backend::Vulkan, 0x10de, "390.157"));
+        assert!(!super::misdraws_gpu_tessellation(wgpu::Backend::Vulkan, 0x10de, "535.183.01"));
+        assert!(!super::misdraws_gpu_tessellation(wgpu::Backend::Gl, 0x10de, "470.256.02"));
+        assert!(!super::misdraws_gpu_tessellation(wgpu::Backend::Vulkan, 0x1002, "470.0"));
+        assert!(!super::misdraws_gpu_tessellation(wgpu::Backend::Vulkan, 0x10de, ""));
     }
 
     /// The viewport shader parses and validates (a bad shader would only fail at run time).

@@ -4,7 +4,7 @@
     python3 ~/Projektek/solidcraft/scripts/fuzio-render-diag.py [design.solidcraft]
 
 Starts SolidCraft a few times, each with one renderer setting changed (as it is set, refined
-display off, OpenGL, the software renderer, Normal display quality), opens the design (default:
+display off, OpenGL, the software renderer, Normal display quality, bodies meshed on the GPU), opens the design (default:
 a tube drawn here), looks at it from below and up close, and saves a screenshot of each, with the
 program's own messages and the graphics card's details, into ~/solidcraft-diag.zip. The window
 opens and closes by itself; touch nothing until it says "Kész". Preferences are put back as they
@@ -149,6 +149,7 @@ def main():
             ("3-opengl", {"WGPU_BACKEND": "gl"}, None),
             ("4-szoftveres", {"SOLIDCRAFT_RENDERER": "cpu"}, None),
             ("5-normal-minoseg", {}, {"display_quality": "normal", "supersampling": 1.0}),
+            ("6-gpu-halozas", {"SOLIDCRAFT_GPU_TESS": "1"}, None),
         ]
         for name, env, prefs in runs:
             print(f"==> {name}")

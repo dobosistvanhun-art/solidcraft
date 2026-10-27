@@ -223,6 +223,7 @@ fn hostile_drawing_parameters_are_refused() {
             scale: None,
             label: "Z".into(),
             hidden: false,
+            free: false,
         });
     }
     let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
@@ -459,4 +460,78 @@ fn dimensions_are_put_where_asked_and_pick_only_what_is_there() {
     run(&mut s, "drawing.dimension", json!({"drawing": id, "view": top, "kind": "diameter", "points": [[220, 150]], "place": [240, 190]}));
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));
     assert!(texts(&r).iter().any(|t| t == "Ø20"));
+}
+
+/// Besides vertices and centres a drawing measures to the middles of edges, the quadrant points
+/// of circles and where edges cross in the view; each follows the model.
+#[test]
+fn midpoints_quadrants_and_crossings_are_points_to_measure_to() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 100, "width": 50, "height": 20, "body_name": "A"}));
+    run(&mut s, "solid.cylinder", json!({"diameter": 10, "height": 30, "base": [80, 25, -5], "operation": "cut"}));
+    // A bar above it, across it: in the top view its sides cross the plate's long edges.
+    run(&mut s, "solid.box", json!({"length": 20, "width": 90, "height": 10, "corner": [40, -20, 30], "operation": "new", "body_name": "B"}));
+    let id = run(&mut s, "drawing.create", json!({"name": "D", "scale": "1:1", "views": "none"}))["drawing"].as_u64().unwrap();
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": id, "orientation": "top", "at": [200, 150]}))["view"].as_u64().unwrap();
+    // The model's extent x 0..100, y -20..70: (x, y) is at (150 + x, 125 + y) on the sheet.
+    let sheet = |x: f64, y: f64| [150.0 + x, 125.0 + y];
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    let has =
+        |kind: &str, p: [f64; 2]| {
+            r["views"][0]["points"].as_array().unwrap().iter().any(|q| {
+                q["kind"] == kind && (q["at"][0].as_f64().unwrap() - p[0]).abs() < 1e-6 && (q["at"][1].as_f64().unwrap() - p[1]).abs() < 1e-6
+            })
+        };
+    assert!(has("mid", sheet(0.0, 25.0)), "the plate's left edge's middle: {}", r["views"][0]["points"]);
+    // The front edge's middle lies under the bar: hidden, so not offered.
+    assert!(!has("mid", sheet(50.0, 0.0)));
+    assert!(has("quad", sheet(85.0, 25.0)) && has("quad", sheet(80.0, 30.0)), "the hole's quadrant points");
+    assert!(has("cross", sheet(40.0, 0.0)) && has("cross", sheet(60.0, 50.0)), "the bar's sides across the plate's edges");
+    // From the crossing to the left edge's middle: 40; to the hole's right quadrant: 45.
+    run(
+        &mut s,
+        "drawing.dimension",
+        json!({"drawing": id, "view": top, "kind": "horizontal", "points": [sheet(40.0, 0.0), sheet(0.0, 25.0)], "place": sheet(20.0, -10.0)}),
+    );
+    run(
+        &mut s,
+        "drawing.dimension",
+        json!({"drawing": id, "view": top, "kind": "horizontal", "points": [sheet(40.0, 0.0), sheet(85.0, 25.0)], "place": sheet(60.0, -15.0)}),
+    );
+    let refs: Vec<String> = s.doc.drawings[0].dims.iter().flat_map(|d| d.refs.iter().map(|r| r.at.clone())).collect();
+    assert!(
+        refs.iter().any(|a| a.starts_with("cross:")) && refs.iter().any(|a| a == "mid") && refs.iter().any(|a| a.starts_with("quad:")),
+        "{refs:?}"
+    );
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    assert!(texts(&r).iter().any(|t| t == "40") && texts(&r).iter().any(|t| t == "45"), "{:?}", texts(&r));
+    // The text height of the drawing's dimensions.
+    run(&mut s, "drawing.edit", json!({"drawing": id, "text_height": 5}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    let heights: Vec<f64> = r["prims"].as_array().unwrap().iter().filter(|p| p["text"] == "40").filter_map(|p| p["height"].as_f64()).collect();
+    assert_eq!(heights, [5.0]);
+    assert!(s.execute("drawing.edit", &json!({"drawing": id, "text_height": 50})).is_err());
+}
+
+/// A free projected view stays where it is put, and its parent no longer takes it along.
+#[test]
+fn a_free_projected_view_goes_anywhere() {
+    let mut s = plate();
+    let id = run(&mut s, "drawing.create", json!({"name": "D", "scale": "1:1", "views": "none"}))["drawing"].as_u64().unwrap();
+    let front = run(&mut s, "drawing.view.base", json!({"drawing": id, "orientation": "front", "at": [120, 200]}))["view"].as_u64().unwrap();
+    let side =
+        run(&mut s, "drawing.view.projected", json!({"drawing": id, "parent": front, "side": "right", "at": [260, 150], "free": true}))["view"]
+            .as_u64()
+            .unwrap();
+    let at = |s: &Session, v: u64| s.doc.drawings[0].view(v).map(|x| x.at).unwrap();
+    assert_eq!(at(&s, side), [260.0, 150.0]);
+    run(&mut s, "drawing.view.edit", json!({"drawing": id, "view": front, "at": [130, 210]}));
+    assert_eq!(at(&s, side), [260.0, 150.0]);
+    // Lined up again: back on its parent's line.
+    run(&mut s, "drawing.view.edit", json!({"drawing": id, "view": side, "free": false, "at": [260, 150]}));
+    assert_eq!(at(&s, side), [260.0, 210.0]);
+    assert!(
+        s.execute("drawing.view.edit", &json!({"drawing": id, "view": front, "free": true})).is_err(),
+        "a base view has no parent to line up with"
+    );
 }

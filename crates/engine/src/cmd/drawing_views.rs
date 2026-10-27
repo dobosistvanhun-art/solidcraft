@@ -119,6 +119,9 @@ pub struct PickEdge {
     pub full: bool,
     #[serde(skip)]
     hidden: bool,
+    /// The model edge it is (body, edge index) and, for a straight one, its ends in 3D.
+    #[serde(skip)]
+    model: Option<(String, usize, Vec3, Vec3)>,
 }
 
 /// The drawn lines of a view, bucketed, to tell whether a point lies on one (and on a visible one).
@@ -178,6 +181,94 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     (a + ab * t - p).len()
 }
 
+/// Middles of straight edges, quadrant points of circles and crossings of straight edges, as
+/// snaps with references that follow the model (`mid`, `quad:<k>`, `cross:<edge>:<body>`).
+fn reference_snaps(edges: &[PickEdge], basis: &Basis, tol: f64, on: &dyn Fn(Vec2) -> u8) -> Vec<Snap> {
+    let mut out = Vec::new();
+    let snap = |at: Vec2, body: &str, edge: usize, kind: String, point: Vec3| Snap {
+        at,
+        r: DimRef { body: body.to_string(), edge: Some(edge), at: kind, point },
+        radius: None,
+        sharp: false,
+    };
+    let lines: Vec<(Vec2, Vec2, &str, usize, Vec3, Vec3)> = edges
+        .iter()
+        .filter(|x| x.kind == "line")
+        .filter_map(|x| {
+            let (body, i, a3, b3) = x.model.as_ref()?;
+            Some((x.a, x.b?, body.as_str(), *i, *a3, *b3))
+        })
+        .take(4000)
+        .collect();
+    for (a, b, body, i, a3, b3) in &lines {
+        out.push(snap((*a + *b) * 0.5, body, *i, "mid".into(), (*a3 + *b3) * 0.5));
+    }
+    for x in edges.iter().filter(|x| x.kind == "circle") {
+        let (Some((body, i, c3, _)), Some(r)) = (x.model.as_ref(), x.r) else { continue };
+        for (k, (d2, d3)) in [
+            (Vec2::new(1.0, 0.0), basis.r),
+            (Vec2::new(0.0, 1.0), basis.u),
+            (Vec2::new(-1.0, 0.0), basis.r * -1.0),
+            (Vec2::new(0.0, -1.0), basis.u * -1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = x.a + d2 * r;
+            if x.full || on(at) > 0 {
+                out.push(snap(at, body, *i, format!("quad:{k}"), *c3 + d3 * r));
+            }
+        }
+    }
+    // Crossings: inside both edges (where they only meet at an end, that end is a vertex already).
+    let mut crossings = 0;
+    'outer: for (n, (a, b, body, i, a3, b3)) in lines.iter().enumerate() {
+        for (c, d, body2, j, ..) in lines.iter().skip(n + 1) {
+            let Some(t) = cross_param(*a, *b, *c, *d) else { continue };
+            let at = *a + (*b - *a) * t.0;
+            let len = (a.dist(*b)).min(c.dist(*d)).max(tol);
+            let inside = |u: f64, l: f64| u * l > tol && (1.0 - u) * l > tol;
+            if !(inside(t.0, a.dist(*b)) || inside(t.1, c.dist(*d))) || len <= tol {
+                continue;
+            }
+            if [*a, *b, *c, *d].iter().any(|p| p.dist(at) < tol) {
+                continue;
+            }
+            out.push(snap(at, body, *i, format!("cross:{j}:{body2}"), *a3 + (*b3 - *a3) * t.0));
+            crossings += 1;
+            if crossings > 20_000 {
+                break 'outer;
+            }
+        }
+    }
+    out
+}
+
+/// Where the segments `a`–`b` and `c`–`d` cross: the parameters along each (0..1), or None.
+fn cross_param(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f64, f64)> {
+    let (r, q) = (b - a, d - c);
+    let den = r.x * q.y - r.y * q.x;
+    if den.abs() < 1e-12 * (r.len() * q.len()).max(1e-12) {
+        return None;
+    }
+    let w = c - a;
+    let t = (w.x * q.y - w.y * q.x) / den;
+    let u = (w.x * r.y - w.y * r.x) / den;
+    ((-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u)).then_some((t, u))
+}
+
+/// Where the projections of two lines (through `a`–`b` and `c`–`d`) meet: the parameter along
+/// the first, or None when they are parallel.
+fn line_param(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<f64> {
+    let (r, q) = (b - a, d - c);
+    let den = r.x * q.y - r.y * q.x;
+    if den.abs() < 1e-12 * (r.len() * q.len()).max(1e-12) {
+        return None;
+    }
+    let w = c - a;
+    Some((w.x * q.y - w.y * q.x) / den)
+}
+
 /// The whole circles of the model's edges (centre, radius, axis): arcs about one centre and axis,
 /// of one radius, making a whole turn between them.
 fn whole_circles(m: &Model) -> Vec<(Vec3, f64, Vec3)> {
@@ -199,7 +290,7 @@ fn whole_circles(m: &Model) -> Vec<(Vec3, f64, Vec3)> {
 
 /// The points and edges of a view a pointer may pick (view coordinates), each kept only where the
 /// view draws a line (`radius`: the model's, for the tolerance).
-fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[Snap], radius: f64) -> (Vec<PickPoint>, Vec<PickEdge>) {
+fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mut Vec<Snap>, radius: f64) -> (Vec<PickPoint>, Vec<PickEdge>) {
     let tol = (radius * 2e-3).max(1e-4);
     let grid = LineGrid::new(lines, (radius / 40.0).max(1e-3));
     let on = |p: Vec2| grid.on(lines, p, tol);
@@ -212,7 +303,7 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
             .iter()
             .any(|(k, r, ax)| k.dist(c.center) < 1e-6 * (1.0 + r) && (r - c.radius).abs() < 1e-6 * (1.0 + r) && ax.dot(*c.axis).abs() > 0.999999)
     };
-    for ((_, _, mesh), circles) in m.bodies.iter().zip(&m.circles) {
+    for ((name, _, mesh), circles) in m.bodies.iter().zip(&m.circles) {
         for (i, e) in mesh.edges.iter().enumerate().take(20_000) {
             let (Some(a3), Some(b3)) = (e.first(), e.last()) else { continue };
             if let Some(c) = circles.get(i).copied().flatten() {
@@ -233,7 +324,15 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
                 {
                     continue;
                 }
-                edges.push(PickEdge { kind: "circle", a: center, b: None, r: Some(c.radius), full, hidden: vis < 2 });
+                edges.push(PickEdge {
+                    kind: "circle",
+                    a: center,
+                    b: None,
+                    r: Some(c.radius),
+                    full,
+                    hidden: vis < 2,
+                    model: Some((name.clone(), i, c.center, c.center)),
+                });
                 continue;
             }
             // A straight edge: every point of it on the line between its ends.
@@ -255,7 +354,7 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
             {
                 continue;
             }
-            edges.push(PickEdge { kind: "line", a, b: Some(b), r: None, full: false, hidden: vis < 2 });
+            edges.push(PickEdge { kind: "line", a, b: Some(b), r: None, full: false, hidden: vis < 2, model: Some((name.clone(), i, *a3, *b3)) });
         }
     }
     // A whole circle's seam (its one vertex, and the ends of the seam line of a cylinder through
@@ -270,8 +369,13 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
         }
     }
     let seam_tol = (radius * 1e-6).max(1e-9);
+    // The points drawings measure to besides vertices and centres: the middles of straight
+    // edges, the quadrant points of circles seen face on (where they are drawn: an arc's only
+    // on it) and where two straight edges cross in the view.
+    let extra = reference_snaps(&edges, basis, tol, &on);
+    snaps.extend(extra);
     let mut points: Vec<PickPoint> = Vec::new();
-    for sn in snaps {
+    for sn in snaps.iter() {
         if !sn.sharp && sn.radius.is_none() && seams.iter().any(|q| q.dist(sn.r.point) < seam_tol) {
             continue;
         }
@@ -279,12 +383,19 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &[S
             "sharp"
         } else if sn.radius.is_some() {
             "center"
+        } else if sn.r.at == "mid" {
+            "mid"
+        } else if sn.r.at.starts_with("quad:") {
+            "quad"
+        } else if sn.r.at.starts_with("cross:") {
+            "cross"
         } else {
             "end"
         };
         let vis = match kind {
             "sharp" => 2,
-            // A centre counts where its circle is drawn.
+            // Made from drawn edges: as visible as they are.
+            "mid" | "quad" | "cross" => on(sn.at).max(1),
             "center" => edges.iter().filter(|x| x.kind == "circle" && x.a.dist(sn.at) < tol).map(|x| if x.hidden { 1 } else { 2 }).max().unwrap_or(0),
             _ => on(sn.at),
         };
@@ -633,10 +744,16 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
             && l.segs.iter().map(|g| if let Seg2::Arc { sweep, .. } = g { *sweep } else { 0.0 }).sum::<f64>().abs() > std::f64::consts::TAU - 1e-6;
         for g in &l.segs {
             match *g {
-                Seg2::Line { a, b } => edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false }),
+                Seg2::Line { a, b } => {
+                    edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false, model: None });
+                    // Its middle, measured to as a flat point.
+                    let m = (a + b) * 0.5;
+                    points.push(PickPoint { at: m - c, kind: "mid", hidden: false });
+                    snaps.push(snap(m, "flat".into(), None));
+                }
                 Seg2::Arc { center, radius, .. } => {
                     if !edges.iter().any(|x| x.kind == "circle" && x.a.dist(center - c) < 1e-6 && x.r == Some(radius)) {
-                        edges.push(PickEdge { kind: "circle", a: center - c, b: None, r: Some(radius), full: round, hidden: false });
+                        edges.push(PickEdge { kind: "circle", a: center - c, b: None, r: Some(radius), full: round, hidden: false, model: None });
                     }
                 }
                 _ => {}
@@ -839,7 +956,7 @@ fn snaps(m: &Model, basis: &Basis, to_sheet: &dyn Fn(Vec2) -> Vec2) -> Vec<Snap>
 }
 
 /// Where a dimension's model point is now: its edge's end or circle centre, else where it was.
-fn resolve(m: &Model, r: &DimRef) -> (Vec3, Option<f64>) {
+fn resolve(m: &Model, r: &DimRef, basis: &Basis) -> (Vec3, Option<f64>) {
     // A flat pattern's points are where they were picked (flat coordinates); a hole's centre
     // carries its radius.
     if r.at == "flat" {
@@ -856,6 +973,27 @@ fn resolve(m: &Model, r: &DimRef) -> (Vec3, Option<f64>) {
             "end" => e.last().map(|p| (*p, None)),
             "center" => circles.get(i).copied().flatten().map(|c| (c.center, Some(c.radius))),
             "sharp" => virtual_sharp(circles, mesh, i).map(|(.., x)| (x, None)),
+            "mid" => Some(((*e.first()? + *e.last()?) * 0.5, None)),
+            q if q.starts_with("quad:") => {
+                let c = circles.get(i).copied().flatten()?;
+                let dir = match q.trim_start_matches("quad:") {
+                    "0" => basis.r,
+                    "1" => basis.u,
+                    "2" => basis.r * -1.0,
+                    "3" => basis.u * -1.0,
+                    _ => return None,
+                };
+                Some((c.center + dir * c.radius, None))
+            }
+            q if q.starts_with("cross:") => {
+                // Where this edge's line crosses the other's, as the view sees them.
+                let (j, body2) = q.trim_start_matches("cross:").split_once(':')?;
+                let j: usize = j.parse().ok()?;
+                let other = m.bodies.iter().find(|(n, ..)| n == body2)?.2.edges.get(j)?;
+                let (a3, b3) = (*e.first()?, *e.last()?);
+                let t = line_param(basis.project(a3), basis.project(b3), basis.project(*other.first()?), basis.project(*other.last()?))?;
+                (t.is_finite() && t.abs() < 1e3).then(|| (a3 + (b3 - a3) * t, None))
+            }
             _ => None,
         }
     });
@@ -879,6 +1017,8 @@ fn dim_text(d: &DrawDim, value: String) -> String {
 
 struct Out<'a> {
     prims: &'a mut Vec<Prim>,
+    /// Arrowheads' length (mm).
+    arrow: f64,
 }
 
 impl Out<'_> {
@@ -893,25 +1033,23 @@ impl Out<'_> {
             self.prims.push(Prim::Text { at, height, angle_deg, text, align });
         }
     }
-    /// An arrowhead with its tip at `tip`, pointing along `dir` (3 mm long, 1:3 wide).
+    /// An arrowhead with its tip at `tip`, pointing along `dir` (`self.arrow` long, 1:3 wide).
     fn arrow(&mut self, tip: Vec2, dir: Vec2) {
         let Some(d) = dir.normalized() else { return };
         let n = Vec2::new(-d.y, d.x);
-        let base = tip - d * 3.0;
-        self.prims.push(Prim::Fill { points: vec![tip, base + n * 0.5, base - n * 0.5] });
+        let base = tip - d * self.arrow;
+        self.prims.push(Prim::Fill { points: vec![tip, base + n * (self.arrow / 6.0), base - n * (self.arrow / 6.0)] });
     }
 }
 
-const TEXT: f64 = 3.5;
-
 /// A dimension drawn on the sheet.
 /// Roughly how wide a dimension text of `chars` characters is (sheet mm).
-fn text_width(chars: usize) -> f64 {
-    chars as f64 * TEXT * 0.62
+fn text_width(chars: usize, height: f64) -> f64 {
+    chars as f64 * height * 0.62
 }
 
 /// A dimension drawn on the sheet. `place`: where it was put (sheet mm), else `offset` decides.
-fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale: f64, place: Option<Vec2>) {
+fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale: f64, place: Option<Vec2>, th: f64) {
     let gap = 1.0;
     let over = 2.0;
     match d.kind {
@@ -986,7 +1124,7 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
                     // Between the extension lines it sits in the middle; outside them, where put.
                     let t = (q - a).dot(u);
                     let t = if (0.0..=ab.len()).contains(&t) { ab.len() * 0.5 } else { t };
-                    let half = text_width(text.chars().count()) * 0.5;
+                    let half = text_width(text.chars().count(), th) * 0.5;
                     if t < -half - 1.0 {
                         out.line(a + u * (t - half), a, Style::Thin);
                     } else if t > ab.len() + half + 1.0 {
@@ -996,7 +1134,7 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
                 }
                 _ => mid,
             };
-            out.text(at + up * 1.0, TEXT, angle, text, Align::Center);
+            out.text(at + up * 1.0, th, angle, text, Align::Center);
         }
         DimKind::Diameter | DimKind::Radius => {
             let Some((c, radius, _)) = pts.first() else { return };
@@ -1020,10 +1158,13 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             if d.kind == DimKind::Diameter {
                 out.arrow(start, dir);
             }
-            let shelf = out_end + Vec2::new(if dir.x >= 0.0 { 12.0 } else { -12.0 }, 0.0);
+            // The shelf as long as its text.
+            let text = dim_text(d, value);
+            let len = text_width(text.chars().count(), th) + 2.0;
+            let shelf = out_end + Vec2::new(if dir.x >= 0.0 { len } else { -len }, 0.0);
             out.line(out_end, shelf, Style::Thin);
             let align = if dir.x >= 0.0 { Align::Left } else { Align::Right };
-            out.text(out_end + Vec2::new(if dir.x >= 0.0 { 1.0 } else { -1.0 }, 1.0), TEXT, 0.0, dim_text(d, value), align);
+            out.text(out_end + Vec2::new(if dir.x >= 0.0 { 1.0 } else { -1.0 }, 1.0), th, 0.0, text, align);
         }
         DimKind::Angle => {
             let (Some((c, ..)), Some((p1, ..)), Some((p2, ..))) = (pts.first(), pts.get(1), pts.get(2)) else { return };
@@ -1048,7 +1189,7 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             out.arrow(at(1.0), Vec2::new(-a2.sin(), a2.cos()) * s);
             out.text(
                 at(0.5) + (at(0.5) - *c).normalized().unwrap_or(Vec2::new(0.0, 1.0)) * 2.0,
-                TEXT,
+                th,
                 0.0,
                 dim_text(d, format!("{}°", number(sweep.abs().to_degrees()))),
                 Align::Center,
@@ -1167,7 +1308,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
         })
         .unwrap_or_default();
     let mut prims = Vec::new();
-    let mut out = Out { prims: &mut prims };
+    let mut out = Out { prims: &mut prims, arrow: d.dim_text() * 3.0 / 3.5 };
     frame_and_title(&mut out, d, w, h, &material);
     let Some(m) = m else {
         drawn.prims = prims;
@@ -1273,7 +1414,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                 }
             })();
             let (basis, lines) = result?;
-            let snaps = snaps(&m, &basis, &|p| p);
+            let mut snaps = snaps(&m, &basis, &|p| p);
             // Centre marks on the circles seen face on (holes, bosses).
             let mut marks: Vec<(Vec2, f64)> = Vec::new();
             if !matches!(v.kind, ViewKind::Detail { .. }) {
@@ -1290,7 +1431,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     }
                 }
             }
-            let (points, edges) = pickables(&m, &basis, &lines, &snaps, radius);
+            let (points, edges) = pickables(&m, &basis, &lines, &mut snaps, radius);
             Ok(ViewGeom { basis, lines, snaps, marks, notes: Vec::new(), points, edges })
         };
         // A flat pattern is drawn from the sheet metal body each time (cheap: no projection).
@@ -1414,7 +1555,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
             .refs
             .iter()
             .map(|r| {
-                let (p, radius) = resolve(&m, r);
+                let (p, radius) = resolve(&m, r, &pv.basis);
                 (at + pv.basis.project(p) * pv.scale, radius, p)
             })
             .collect();
@@ -1436,7 +1577,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
         }
         let before = out.prims.len();
         let place = dim.at.map(|p| at + Vec2::new(p[0], p[1]) * pv.scale);
-        draw_dim(&mut out, dim, &pts, pv.scale, place);
+        draw_dim(&mut out, dim, &pts, pv.scale, place, d.dim_text());
         if let Some(Prim::Text { at, .. }) = out.prims.get(before..).and_then(|ps| ps.iter().rev().find(|p| matches!(p, Prim::Text { .. }))) {
             drawn.dims.push((dim.id, *at));
         }

@@ -4884,6 +4884,7 @@ mod tests {
             corner_relief_shape: ReliefShape::Notch,
             hem_gap: 0.01,
             gap: 2.5,
+            k_auto: None,
         }
     }
 
@@ -5436,6 +5437,7 @@ mod tests {
             corner_relief_shape: ReliefShape::Notch,
             hem_gap: 0.01,
             gap: 2.0,
+            k_auto: None,
         };
         let r = rect(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 80.0), Vec2::new(0.0, 80.0));
         let mut s = base_flange("Body1", "AL2", &rule, Plane::XY, r);
@@ -5531,6 +5533,7 @@ mod tests {
             corner_relief_shape: ReliefShape::Notch,
             hem_gap: 0.01,
             gap: 0.5,
+            k_auto: None,
         }
     }
 
@@ -7919,6 +7922,7 @@ mod tests {
     /// `alu()` with torn corners.
     fn torn() -> RuleValues {
         RuleValues { corner_relief_shape: ReliefShape::Tear, ..alu() }
+        k_auto: None,
     }
 
     /// The corners of the flat pattern's outline.
@@ -8526,6 +8530,41 @@ mod material_tests {
             assert_eq!(material(&m.id.to_ascii_uppercase()).map(|x| x.id), Some(m.id));
         }
         assert!(material("nothing").is_none() && is_auto_k(" Auto ") && !is_auto_k("0.44"));
+    }
+
+    /// An `auto` K-factor is worked out for each bend from its own radius: a flange with a radius
+    /// of its own unfolds by that radius's K-factor; a fixed K-factor stays the same everywhere.
+    #[test]
+    fn an_auto_k_factor_follows_each_bends_own_radius() {
+        let rule = RuleValues {
+            thickness: 2.0,
+            bend_radius: 2.0,
+            k_factor: auto_k_factor(MaterialClass::Medium, 2.0, 2.0),
+            k_auto: Some(MaterialClass::Medium),
+            ..alu()
+        };
+        let r = rect(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 80.0), Vec2::new(0.0, 80.0));
+        let mut s = base_flange("Body1", "R", &rule, Plane::XY, r);
+        let right = std::f64::consts::FRAC_PI_2;
+        s.add_flanges(&[Vec3::new(50.0, 0.0, 2.0)], 20.0, right, 2.0, "inside", false).unwrap();
+        s.add_flanges(&[Vec3::new(50.0, 80.0, 2.0)], 20.0, right, 8.0, "inside", false).unwrap();
+        let got: Vec<(f64, f64, f64)> = s.bends().iter().map(|b| (b.radius, b.k, b.allowance)).collect();
+        // r/t 1: 0.38; r/t 4: 0.5 (the neutral fibre in the middle).
+        let want = [(2.0, 0.38), (8.0, 0.5)];
+        assert_eq!(got.len(), 2, "{got:?}");
+        for ((r, k, ba), (wr, wk)) in got.iter().zip(want) {
+            assert!((r - wr).abs() < 1e-9 && (k - wk).abs() < 1e-12, "{got:?}");
+            assert!((ba - right * (wr + wk * 2.0)).abs() < 1e-9, "allowance {ba}");
+        }
+        // The flat pattern is longer by the larger bend's allowance (its own K, not the rule's).
+        let fixed = SheetBody { k_auto: None, ..s.clone() };
+        assert!(fixed.bends().iter().all(|b| (b.k - 0.38).abs() < 1e-12));
+        let len = |s: &SheetBody| {
+            let regions = s.flat_regions().unwrap();
+            let ys: Vec<f64> = regions.iter().flat_map(|r| r.outer.polyline(0.01)).map(|p| p.y).collect();
+            ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - ys.iter().cloned().fold(f64::INFINITY, f64::min)
+        };
+        assert!((len(&s) - len(&fixed) - right * (0.5 - 0.38) * 2.0).abs() < 1e-6, "{} vs {}", len(&s), len(&fixed));
     }
 
     #[test]

@@ -377,7 +377,7 @@ pub fn unfold(
                 angle_deg: (total / count as f64).abs().to_degrees(),
                 radius,
                 up: total >= 0.0,
-                k,
+                k: kf,
                 allowance: 0.0,
                 length: start.dist(end),
                 start,

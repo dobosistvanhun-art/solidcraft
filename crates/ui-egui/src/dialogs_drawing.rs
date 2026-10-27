@@ -2066,6 +2066,10 @@ mod tests {
         h.frames(2);
         let d = h.app.session.doc.drawings[0].clone();
         let v = d.views.last().unwrap();
-        assert!(v.free && dist(v.at, [290.0, 165.0]) < 1.0 && matches!(&v.kind, ViewKind::Projected { side, .. } if side == "right"), "{v:?} {:?}", ui(&h).status);
+        assert!(
+            v.free && dist(v.at, [290.0, 165.0]) < 1.0 && matches!(&v.kind, ViewKind::Projected { side, .. } if side == "right"),
+            "{v:?} {:?}",
+            ui(&h).status
+        );
     }
 }

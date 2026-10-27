@@ -223,6 +223,7 @@ fn hostile_drawing_parameters_are_refused() {
             scale: None,
             label: "Z".into(),
             hidden: false,
+            free: false,
         });
     }
     let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
@@ -481,14 +482,16 @@ fn midpoints_quadrants_and_crossings_are_points_to_measure_to() {
                 q["kind"] == kind && (q["at"][0].as_f64().unwrap() - p[0]).abs() < 1e-6 && (q["at"][1].as_f64().unwrap() - p[1]).abs() < 1e-6
             })
         };
-    assert!(has("mid", sheet(50.0, 0.0)), "the plate's front edge's middle: {}", r["views"][0]["points"]);
+    assert!(has("mid", sheet(0.0, 25.0)), "the plate's left edge's middle: {}", r["views"][0]["points"]);
+    // The front edge's middle lies under the bar: hidden, so not offered.
+    assert!(!has("mid", sheet(50.0, 0.0)));
     assert!(has("quad", sheet(85.0, 25.0)) && has("quad", sheet(80.0, 30.0)), "the hole's quadrant points");
     assert!(has("cross", sheet(40.0, 0.0)) && has("cross", sheet(60.0, 50.0)), "the bar's sides across the plate's edges");
-    // From the crossing to the middle: 10; to the hole's right quadrant: 45.
+    // From the crossing to the left edge's middle: 40; to the hole's right quadrant: 45.
     run(
         &mut s,
         "drawing.dimension",
-        json!({"drawing": id, "view": top, "kind": "auto", "points": [sheet(40.0, 0.0), sheet(50.0, 0.0)], "place": sheet(45.0, -10.0)}),
+        json!({"drawing": id, "view": top, "kind": "horizontal", "points": [sheet(40.0, 0.0), sheet(0.0, 25.0)], "place": sheet(20.0, -10.0)}),
     );
     run(
         &mut s,
@@ -501,11 +504,11 @@ fn midpoints_quadrants_and_crossings_are_points_to_measure_to() {
         "{refs:?}"
     );
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));
-    assert!(texts(&r).iter().any(|t| t == "10") && texts(&r).iter().any(|t| t == "45"), "{:?}", texts(&r));
+    assert!(texts(&r).iter().any(|t| t == "40") && texts(&r).iter().any(|t| t == "45"), "{:?}", texts(&r));
     // The text height of the drawing's dimensions.
     run(&mut s, "drawing.edit", json!({"drawing": id, "text_height": 5}));
     let r = run(&mut s, "drawing.render", json!({"drawing": id}));
-    let heights: Vec<f64> = r["prims"].as_array().unwrap().iter().filter(|p| p["text"] == "10").filter_map(|p| p["height"].as_f64()).collect();
+    let heights: Vec<f64> = r["prims"].as_array().unwrap().iter().filter(|p| p["text"] == "40").filter_map(|p| p["height"].as_f64()).collect();
     assert_eq!(heights, [5.0]);
     assert!(s.execute("drawing.edit", &json!({"drawing": id, "text_height": 50})).is_err());
 }

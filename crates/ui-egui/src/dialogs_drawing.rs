@@ -150,8 +150,14 @@ pub struct DrawUi {
     pub drag: Option<(u64, [f64; 2], [f64; 2])>,
     /// A dimension being dragged: its id and where the drag started.
     pub dim_drag: Option<(u64, [f64; 2])>,
-    /// What is under the pointer for the tool (view, what).
+    /// What is under the pointer for the tool (view, what), its kind, and how many there are
+    /// to choose from there (Space goes to the next).
     pub hover: Option<(u64, Pick)>,
+    pub hover_kind: &'static str,
+    pub choices: usize,
+    /// Which of the candidates under the pointer is taken, and the place it was counted for.
+    pub cycle: usize,
+    pub cycle_at: Option<[f64; 2]>,
     pub status: Option<String>,
 }
 
@@ -179,6 +185,10 @@ impl DrawUi {
             drag: None,
             dim_drag: None,
             hover: None,
+            hover_kind: "",
+            choices: 0,
+            cycle: 0,
+            cycle_at: None,
             status: None,
         }
     }
@@ -390,6 +400,13 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
             _ => {}
         }
         ui_kit::text(ui, crate::i18n::tr_label(hint(k)), ui_kit::Text::Hint("drw_tool_hint"));
+        let keys = match k.tool {
+            Tool::Dimension | Tool::Section => "Space: the next thing under the pointer · Backspace: back one pick · Esc: cancel",
+            Tool::Projected => "Shift: put it anywhere (not lined up) · Esc: done",
+            Tool::Select => "Shift while dragging: off its line (free) · Delete: remove",
+            _ => "Esc: cancel",
+        };
+        ui_kit::text(ui, crate::i18n::tr_label(keys), ui_kit::Text::Hint("drw_tool_keys"));
     });
 
     // ---- the selected view ----
@@ -427,6 +444,13 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
         let mut hidden = v.hidden;
         if ui_kit::checkbox(ui, "Hidden edges", &mut hidden).changed() {
             run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "hidden": hidden}));
+        }
+        if matches!(&v.kind, ViewKind::Projected { side, .. } if side != "iso") || matches!(v.kind, ViewKind::Section { .. }) {
+            let mut lined = !v.free;
+            if ui_kit::checkbox(ui, "Lined up with its parent", &mut lined).changed() {
+                // Lined up again: back on its parent's line where it is.
+                run(app, k, "drawing.view.edit", json!({"drawing": id, "view": v.id, "free": !lined, "at": v.at}));
+            }
         }
         if let ViewKind::Section { flip, .. } = &v.kind {
             let mut f = *flip;
@@ -520,6 +544,16 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
         choice_row(ui, "Scale", "drw_scale", &mut scale, SCALES);
         if scale != b {
             run(app, k, "drawing.edit", json!({"drawing": id, "scale": SCALES.get(scale)}));
+        }
+        // The dimensions' text (and arrowheads in proportion).
+        const HEIGHTS: [&str; 5] = ["2.5", "3.5", "5", "7", "10"];
+        let now = d.dim_text();
+        let mut hi = HEIGHTS.iter().position(|x| x.parse::<f64>().is_ok_and(|v| (v - now).abs() < 1e-6)).unwrap_or(1);
+        let b = hi;
+        choice_row(ui, "Dimension text (mm)", "drw_text_h", &mut hi, &HEIGHTS);
+        if hi != b {
+            let h: f64 = HEIGHTS.get(hi).and_then(|x| x.parse().ok()).unwrap_or(3.5);
+            run(app, k, "drawing.edit", json!({"drawing": id, "text_height": h}));
         }
         let projections = ["First angle (ISO E)", "Third angle (ISO A)"];
         let mut proj = usize::from(d.projection == solidcraft_engine::doc::drawing::Projection::Third);
@@ -678,26 +712,48 @@ fn view_frame(v: &Value, id: u64) -> Option<([f64; 2], [f64; 2], f64)> {
     Some((read2(&x["min"])?, read2(&x["max"])?, x["scale"].as_f64().unwrap_or(1.0)))
 }
 
-/// What is under the pointer (within `reach` sheet mm) that the tool may pick: a point before an
-/// edge; only in `only` when given.
-fn find_pick(v: &Value, at: [f64; 2], reach: f64, want: Want, only: Option<u64>) -> Option<(u64, Pick)> {
-    let views = v["views"].as_array()?;
-    let mut best_point: Option<(f64, u64, Pick)> = None;
-    let mut best_edge: Option<(f64, u64, Pick)> = None;
-    for x in views {
+/// Something the pointer may pick: in which view, what, what kind of reference (`end`, `mid`,
+/// `center`, `quad`, `cross`, `sharp`, `line`, `circle`, `arc`) and how far from the pointer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Candidate {
+    pub view: u64,
+    pub pick: Pick,
+    pub kind: &'static str,
+    pub dist: f64,
+}
+
+/// A reference kind as `'static` text (the render's are a known few).
+fn kind_of(k: &str) -> &'static str {
+    match k {
+        "mid" => "mid",
+        "center" => "center",
+        "quad" => "quad",
+        "cross" => "cross",
+        "sharp" => "sharp",
+        _ => "end",
+    }
+}
+
+/// Everything under the pointer (within `reach` sheet mm) that the tool may pick, the points
+/// first and then the edges, each nearest first; only in `only` when given.
+fn candidates(v: &Value, at: [f64; 2], reach: f64, want: Want, only: Option<u64>) -> Vec<Candidate> {
+    let mut points: Vec<Candidate> = Vec::new();
+    let mut edges: Vec<Candidate> = Vec::new();
+    for x in v["views"].as_array().into_iter().flatten() {
         let Some(id) = x["id"].as_u64() else { continue };
         if only.is_some_and(|o| o != id) {
             continue;
         }
         if !matches!(want, Want::Circles) {
             for p in x["points"].as_array().into_iter().flatten() {
-                let (Some(q), kind) = (read2(&p["at"]), p["kind"].as_str().unwrap_or("end")) else { continue };
+                let (Some(q), kind) = (read2(&p["at"]), kind_of(p["kind"].as_str().unwrap_or("end"))) else { continue };
                 if (want == Want::Sharps) != (kind == "sharp") {
                     continue;
                 }
                 let dd = dist(q, at);
-                if dd <= reach && best_point.is_none_or(|(b, ..)| dd < b) {
-                    best_point = Some((dd, id, Pick::Point(q)));
+                // One candidate per place (a corner of several edges is one point).
+                if dd <= reach && !points.iter().any(|c| c.pick == Pick::Point(q)) {
+                    points.push(Candidate { view: id, pick: Pick::Point(q), kind, dist: dd });
                 }
             }
         }
@@ -709,21 +765,40 @@ fn find_pick(v: &Value, at: [f64; 2], reach: f64, want: Want, only: Option<u64>)
         for e in x["edges"].as_array().into_iter().flatten() {
             let Some(a) = read2(&e["a"]) else { continue };
             let found = match e["kind"].as_str() {
-                Some("line") if lines => read2(&e["b"]).map(|b| (seg_dist(at, a, b), Pick::Line(a, b))),
-                Some("circle") if circles => {
-                    e["r"].as_f64().map(|r| ((dist(at, a) - r).abs(), Pick::Circle(a, r, e["full"].as_bool().unwrap_or(false))))
-                }
+                Some("line") if lines => read2(&e["b"]).map(|b| (seg_dist(at, a, b), Pick::Line(a, b), "line")),
+                Some("circle") if circles => e["r"].as_f64().map(|r| {
+                    let full = e["full"].as_bool().unwrap_or(false);
+                    ((dist(at, a) - r).abs(), Pick::Circle(a, r, full), if full { "circle" } else { "arc" })
+                }),
                 _ => None,
             };
-            if let Some((dd, pick)) = found
+            if let Some((dd, pick, kind)) = found
                 && dd <= reach
-                && best_edge.is_none_or(|(b, ..)| dd < b)
             {
-                best_edge = Some((dd, id, pick));
+                edges.push(Candidate { view: id, pick, kind, dist: dd });
             }
         }
     }
-    best_point.or(best_edge).map(|(_, id, p)| (id, p))
+    points.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+    edges.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+    points.extend(edges);
+    points.truncate(24);
+    points
+}
+
+/// What a reference kind is called on screen.
+fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "end" => "Endpoint",
+        "mid" => "Midpoint",
+        "center" => "Centre",
+        "quad" => "Quadrant point",
+        "cross" => "Intersection",
+        "sharp" => "Virtual sharp",
+        "line" => "Edge",
+        "circle" => "Circle",
+        _ => "Arc",
+    }
 }
 
 /// A measured value as the drawing shows it (up to two decimals, a decimal comma).
@@ -807,6 +882,71 @@ fn step_back(k: &mut DrawUi) -> bool {
     false
 }
 
+/// The frames of the views as drawn: id, lower left, upper right (sheet mm).
+fn frames(v: &Value) -> Vec<(u64, [f64; 2], [f64; 2])> {
+    v["views"].as_array().into_iter().flatten().filter_map(|x| Some((x["id"].as_u64()?, read2(&x["min"])?, read2(&x["max"])?))).collect()
+}
+
+/// What is wrong with a view's frame `lo`–`hi` where it would go: over another view (not one of
+/// `except`), over the title block, or out of the drawing frame.
+fn clash(v: &Value, lo: [f64; 2], hi: [f64; 2], except: &[u64]) -> Option<&'static str> {
+    let (w, h) = (v["width"].as_f64().unwrap_or(420.0), v["height"].as_f64().unwrap_or(297.0));
+    if lo[0] < 20.0 || lo[1] < 10.0 || hi[0] > w - 10.0 || hi[1] > h - 10.0 {
+        return Some("Outside the drawing frame");
+    }
+    let overlaps = |a0: [f64; 2], a1: [f64; 2]| lo[0] < a1[0] && hi[0] > a0[0] && lo[1] < a1[1] && hi[1] > a0[1];
+    if frames(v).into_iter().any(|(id, a0, a1)| !except.contains(&id) && overlaps(a0, a1)) {
+        return Some("Overlaps another view");
+    }
+    let tb = [(w - 10.0 - 180.0f64.min(w - 30.0)), 10.0];
+    if overlaps(tb, [w - 10.0, 46.0]) {
+        return Some("Over the title block");
+    }
+    None
+}
+
+/// A point lined up with the centres of other views when it is near one of their lines (across
+/// or up and down): the point, and the centres it lines up with (for guide lines).
+fn aligned_to(at: [f64; 2], centres: &[[f64; 2]], reach: f64) -> ([f64; 2], Option<[f64; 2]>, Option<[f64; 2]>) {
+    let near = |axis: usize| {
+        centres
+            .iter()
+            .filter(|c| (c[axis] - at[axis]).abs() <= reach)
+            .min_by(|a, b| (a[axis] - at[axis]).abs().total_cmp(&(b[axis] - at[axis]).abs()))
+            .copied()
+    };
+    let (by_x, by_y) = (near(0), near(1));
+    let p = [by_x.map_or(at[0], |c| c[0]), by_y.map_or(at[1], |c| c[1])];
+    (p, by_x, by_y)
+}
+
+/// Where a dragged view goes for the pointer at `now`: a projected view lined up with its parent
+/// slides along its line (with Shift held it goes anywhere, and is then free); others line up
+/// with the centres of the views not moving with them. With the guides' centres.
+fn drag_to(
+    d: &solidcraft_engine::doc::drawing::Drawing,
+    id: u64,
+    start: [f64; 2],
+    at0: [f64; 2],
+    now: [f64; 2],
+    shift: bool,
+    carried: &[u64],
+    reach: f64,
+) -> ([f64; 2], Option<[f64; 2]>, Option<[f64; 2]>) {
+    let at = [at0[0] + now[0] - start[0], at0[1] + now[1] - start[1]];
+    let Some(v) = d.view(id) else { return (at, None, None) };
+    if let ViewKind::Projected { parent, side } = &v.kind
+        && !v.free
+        && !shift
+        && side != "iso"
+        && let Some(pa) = d.view(*parent).map(|p| p.at)
+    {
+        return (lined(at, Some(pa), if side == "left" || side == "right" { 'h' } else { 'v' }), None, None);
+    }
+    let centres: Vec<[f64; 2]> = d.views.iter().filter(|w| !carried.contains(&w.id)).map(|w| w.at).collect();
+    aligned_to(at, &centres, reach)
+}
+
 /// Paint the sheet over the viewport and handle clicks and drags on it. True when the dialog is
 /// the drawing editor.
 pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut Dialog) -> bool {
@@ -844,11 +984,31 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     let pointer = ctx.input(|i| i.pointer.latest_pos());
     let over = pointer.is_some_and(|p| rect.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background));
     let cursor = pointer.filter(|_| over).map(from);
-    // Views moved by a drag are drawn where they are going.
-    let drag_shift = match (k.drag, cursor) {
-        (Some((_, start, _)), Some(now)) => [now[0] - start[0], now[1] - start[1]],
-        _ => [0.0, 0.0],
+    let shift_held = ctx.input(|i| i.modifiers.shift);
+    // The views a dragged view takes along (its lined-up projected and section views).
+    let carried: Vec<u64> = match k.drag {
+        Some((id, ..)) => drawing(app, k)
+            .map(|dd| {
+                dd.descendants(id)
+                    .into_iter()
+                    .filter(|x| {
+                        *x == id || dd.view(*x).is_some_and(|w| !w.free && matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => Vec::new(),
     };
+    // Views moved by a drag are drawn where they are going.
+    let mut drag_guides: (Option<[f64; 2]>, Option<[f64; 2]>) = (None, None);
+    let mut drag_shift = [0.0, 0.0];
+    if let (Some((id, start, at0)), Some(now)) = (k.drag, cursor)
+        && let Some(dd) = drawing(app, k)
+    {
+        let (to_at, gx, gy) = drag_to(dd, id, start, at0, now, shift_held, &carried, reach * 1.5);
+        drag_shift = [to_at[0] - at0[0], to_at[1] - at0[1]];
+        drag_guides = (gx, gy);
+    }
     for p in v["prims"].as_array().into_iter().flatten() {
         match p["type"].as_str() {
             Some("line") => {
@@ -900,27 +1060,33 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
             _ => {}
         }
     }
-    // The selected view's frame, a dragged one where it will go (with the views it takes along).
-    let carried: Vec<u64> = match k.drag {
-        Some((id, ..)) => drawing(app, k)
-            .map(|dd| {
-                dd.descendants(id)
-                    .into_iter()
-                    .filter(|x| *x == id || dd.view(*x).is_some_and(|w| matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. })))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
+    // The selected view's frame, a dragged one where it will go (with the views it takes along):
+    // red where it would be over another view or out of the frame.
+    let mut warning: Option<&'static str> = None;
     for x in v["views"].as_array().into_iter().flatten() {
         let (Some(id), Some(lo), Some(hi)) = (x["id"].as_u64(), read2(&x["min"]), read2(&x["max"])) else { continue };
         let s = if carried.contains(&id) { drag_shift } else { [0.0, 0.0] };
         let marked = Some(id) == k.selected || carried.contains(&id) || (k.tool == Tool::Projected && Some(id) == k.parent);
         if marked {
-            let r = Rect::from_two_pos(to([lo[0] - 3.0 + s[0], lo[1] - 3.0 + s[1]]), to([hi[0] + 3.0 + s[0], hi[1] + 3.0 + s[1]]));
-            painter.rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Outside);
+            let (lo, hi) = ([lo[0] + s[0], lo[1] + s[1]], [hi[0] + s[0], hi[1] + s[1]]);
+            let bad = if carried.contains(&id) && drag_shift != [0.0, 0.0] { clash(&v, lo, hi, &carried) } else { None };
+            warning = warning.or(bad);
+            let r = Rect::from_two_pos(to([lo[0] - 3.0, lo[1] - 3.0]), to([hi[0] + 3.0, hi[1] + 3.0]));
+            painter.rect_stroke(r, 2.0, Stroke::new(1.5, if bad.is_some() { t.error } else { t.accent }), egui::StrokeKind::Outside);
         }
         crate::scenario::publish_handle(&format!("drawing:view:{id}"), to([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]));
+    }
+    let guide_line = |a: [f64; 2], b: [f64; 2]| painter.extend(egui::Shape::dashed_line(&[to(a), to(b)], Stroke::new(1.0, t.accent), 6.0, 4.0));
+    if let (Some((id, ..)), true) = (k.drag, drag_shift != [0.0, 0.0])
+        && let Some(at0) = drawing(app, k).and_then(|dd| dd.view(id)).map(|x| x.at)
+    {
+        let now = [at0[0] + drag_shift[0], at0[1] + drag_shift[1]];
+        if let Some(c) = drag_guides.0 {
+            guide_line(c, now);
+        }
+        if let Some(c) = drag_guides.1 {
+            guide_line(c, now);
+        }
     }
     for e in v["errors"].as_array().into_iter().flatten() {
         if let Some(msg) = e.get(1).and_then(Value::as_str) {
@@ -948,12 +1114,32 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     let guide = Stroke::new(1.5, t.accent);
     let ghost = Stroke::new(1.0, t.accent.gamma_multiply(0.8));
     k.hover = None;
+    k.choices = 0;
     let only = |k: &DrawUi| k.dim_picks.first().map(|(view, _)| *view).or(k.pick_view);
+    let mut near: Vec<Candidate> = Vec::new();
     if let Some(at) = cursor {
-        match k.tool {
-            Tool::Dimension if !k.dim_ready() => k.hover = find_pick(&v, at, reach, k.want(), only(k)),
-            Tool::Section if k.picks.len() < 2 => k.hover = find_pick(&v, at, reach, Want::Points, only(k)),
-            _ => {}
+        let want = match k.tool {
+            Tool::Dimension if !k.dim_ready() => Some(k.want()),
+            Tool::Section if k.picks.len() < 2 => Some(Want::Points),
+            _ => None,
+        };
+        if let Some(want) = want {
+            let found = candidates(&v, at, reach, want, only(k));
+            // Space goes to the next candidate; moving the pointer away starts again.
+            if k.cycle_at.is_none_or(|p| dist(p, at) > reach * 0.5) {
+                k.cycle = 0;
+                k.cycle_at = Some(at);
+            }
+            if found.len() > 1 && ctx.memory(|m| m.focused().is_none()) && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+                k.cycle += 1;
+            }
+            if let Some(c) = found.get(k.cycle % found.len().max(1)) {
+                k.hover = Some((c.view, c.pick));
+                k.hover_kind = c.kind;
+                k.choices = found.len();
+            }
+            // The points about the pointer, shown faintly so it is seen what is there to pick.
+            near = candidates(&v, at, reach * 3.0, want, only(k)).into_iter().filter(|c| matches!(c.pick, Pick::Point(_))).collect();
         }
     }
     let mark = |p: Pick, stroke: Stroke| match p {
@@ -968,8 +1154,56 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
             painter.circle_stroke(to(c), (r * scale) as f32, Stroke::new(stroke.width + 1.5, stroke.color.gamma_multiply(0.7)));
         }
     };
+    // Reference points near the pointer, each drawn by its kind; the one a click takes in full.
+    let symbol = |q: [f64; 2], kind: &str, stroke: Stroke| {
+        let c = to(q);
+        let r = 4.5;
+        match kind {
+            "mid" => {
+                let pts = vec![c + vec2(0.0, -r), c + vec2(r, r * 0.8), c + vec2(-r, r * 0.8)];
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            }
+            "center" => {
+                painter.circle_stroke(c, r, stroke);
+                painter.line_segment([c - vec2(r * 1.6, 0.0), c + vec2(r * 1.6, 0.0)], stroke);
+                painter.line_segment([c - vec2(0.0, r * 1.6), c + vec2(0.0, r * 1.6)], stroke);
+            }
+            "quad" => {
+                let pts = vec![c + vec2(0.0, -r), c + vec2(r, 0.0), c + vec2(0.0, r), c + vec2(-r, 0.0)];
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            }
+            "cross" | "sharp" => {
+                painter.line_segment([c - vec2(r, r), c + vec2(r, r)], stroke);
+                painter.line_segment([c - vec2(r, -r), c + vec2(r, -r)], stroke);
+            }
+            _ => {
+                painter.rect_stroke(Rect::from_center_size(c, vec2(2.0 * r, 2.0 * r)), 0.0, stroke, egui::StrokeKind::Middle);
+            }
+        }
+    };
+    for c in &near {
+        if let Pick::Point(q) = c.pick
+            && Some((c.view, c.pick)) != k.hover
+        {
+            symbol(q, c.kind, Stroke::new(1.0, t.accent.gamma_multiply(0.45)));
+        }
+    }
     if let Some((_, p)) = k.hover {
-        mark(p, guide);
+        match p {
+            Pick::Point(q) => {
+                symbol(q, k.hover_kind, Stroke::new(2.0, t.accent));
+                painter.circle_filled(to(q), 2.0, t.accent);
+            }
+            _ => mark(p, guide),
+        }
+        // What it is, and that Space goes to the next when there are more there.
+        if let Some(at) = cursor {
+            let mut text = crate::i18n::tr_label(kind_label(k.hover_kind)).to_string();
+            if k.choices > 1 {
+                text = format!("{text}  {}/{} · {}", k.cycle % k.choices + 1, k.choices, crate::i18n::tr_label("Space: next"));
+            }
+            painter.text(to(at) + vec2(14.0, 14.0), Align2::LEFT_TOP, text, FontId::proportional(t.font_label), t.accent);
+        }
     }
     for (_, p) in &k.dim_picks {
         mark(*p, Stroke::new(2.0, t.accent));
@@ -978,14 +1212,20 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         painter.circle_filled(to(*p), 4.0, t.accent);
     }
     let did = k.drawing;
-    let frame_at = |f: Option<([f64; 2], [f64; 2])>, at: [f64; 2]| {
+    // A view not yet put: its frame where it would go (red where it would clash), and why.
+    let frame_at = |f: Option<([f64; 2], [f64; 2])>, at: [f64; 2]| -> Option<&'static str> {
+        let mut bad = None;
         if let Some((lo, hi)) = f {
-            let r = Rect::from_two_pos(to([at[0] + lo[0], at[1] + lo[1]]), to([at[0] + hi[0], at[1] + hi[1]]));
-            painter.rect_stroke(r, 0.0, ghost, egui::StrokeKind::Middle);
+            let (lo, hi) = ([at[0] + lo[0], at[1] + lo[1]], [at[0] + hi[0], at[1] + hi[1]]);
+            bad = clash(&v, lo, hi, &[]);
+            let r = Rect::from_two_pos(to(lo), to(hi));
+            painter.rect_stroke(r, 0.0, if bad.is_some() { Stroke::new(1.5, t.error) } else { ghost }, egui::StrokeKind::Middle);
         }
         painter.line_segment([to(at) - vec2(6.0, 0.0), to(at) + vec2(6.0, 0.0)], ghost);
         painter.line_segment([to(at) - vec2(0.0, 6.0), to(at) + vec2(0.0, 6.0)], ghost);
+        bad
     };
+    let centres: Vec<[f64; 2]> = drawing(app, k).map(|dd| dd.views.iter().map(|w| w.at).collect()).unwrap_or_default();
     // The view or dimension the next click puts, where it would go.
     let mut put: Option<(&'static str, Value)> = None;
     if let (Some(at), Some(did)) = (cursor, did) {
@@ -997,7 +1237,12 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                     p["scale"] = json!(s);
                 }
                 let f = preview(app, k, p.clone());
-                frame_at(f, at);
+                // Lined up with the other views' centres when near their lines.
+                let (at, gx, gy) = aligned_to(at, &centres, reach * 1.5);
+                for c in [gx, gy].into_iter().flatten() {
+                    guide_line(c, at);
+                }
+                warning = warning.or(frame_at(f, at));
                 let mut q = json!({"drawing": did, "orientation": o, "at": at, "hidden": k.base_hidden});
                 if let Some(s) = p.get("scale") {
                     q["scale"] = s.clone();
@@ -1010,23 +1255,27 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                 {
                     let side = side_of(lo, hi, at);
                     let parent_at = drawing(app, k).and_then(|dd| dd.view(parent)).map(|x| x.at);
-                    let place = lined(
-                        at,
-                        parent_at,
-                        if side == "left" || side == "right" {
-                            'h'
-                        } else if side == "iso" {
-                            ' '
-                        } else {
-                            'v'
-                        },
-                    );
+                    // In line with the parent; with Shift held, anywhere (a free view).
+                    let line = if shift_held || side == "iso" {
+                        ' '
+                    } else if side == "left" || side == "right" {
+                        'h'
+                    } else {
+                        'v'
+                    };
+                    let place = lined(at, parent_at, line);
                     let f = preview(app, k, json!({"drawing": did, "kind": "projected", "parent": parent, "side": side}));
-                    frame_at(f, place);
-                    if let Some(pa) = parent_at {
-                        painter.line_segment([to(pa), to(place)], Stroke::new(1.0, t.accent.gamma_multiply(0.4)));
+                    warning = warning.or(frame_at(f, place));
+                    if let Some(pa) = parent_at
+                        && line != ' '
+                    {
+                        guide_line(pa, place);
                     }
-                    put = Some(("drawing.view.projected", json!({"drawing": did, "parent": parent, "side": side, "at": place})));
+                    let mut q = json!({"drawing": did, "parent": parent, "side": side, "at": place});
+                    if shift_held && side != "iso" {
+                        q["free"] = json!(true);
+                    }
+                    put = Some(("drawing.view.projected", q));
                 }
             }
             Tool::Section if k.picks.len() == 1 => {
@@ -1049,7 +1298,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                     };
                     let place = lined(at, parent_at, line);
                     let f = preview(app, k, json!({"drawing": did, "kind": "section", "parent": parent, "line": [a, b]}));
-                    frame_at(f, place);
+                    warning = warning.or(frame_at(f, place));
                     put = Some(("drawing.view.section", json!({"drawing": did, "parent": parent, "line": [a, b], "at": place})));
                 }
             }
@@ -1063,13 +1312,14 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                 painter.circle_stroke(to(c), (r * scale) as f32, guide);
                 if let Some(parent) = k.pick_view {
                     let f = preview(app, k, json!({"drawing": did, "kind": "detail", "parent": parent, "center": c, "radius": r}));
-                    frame_at(f, at);
+                    warning = warning.or(frame_at(f, at));
                     put = Some(("drawing.view.detail", json!({"drawing": did, "parent": parent, "center": c, "radius": r, "at": at})));
                 }
             }
             Tool::Dimension if k.dim_ready() => {
                 if let Some(p) = dim_command(k, did, at) {
-                    dim_preview(painter, k, &v, at, &to, scale, guide);
+                    let th = drawing(app, k).map_or(3.5, |dd| dd.dim_text());
+                    dim_preview(painter, k, &v, at, &to, scale, th, guide);
                     put = Some(("drawing.dimension", p));
                 }
             }
@@ -1077,6 +1327,9 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         }
     }
 
+    if let (Some(wn), Some(at)) = (warning, cursor) {
+        painter.text(to(at) + vec2(14.0, -14.0), Align2::LEFT_BOTTOM, crate::i18n::tr_label(wn), FontId::proportional(t.font_label), t.error);
+    }
     // Input: only where the viewport itself is under the pointer (not the panel or a menu).
     let (pressed, released, down, secondary) =
         ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.primary_down(), i.pointer.secondary_pressed()));
@@ -1088,6 +1341,18 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     }
     if esc || (secondary && over) {
         step_back(k);
+    }
+    // Backspace takes back the last pick only.
+    if (!k.picks.is_empty() || !k.dim_picks.is_empty())
+        && ctx.memory(|m| m.focused().is_none())
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
+    {
+        if k.dim_picks.pop().is_none() {
+            k.picks.pop();
+        }
+        if k.picks.is_empty() && k.dim_picks.is_empty() {
+            k.pick_view = None;
+        }
     }
     // Delete removes the selected view or dimension.
     if k.tool == Tool::Select
@@ -1109,11 +1374,17 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         if let Some((id, start, at0)) = k.drag.take()
             && let Some(now) = cursor
             && let Some(did) = did
+            && dist(now, start) > 0.5
+            && let Some(dd) = drawing(app, k)
         {
-            let (dx, dy) = (now[0] - start[0], now[1] - start[1]);
-            if dx.hypot(dy) > 0.5 {
-                run(app, k, "drawing.view.edit", json!({"drawing": did, "view": id, "at": [at0[0] + dx, at0[1] + dy]}));
+            let (to_at, ..) = drag_to(dd, id, start, at0, now, shift_held, &carried, reach * 1.5);
+            // Shift-dragged off its line, a projected or section view goes free.
+            let breaks = shift_held && dd.view(id).is_some_and(|x| !x.free && matches!(&x.kind, ViewKind::Projected { side, .. } if side != "iso"));
+            let mut p = json!({"drawing": did, "view": id, "at": to_at});
+            if breaks {
+                p["free"] = json!(true);
             }
+            run(app, k, "drawing.view.edit", p);
         }
         if let Some((dim, start)) = k.dim_drag.take()
             && let Some(now) = cursor
@@ -1160,31 +1431,103 @@ fn dim_command(k: &DrawUi, drawing: u64, at: [f64; 2]) -> Option<Value> {
     Some(p)
 }
 
-/// The dimension the next click puts, drawn where it would go.
-fn dim_preview(painter: &egui::Painter, k: &DrawUi, v: &Value, at: [f64; 2], to: &dyn Fn([f64; 2]) -> Pos2, scale: f64, stroke: Stroke) {
+/// Text on the sheet as the drawing prints it: `height` mm, turned `angle_deg`, its baseline
+/// starting (left), centred or ending (right) at `at`.
+#[allow(clippy::too_many_arguments)]
+fn sheet_text(
+    painter: &egui::Painter,
+    to: &dyn Fn([f64; 2]) -> Pos2,
+    scale: f64,
+    at: [f64; 2],
+    height: f64,
+    angle_deg: f64,
+    text: String,
+    align: Align2,
+    color: Color32,
+) {
+    let size = (height * scale / 0.72) as f32;
+    if !(2.0..=400.0).contains(&size) {
+        return;
+    }
+    let angle = angle_deg.to_radians() as f32;
+    let galley = painter.layout_no_wrap(text, FontId::proportional(size), color);
+    let wpx = galley.size().x;
+    let shift = match align.x() {
+        egui::Align::Center => -wpx / 2.0,
+        egui::Align::Max => -wpx,
+        egui::Align::Min => 0.0,
+    };
+    let dir = vec2(angle.cos(), -angle.sin());
+    let up = vec2(dir.y, -dir.x);
+    let pos = to(at) + dir * shift + up * (size * 0.8);
+    painter.add(egui::epaint::TextShape::new(pos, galley, color).with_angle(-angle));
+}
+
+/// An arrowhead on the sheet: tip at `tip`, pointing along `dir`, `len` mm long (1:3).
+fn sheet_arrow(painter: &egui::Painter, to: &dyn Fn([f64; 2]) -> Pos2, tip: [f64; 2], dir: [f64; 2], len: f64, color: Color32) {
+    let l = dir[0].hypot(dir[1]);
+    if l < 1e-12 {
+        return;
+    }
+    let (dx, dy) = (dir[0] / l, dir[1] / l);
+    let (nx, ny) = (-dy, dx);
+    let base = [tip[0] - dx * len, tip[1] - dy * len];
+    let w = len / 6.0;
+    let pts = vec![to(tip), to([base[0] + nx * w, base[1] + ny * w]), to([base[0] - nx * w, base[1] - ny * w])];
+    painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+}
+
+/// The dimension the next click puts, drawn as it will be (the same lines, arrows and text as the
+/// drawing draws, `th` mm text) where the pointer puts it.
+#[allow(clippy::too_many_arguments)]
+fn dim_preview(painter: &egui::Painter, k: &DrawUi, v: &Value, at: [f64; 2], to: &dyn Fn([f64; 2]) -> Pos2, scale: f64, th: f64, stroke: Stroke) {
     let Some((view, first)) = k.dim_picks.first().copied() else { return };
     let vs = view_frame(v, view).map(|f| f.2).unwrap_or(1.0).max(1e-9);
-    // The size the sheet's dimension text has on screen.
-    let size = (3.5 * scale / 0.72).clamp(9.0, 40.0) as f32;
-    let font = FontId::proportional(size);
-    let label = |text: String| {
-        painter.text(to(at) + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, text, font.clone(), stroke.color);
+    let ink = stroke.color;
+    let thin = Stroke::new(1.0, ink);
+    let arrow = th * 3.0 / 3.5;
+    let seg = |a: [f64; 2], b: [f64; 2]| {
+        painter.line_segment([to(a), to(b)], thin);
     };
     let circle_alone = matches!(first, Pick::Circle(..)) && (k.dim_kind == 4 || k.dim_kind == 5 || (k.dim_kind == 0 && k.arc == 0));
     if circle_alone {
         let Pick::Circle(c, r, full) = first else { return };
-        painter.line_segment([to(c), to(at)], stroke);
         let diameter = k.dim_kind == 4 || (k.dim_kind == 0 && full);
-        label(if diameter { format!("Ø{}", number(2.0 * r / vs)) } else { format!("R{}", number(r / vs)) });
+        let text = if diameter { format!("Ø{}", number(2.0 * r / vs)) } else { format!("R{}", number(r / vs)) };
+        let l = dist(at, c).max(1e-9);
+        let dir = [(at[0] - c[0]) / l, (at[1] - c[1]) / l];
+        let tip = [c[0] + dir[0] * r, c[1] + dir[1] * r];
+        let start = if diameter { [c[0] - dir[0] * r, c[1] - dir[1] * r] } else { c };
+        let end = if l > r + 2.0 { at } else { [tip[0] + dir[0] * 8.0, tip[1] + dir[1] * 8.0] };
+        seg(start, end);
+        sheet_arrow(painter, to, tip, [-dir[0], -dir[1]], arrow, ink);
+        if diameter {
+            sheet_arrow(painter, to, start, dir, arrow, ink);
+        }
+        let right = dir[0] >= 0.0;
+        let len = text.chars().count() as f64 * th * 0.62 + 2.0;
+        seg(end, [end[0] + if right { len } else { -len }, end[1]]);
+        let align = if right { Align2::LEFT_BOTTOM } else { Align2::RIGHT_BOTTOM };
+        sheet_text(painter, to, scale, [end[0] + if right { 1.0 } else { -1.0 }, end[1] + 1.0], th, 0.0, text, align, ink);
         return;
     }
     let anchors: Vec<[f64; 2]> = k.dim_picks.iter().flat_map(|(_, p)| p.anchors()).collect();
     if k.dim_kind == 6 {
         if let (Some(c), Some(a), Some(b)) = (anchors.first(), anchors.get(1), anchors.get(2)) {
-            painter.line_segment([to(*c), to(*a)], stroke);
-            painter.line_segment([to(*c), to(*b)], stroke);
+            seg(*c, *a);
+            seg(*c, *b);
             let ang = ((a[1] - c[1]).atan2(a[0] - c[0]) - (b[1] - c[1]).atan2(b[0] - c[0])).abs().to_degrees();
-            label(format!("{}°", number(if ang > 180.0 { 360.0 - ang } else { ang })));
+            sheet_text(
+                painter,
+                to,
+                scale,
+                at,
+                th,
+                0.0,
+                format!("{}°", number(if ang > 180.0 { 360.0 - ang } else { ang })),
+                Align2::CENTER_BOTTOM,
+                ink,
+            );
         }
         return;
     }
@@ -1205,11 +1548,47 @@ fn dim_preview(painter: &egui::Painter, k: &DrawUi, v: &Value, at: [f64; 2], to:
         [p[0] + n[0] * d, p[1] + n[1] * d]
     };
     let (a, b) = (foot(p1), foot(p2));
-    painter.line_segment([to(p1), to(a)], Stroke::new(1.0, stroke.color));
-    painter.line_segment([to(p2), to(b)], Stroke::new(1.0, stroke.color));
-    painter.line_segment([to(a), to(b)], stroke);
+    // Extension lines from 1 mm off the points to 2 mm past the dimension line.
+    for (p, f) in [(p1, a), (p2, b)] {
+        let l = dist(p, f);
+        if l > 1.0 {
+            let u = [(f[0] - p[0]) / l, (f[1] - p[1]) / l];
+            seg([p[0] + u[0], p[1] + u[1]], [f[0] + u[0] * 2.0, f[1] + u[1] * 2.0]);
+        }
+    }
+    seg(a, b);
+    let ab = dist(a, b);
+    let u = if ab > 1e-9 { [(b[0] - a[0]) / ab, (b[1] - a[1]) / ab] } else { dir };
+    if ab > 8.0 {
+        sheet_arrow(painter, to, a, [-u[0], -u[1]], arrow, ink);
+        sheet_arrow(painter, to, b, u, arrow, ink);
+    } else {
+        sheet_arrow(painter, to, a, u, arrow, ink);
+        sheet_arrow(painter, to, b, [-u[0], -u[1]], arrow, ink);
+        seg([a[0] - u[0] * 6.0, a[1] - u[1] * 6.0], a);
+        seg(b, [b[0] + u[0] * 6.0, b[1] + u[1] * 6.0]);
+    }
     let value = ((b[0] - a[0]) * dir[0] + (b[1] - a[1]) * dir[1]).abs() / vs;
-    label(number(value));
+    let text = number(value);
+    // The text in the middle between the extension lines, else where the pointer is along the
+    // line (the line carried on to it), 1 mm above it, turned with it.
+    let t = (at[0] - a[0]) * u[0] + (at[1] - a[1]) * u[1];
+    let t = if (0.0..=ab).contains(&t) { ab * 0.5 } else { t };
+    let half = text.chars().count() as f64 * th * 0.62 * 0.5;
+    if t < -half - 1.0 {
+        seg([a[0] + u[0] * (t - half), a[1] + u[1] * (t - half)], a);
+    } else if t > ab + half + 1.0 {
+        seg(b, [a[0] + u[0] * (t + half), a[1] + u[1] * (t + half)]);
+    }
+    let mut angle = dir[1].atan2(dir[0]).to_degrees();
+    if angle > 90.0 + 1e-9 {
+        angle -= 180.0;
+    } else if angle <= -90.0 + 1e-9 {
+        angle += 180.0;
+    }
+    let up = [-(angle.to_radians().sin()), angle.to_radians().cos()];
+    let p = [a[0] + u[0] * t + up[0], a[1] + u[1] * t + up[1]];
+    sheet_text(painter, to, scale, p, th, angle, text, Align2::CENTER_BOTTOM, ink);
 }
 
 /// A press on the sheet at `at` (sheet mm); `put`: the view or dimension that the tool would put
@@ -1598,5 +1977,90 @@ mod tests {
         // Centre marks on the hole: chain lines in the top view.
         let drawn = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
         assert!(drawn["prims"].as_array().is_some_and(|a| a.iter().filter(|p| p["style"] == "chain").count() >= 2));
+    }
+
+    /// Picking at three zoom levels, between two holes 7 mm apart: each centre is taken where it
+    /// is, the distance measures 7 at every zoom; Space goes through what is under the pointer and
+    /// Backspace takes back the last pick.
+    #[test]
+    fn picks_are_exact_at_any_zoom_and_close_points_are_told_apart() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", json!({"length": 100, "width": 50, "height": 20})).unwrap();
+        for x in [30, 37] {
+            h.app.run("solid.cylinder", json!({"diameter": 4, "height": 30, "base": [x, 25, -5], "operation": "cut"})).unwrap();
+        }
+        h.step(&json!({"start": "drawing.create"})).unwrap();
+        h.frames(4);
+        set(&mut h, |k| {
+            k.orientation = 2; // top
+            k.base_scale = 4; // 1:1
+        });
+        click(&mut h, [150.0, 150.0]);
+        h.step(&json!({"key": "Escape"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.doc.drawings[0].views.len(), 1, "{:?}", ui(&h).status);
+        // The plate's middle (50, 25) is at (150, 150): the holes' centres at (130, 150) and (137, 150).
+        for (zoom, scrolls) in [("fitted", 0), ("closer", 4), ("much closer", 6)] {
+            for _ in 0..scrolls {
+                let c = screen([133.5, 150.0]);
+                h.step(&json!({"call": "ui.scroll", "params": {"x": c[0], "y": c[1], "delta": 120}})).unwrap();
+                h.frames(2);
+            }
+            set(&mut h, |k| {
+                k.set_tool(Tool::Dimension);
+                k.dim_kind = 0;
+            });
+            h.frames(1);
+            let before = h.app.session.doc.drawings[0].dims.len();
+            click(&mut h, [130.0, 150.0]);
+            assert_eq!(ui(&h).dim_picks.len(), 1, "{zoom}: {:?}", ui(&h).status);
+            // Backspace takes it back; picked again.
+            h.step(&json!({"key": "Backspace"})).unwrap();
+            h.frames(2);
+            assert!(ui(&h).dim_picks.is_empty(), "{zoom}: Backspace");
+            click(&mut h, [130.0, 150.0]);
+            click(&mut h, [137.0, 150.0]);
+            assert!(ui(&h).dim_ready(), "{zoom}: {:?}", ui(&h).dim_picks);
+            click(&mut h, [133.5, 158.0]);
+            let d = h.app.session.doc.drawings[0].clone();
+            assert_eq!(d.dims.len(), before + 1, "{zoom}: {:?}", ui(&h).status);
+            let x = d.dims.last().unwrap();
+            assert!(x.refs.iter().all(|r| r.at == "center"), "{zoom}: {:?}", x.refs);
+            let drawn = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
+            let dim_text = drawn["dims"].as_array().unwrap().last().unwrap()[1].clone();
+            let near: Vec<&str> = drawn["prims"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["type"] == "text" && (p["at"][0].as_f64().unwrap() - dim_text[0].as_f64().unwrap()).abs() < 1e-6)
+                .filter_map(|p| p["text"].as_str())
+                .collect();
+            assert!(near.contains(&"7"), "{zoom}: {near:?}");
+        }
+        // At a corner of the plate (100, 175) there are its point and its two edges: Space goes on.
+        let s = screen([100.0, 175.0]);
+        h.step(&json!({"move": s})).unwrap();
+        h.frames(2);
+        assert!(ui(&h).choices >= 3, "{}", ui(&h).choices);
+        assert_eq!(ui(&h).hover_kind, "end");
+        h.step(&json!({"key": "Space"})).unwrap();
+        h.frames(2);
+        assert_eq!(ui(&h).hover_kind, "line");
+    }
+
+    /// With Shift held a projected view goes where it is put, off its parent's line (free).
+    #[test]
+    fn shift_puts_a_projected_view_anywhere() {
+        let mut h = editor();
+        set(&mut h, |k| k.base_scale = 4);
+        click(&mut h, [130.0, 190.0]);
+        let s = screen([270.0, 120.0]);
+        h.step(&json!({"move": s, "shift": true})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click": s, "shift": true})).unwrap();
+        h.frames(2);
+        let d = h.app.session.doc.drawings[0].clone();
+        let v = d.views.last().unwrap();
+        assert!(v.free && dist(v.at, [270.0, 120.0]) < 1.0, "{v:?} {:?}", ui(&h).status);
     }
 }

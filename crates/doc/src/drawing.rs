@@ -148,6 +148,10 @@ pub struct DrawView {
     /// Draw the hidden edges (dashed).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// A projected or section view put anywhere: not kept in line with its parent, nor taken
+    /// along when the parent moves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free: bool,
 }
 
 /// What a dimension measures.
@@ -252,6 +256,9 @@ pub struct Drawing {
     pub dims: Vec<DrawDim>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<DrawNote>,
+    /// The height of its dimensions' text (mm; arrowheads in proportion); none: 3.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_height: Option<f64>,
     /// The bodies drawn: empty for every visible one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bodies: Vec<String>,
@@ -275,6 +282,7 @@ impl Drawing {
             views: Vec::new(),
             dims: Vec::new(),
             notes: Vec::new(),
+            text_height: None,
             bodies: Vec::new(),
             next_id: 1,
         }
@@ -291,6 +299,11 @@ impl Drawing {
 
     pub fn view(&self, id: u64) -> Option<&DrawView> {
         self.views.iter().find(|v| v.id == id)
+    }
+
+    /// Its dimensions' text height (mm): its own when it makes sense, else 3.5.
+    pub fn dim_text(&self) -> f64 {
+        self.text_height.filter(|h| h.is_finite() && (1.0..=20.0).contains(h)).unwrap_or(3.5)
     }
 
     /// The drawing's scale factor (1:1 when it doesn't read).
@@ -405,6 +418,7 @@ mod tests {
             scale: None,
             label: String::new(),
             hidden: false,
+            free: false,
         });
         let side = d.take_id();
         d.views.push(DrawView {
@@ -414,6 +428,7 @@ mod tests {
             scale: None,
             label: String::new(),
             hidden: false,
+            free: false,
         });
         let sec = d.take_id();
         d.views.push(DrawView {
@@ -423,6 +438,7 @@ mod tests {
             scale: None,
             label: d.next_label(),
             hidden: false,
+            free: false,
         });
         assert_eq!(d.views.last().map(|v| v.label.as_str()), Some("A"));
         assert_eq!(d.next_label(), "B");
@@ -437,6 +453,7 @@ mod tests {
             scale: None,
             label: "B".into(),
             hidden: false,
+            free: false,
         });
         assert_eq!(d.descendants(99), vec![99]);
         assert!(d.view_scale(d.view(99).unwrap()) > 0.0);

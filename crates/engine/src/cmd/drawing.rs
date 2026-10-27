@@ -21,7 +21,7 @@ pub static COMMANDS: &[CommandSpec] = &[
          projection?: first (ISO E, default) | third (ISO A); views?: standard (front, top, side and iso, default) | none → drawing id",
     ),
     CommandSpec::new("drawing.edit", "Sheet and Title Block", edit).at(TAB, "SHEET").icon("edit").doc_only().params(
-        "drawing (id or name); name?, size?, landscape?, scale?, projection?; title?: {title, number, company, drawn_by, checked_by, date, material, revision, tolerances}; bodies?: [names] (empty: all visible)",
+        "drawing (id or name); name?, size?, landscape?, scale?, projection?; text_height?: the dimensions' text (mm, 1–20, null: 3.5); title?: {title, number, company, drawn_by, checked_by, date, material, revision, tolerances}; bodies?: [names] (empty: all visible)",
     ),
     CommandSpec::new("drawing.delete", "Delete Drawing", delete).icon("delete").doc_only().params("drawing (id or name)"),
     CommandSpec::new("drawing.list", "List Drawings", list).icon("list").noundo().doc_only().params("→ drawings: id, name, sheet, scale, views, dimensions"),
@@ -29,7 +29,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         "drawing; orientation: front|back|top|bottom|left|right|iso (default front); at?: [x, y] sheet mm (default: the free middle); scale?; hidden? → view id",
     ),
     CommandSpec::new("drawing.view.projected", "Projected View", view_projected).at(TAB, "VIEWS").icon("project").params(
-        "drawing; parent (view id); side: right|left|above|below|iso; at?: [x, y] (default: beside the parent); scale?; hidden? → view id",
+        "drawing; parent (view id); side: right|left|above|below|iso; at?: [x, y] (default: beside the parent; kept in line with it unless free); free?; scale?; hidden? → view id",
     ),
     CommandSpec::new("drawing.view.flat", "Flat Pattern View", view_flat).at(TAB, "VIEWS").icon("flat").params(
         "drawing; body? (a sheet metal body; default the last one the drawing shows); at?: [x, y] (default: below the other views); scale?; label? → view id. \
@@ -48,7 +48,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     ),
         CommandSpec::new("drawing.view.edit", "Edit View", view_edit).icon("edit").params(
         "drawing; view; at?: [x, y] (the views projected or cut from it go with it; a projected view keeps in line with its parent); \
-         scale? (empty: the drawing's); hidden?; flip? (section); orientation? (base view); label?",
+         scale? (empty: the drawing's); hidden?; flip? (section); orientation? (base view); label?; \
+         free? (a projected or section view put anywhere, not lined up with its parent nor moved with it)",
     ),
     CommandSpec::new("drawing.view.delete", "Delete View", view_delete).icon("delete").params("drawing; view — with the views made from it and their dimensions"),
     CommandSpec::new("drawing.dimension", "Dimension", dimension).at(TAB, "ANNOTATE").icon("dimension").params(
@@ -190,6 +191,7 @@ fn standard_views(s: &Session, d: &mut Drawing, fixed_scale: bool, cmd: &str) ->
         scale: None,
         label: String::new(),
         hidden: false,
+        free: false,
     });
     let top = d.take_id();
     d.views.push(DrawView {
@@ -199,6 +201,7 @@ fn standard_views(s: &Session, d: &mut Drawing, fixed_scale: bool, cmd: &str) ->
         scale: None,
         label: String::new(),
         hidden: false,
+        free: false,
     });
     let side = d.take_id();
     d.views.push(DrawView {
@@ -208,6 +211,7 @@ fn standard_views(s: &Session, d: &mut Drawing, fixed_scale: bool, cmd: &str) ->
         scale: None,
         label: String::new(),
         hidden: false,
+        free: false,
     });
     let iso = d.take_id();
     d.views.push(DrawView {
@@ -217,6 +221,7 @@ fn standard_views(s: &Session, d: &mut Drawing, fixed_scale: bool, cmd: &str) ->
         scale: None,
         label: String::new(),
         hidden: false,
+        free: false,
     });
     Ok(())
 }
@@ -313,6 +318,14 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    match p.get("text_height") {
+        None => {}
+        Some(Value::Null) => d.text_height = None,
+        Some(_) => {
+            d.text_height =
+                Some(num(p, "text_height").filter(|h| (1.0..=20.0).contains(h)).ok_or_else(|| bad(cmd, "`text_height` must be 1 to 20 mm"))?)
+        }
+    }
     if let Some(b) = p.get("bodies") {
         let list = b.as_array().ok_or_else(|| bad(cmd, "`bodies` must be a list of names"))?;
         d.bodies = list.iter().filter_map(Value::as_str).map(str::to_string).take(MAX_ITEMS).collect();
@@ -359,6 +372,12 @@ fn common_view_params(v: &mut DrawView, p: &Value, cmd: &str) -> Result<()> {
     if let Some(at) = p.get("at") {
         v.at = point(Some(at)).ok_or_else(|| bad(cmd, "`at` must be [x, y] on the sheet (mm)"))?;
     }
+    if let Some(f) = bool_(p, "free") {
+        if f && !matches!(v.kind, ViewKind::Projected { .. } | ViewKind::Section { .. }) {
+            return Err(bad(cmd, "only a projected or section view is lined up with a parent (`free`)"));
+        }
+        v.free = f;
+    }
     Ok(())
 }
 
@@ -378,7 +397,7 @@ fn add_view(
     let at = default_at(s, &d0);
     change(s, i, |d| {
         let id = d.take_id();
-        let mut v = DrawView { id, kind, at, scale: None, label: if label { d.next_label() } else { String::new() }, hidden: false };
+        let mut v = DrawView { id, kind, at, scale: None, label: if label { d.next_label() } else { String::new() }, hidden: false, free: false };
         if let Some(l) = str_(p, "label").map(str::trim).filter(|l| !l.is_empty() && l.len() <= 8) {
             v.label = l.to_string();
         }
@@ -467,6 +486,7 @@ fn view_projected(s: &mut Session, p: &Value) -> Result<Value> {
     let mut q = p.clone();
     if let Some(at) = point(p.get("at"))
         && side != "iso"
+        && !bool_(p, "free").unwrap_or(false)
         && let Some(pat) = s.doc.drawings.get(find(s, p, cmd)?).and_then(|d| d.view(parent)).map(|v| v.at)
     {
         let at = if side == "left" || side == "right" { [at[0], pat[1]] } else { [pat[0], at[1]] };
@@ -510,7 +530,7 @@ fn view_preview(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "too many views"));
     }
     let id = d.take_id();
-    let mut v = DrawView { id, kind, at: [0.0, 0.0], scale: None, label: String::new(), hidden: false };
+    let mut v = DrawView { id, kind, at: [0.0, 0.0], scale: None, label: String::new(), hidden: false, free: false };
     common_view_params(&mut v, p, cmd)?;
     v.at = [0.0, 0.0];
     d.views.push(v);
@@ -577,7 +597,7 @@ fn view_edit(s: &mut Session, p: &Value) -> Result<Value> {
         });
         let v = d.views.get_mut(vi).ok_or_else(|| bad(cmd, "no such view"))?;
         common_view_params(v, p, cmd)?;
-        if let Some((pat, side)) = lined_up {
+        if let Some((pat, side)) = lined_up.filter(|_| !v.free) {
             if side == "left" || side == "right" {
                 v.at[1] = pat[1];
             } else {
@@ -588,7 +608,10 @@ fn view_edit(s: &mut Session, p: &Value) -> Result<Value> {
         // The views projected or cut from it go with it.
         if delta != [0.0, 0.0] && p.get("at").is_some() {
             let carried: Vec<u64> = d.descendants(id).into_iter().skip(1).collect();
-            for w in d.views.iter_mut().filter(|w| carried.contains(&w.id) && matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. }))
+            for w in d
+                .views
+                .iter_mut()
+                .filter(|w| !w.free && carried.contains(&w.id) && matches!(w.kind, ViewKind::Projected { .. } | ViewKind::Section { .. }))
             {
                 w.at = [w.at[0] + delta[0], w.at[1] + delta[1]];
             }

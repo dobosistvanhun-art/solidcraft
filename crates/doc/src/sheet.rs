@@ -7922,7 +7922,6 @@ mod tests {
     /// `alu()` with torn corners.
     fn torn() -> RuleValues {
         RuleValues { corner_relief_shape: ReliefShape::Tear, ..alu() }
-        k_auto: None,
     }
 
     /// The corners of the flat pattern's outline.
@@ -8541,7 +8540,12 @@ mod material_tests {
             bend_radius: 2.0,
             k_factor: auto_k_factor(MaterialClass::Medium, 2.0, 2.0),
             k_auto: Some(MaterialClass::Medium),
-            ..alu()
+            relief_width: 2.0,
+            relief_depth: 1.0,
+            corner_relief: 8.0,
+            corner_relief_shape: ReliefShape::Notch,
+            hem_gap: 0.01,
+            gap: 0.5,
         };
         let r = rect(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 80.0), Vec2::new(0.0, 80.0));
         let mut s = base_flange("Body1", "R", &rule, Plane::XY, r);

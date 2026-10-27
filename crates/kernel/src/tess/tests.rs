@@ -449,3 +449,29 @@ fn a_boundary_running_back_along_itself_is_all_slit() {
     let (kept, _) = drop_slits(std::slice::from_ref(&lens), &[Vec::new()], 1e-9);
     assert_eq!(kept, vec![lens]);
 }
+
+/// A tube from an annulus, planned at the viewport's display qualities and refinement steps:
+/// watertight, and every display edge's points are vertices of the faces' triangles, so its
+/// edges lie on its faces (a planar end and the bore meet with no sliver between them).
+#[test]
+fn a_tube_is_planned_watertight_with_its_edges_on_its_faces_at_every_quality() {
+    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    let region = Region2 { outer: Loop2::circle(Vec2::new(0.0, 0.0), 26.0), holes: vec![Loop2::circle(Vec2::new(0.0, 0.0), 16.560495).reversed()] };
+    let tube = ok(crate::build::extrude(&Plane::XY, &[region], 0.0, 87.0)).into_iter().next().unwrap();
+    let size = tube.size();
+    for (frac, angle) in [(1e-3, crate::DISPLAY_ANGLE), (2.5e-4, crate::DISPLAY_ANGLE / 2f64.sqrt()), (6.25e-5, crate::DISPLAY_ANGLE / 2.0)] {
+        for k in 0..4 {
+            let tol = size * frac / f64::from(1u32 << k);
+            let a = angle / 2f64.sqrt().powi(k);
+            let plan = ok(tube.display_plan_angular(tol, a));
+            let m = plan.evaluate();
+            assert_watertight(&m, &format!("tube {frac} step {k}"));
+            let key = |p: &solidcraft_geom::Vec3| [(p.x + 0.0).to_bits(), (p.y + 0.0).to_bits(), (p.z + 0.0).to_bits()];
+            let verts: std::collections::HashSet<[u64; 3]> = m.positions.iter().map(key).collect();
+            for (i, e) in m.edges.iter().enumerate() {
+                let missing = e.iter().filter(|p| !verts.contains(&key(p))).count();
+                assert_eq!(missing, 0, "tube {frac} step {k}: edge {i} has {missing} of {} points that no triangle has", e.len());
+            }
+        }
+    }
+}

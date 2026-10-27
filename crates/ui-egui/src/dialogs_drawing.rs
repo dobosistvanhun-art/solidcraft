@@ -826,11 +826,11 @@ fn auto_kind(p1: [f64; 2], p2: [f64; 2], q: [f64; 2]) -> usize {
 }
 
 /// Which side of `parent`'s frame the pointer is on: a projected view's `side`.
-fn side_of(lo: [f64; 2], hi: [f64; 2], at: [f64; 2]) -> &'static str {
+fn side_of(lo: [f64; 2], hi: [f64; 2], at: [f64; 2], corner_iso: bool) -> &'static str {
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (hw, hh) = (((hi[0] - lo[0]) / 2.0).max(1.0), ((hi[1] - lo[1]) / 2.0).max(1.0));
     let (rx, ry) = ((at[0] - c[0]) / hw, (at[1] - c[1]) / hh);
-    if rx.abs() > 1.0 && ry.abs() > 1.0 {
+    if corner_iso && rx.abs() > 1.0 && ry.abs() > 1.0 {
         "iso"
     } else if rx.abs() >= ry.abs() {
         if rx >= 0.0 { "right" } else { "left" }
@@ -1253,7 +1253,8 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                 if let Some(parent) = k.parent
                     && let Some((lo, hi, _)) = view_frame(&v, parent)
                 {
-                    let side = side_of(lo, hi, at);
+                    // With Shift (put anywhere) the side is the one the pointer is most toward.
+                    let side = side_of(lo, hi, at, !shift_held);
                     let parent_at = drawing(app, k).and_then(|dd| dd.view(parent)).map(|x| x.at);
                     // In line with the parent; with Shift held, anywhere (a free view).
                     let line = if shift_held || side == "iso" {
@@ -1948,7 +1949,8 @@ mod tests {
         let at = drawn["dims"][0][1].clone();
         assert!((at[1].as_f64().unwrap() - 226.0).abs() < 1.5, "{at}");
         // The hole in the top view (r 10 about (120, 120)): its diameter.
-        click(&mut h, [130.0, 120.0]);
+        // (On the circle away from its quadrant points, which are points of their own.)
+        click(&mut h, [127.07, 127.07]);
         assert!(matches!(ui(&h).dim_picks.first().map(|p| p.1), Some(Pick::Circle(.., true))), "{:?}", ui(&h).dim_picks);
         click(&mut h, [150.0, 150.0]);
         let d = h.app.session.doc.drawings[0].clone();
@@ -1999,6 +2001,18 @@ mod tests {
         h.step(&json!({"key": "Escape"})).unwrap();
         h.frames(2);
         assert_eq!(h.app.session.doc.drawings[0].views.len(), 1, "{:?}", ui(&h).status);
+        // At a corner of the plate (100, 175) there are its point and its two edges: Space goes on.
+        set(&mut h, |k| k.set_tool(Tool::Dimension));
+        h.frames(1);
+        let s = screen([100.0, 175.0]);
+        h.step(&json!({"move": s})).unwrap();
+        h.frames(2);
+        assert!(ui(&h).choices >= 3, "{}", ui(&h).choices);
+        assert_eq!(ui(&h).hover_kind, "end");
+        h.step(&json!({"key": "Space"})).unwrap();
+        h.frames(2);
+        assert_eq!(ui(&h).hover_kind, "line");
+        set(&mut h, |k| k.set_tool(Tool::Select));
         // The plate's middle (50, 25) is at (150, 150): the holes' centres at (130, 150) and (137, 150).
         for (zoom, scrolls) in [("fitted", 0), ("closer", 4), ("much closer", 6)] {
             for _ in 0..scrolls {
@@ -2037,15 +2051,6 @@ mod tests {
                 .collect();
             assert!(near.contains(&"7"), "{zoom}: {near:?}");
         }
-        // At a corner of the plate (100, 175) there are its point and its two edges: Space goes on.
-        let s = screen([100.0, 175.0]);
-        h.step(&json!({"move": s})).unwrap();
-        h.frames(2);
-        assert!(ui(&h).choices >= 3, "{}", ui(&h).choices);
-        assert_eq!(ui(&h).hover_kind, "end");
-        h.step(&json!({"key": "Space"})).unwrap();
-        h.frames(2);
-        assert_eq!(ui(&h).hover_kind, "line");
     }
 
     /// With Shift held a projected view goes where it is put, off its parent's line (free).
@@ -2054,13 +2059,13 @@ mod tests {
         let mut h = editor();
         set(&mut h, |k| k.base_scale = 4);
         click(&mut h, [130.0, 190.0]);
-        let s = screen([270.0, 120.0]);
+        let s = screen([290.0, 165.0]);
         h.step(&json!({"move": s, "shift": true})).unwrap();
         h.frames(2);
         h.step(&json!({"click": s, "shift": true})).unwrap();
         h.frames(2);
         let d = h.app.session.doc.drawings[0].clone();
         let v = d.views.last().unwrap();
-        assert!(v.free && dist(v.at, [270.0, 120.0]) < 1.0, "{v:?} {:?}", ui(&h).status);
+        assert!(v.free && dist(v.at, [290.0, 165.0]) < 1.0 && matches!(&v.kind, ViewKind::Projected { side, .. } if side == "right"), "{v:?} {:?}", ui(&h).status);
     }
 }

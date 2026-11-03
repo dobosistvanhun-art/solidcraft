@@ -193,6 +193,16 @@ pub(crate) struct ProfileRoles<'a> {
     pub region: Option<&'a Region2>,
     /// The start and end caps' roles (`None`: not known).
     pub caps: [Option<String>; 2],
+    /// A thin wall: its sides lie off the sketch curves, and are named by the curve they run
+    /// beside.
+    pub thin: Option<&'a ThinWallRoles>,
+}
+
+/// What names the sides of a thin extrude's wall: the curves it follows and how far its sides lie
+/// from them (the thickness either side).
+pub(crate) struct ThinWallRoles {
+    pub curves: Vec<String>,
+    pub distances: [f64; 2],
 }
 
 impl<'a> ProfileRoles<'a> {
@@ -210,7 +220,12 @@ impl<'a> ProfileRoles<'a> {
         // Every curve the segment is drawn on (one, or several coincident or collinear ones).
         let curve = |segment: usize| -> Vec<String> {
             let (Some(curves), Some(segment)) = (curves.as_ref(), segments.get(segment)) else { return Vec::new() };
-            curves.find_all_along(segment).into_iter().map(|id| format!("side:{id}")).collect()
+            let drawn: Vec<String> = curves.find_all_along(segment).into_iter().map(|id| format!("side:{id}")).collect();
+            match self.thin {
+                // A thin wall's side beside its curve (the other side may lie on it).
+                Some(thin) if drawn.is_empty() => curves.find_offset(segment, &thin.curves, thin.distances),
+                _ => drawn,
+            }
         };
         let roles = history
             .faces
@@ -242,7 +257,7 @@ impl<'a> ProfileRoles<'a> {
     /// A body swept from a profile (revolve, sweep, loft): its sides named by the sketch curves,
     /// its caps `start` and `end`.
     pub fn swept(sketch: Option<&'a SolvedSketch>, region: Option<&'a Region2>) -> ProfileRoles<'a> {
-        ProfileRoles { sketch, region, caps: [Some("start".into()), Some("end".into())] }
+        ProfileRoles { sketch, region, caps: [Some("start".into()), Some("end".into())], thin: None }
     }
 
     /// A tool built from the profile (and then moved, from `built`, when given), its faces named
@@ -556,7 +571,12 @@ pub(crate) fn order_lumps(bodies: &mut [crate::ModelBody], origin: &Arc<crate::n
     }
     for (_, members) in families.into_iter().filter(|(_, m)| m.len() > 1) {
         let feature = members.first().and_then(|i| bodies.get(*i)).map(|b| b.feature);
-        if members.iter().any(|i| bodies.get(*i).map(|b| b.feature) != feature) {
+        // A cut's pieces past the first belong to the cut itself (#10123), so its family spans
+        // two features: the piece that kept the body's name comes from the body's own feature
+        // and the rest from this feature. Any other mix is not a split's family: leave it be.
+        let same = members.iter().all(|i| bodies.get(*i).map(|b| b.feature) == feature);
+        let foreign = members.iter().filter(|i| bodies.get(**i).map(|b| b.feature) != Some(origin.feature.id)).count();
+        if !same && foreign > 1 {
             continue;
         }
         let least = |b: &crate::ModelBody| {
@@ -567,10 +587,14 @@ pub(crate) fn order_lumps(bodies: &mut [crate::ModelBody], origin: &Arc<crate::n
         let keys: Option<Vec<(String, usize)>> = members.iter().map(|i| bodies.get(*i).and_then(least).map(|k| (k, *i))).collect();
         let Some(mut keys) = keys else { continue };
         keys.sort();
-        let names: Vec<String> = members.iter().filter_map(|i| bodies.get(*i).map(|b| b.name.clone())).collect();
-        for (name, (_, i)) in names.into_iter().zip(keys) {
+        // A name moves with the feature it belongs to: in a cut's family the first name is the
+        // cut body's own feature's and the rest are the cut's, and `body.rename` stores a name in
+        // the `body_names` of the feature a body says made it (#10438).
+        let names: Vec<(String, u64)> = members.iter().filter_map(|i| bodies.get(*i).map(|b| (b.name.clone(), b.feature))).collect();
+        for ((name, feature), (_, i)) in names.into_iter().zip(keys) {
             if let Some(b) = bodies.get_mut(i) {
                 b.name = name;
+                b.feature = feature;
             }
         }
     }

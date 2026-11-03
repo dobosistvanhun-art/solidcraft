@@ -26,7 +26,7 @@ fn block() -> Harness {
 /// The block with the preferences a new installation has.
 fn block_as_installed() -> Harness {
     let mut h = Harness::new();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
     h.app.run("solid.hole", json!({"position": [10, 10, 20], "diameter": 10, "name": "Bore"})).unwrap();
     h.step(&json!({"call": "ui.view", "params": {"view": "top"}})).unwrap();
@@ -133,6 +133,8 @@ fn a_pick_on_a_round_edge_goes_to_its_centre() {
         *cb_diameter = "16 mm".into();
         *cb_depth = "3 mm".into();
     }
+    // Changing the type adds fields; draw them before sending Enter to the focused editor.
+    h.frames(3);
     h.step(&json!({"key": "Enter"})).unwrap();
     assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog.as_ref().map(|d| &d.error));
     let (id, position) = last_hole(&h);
@@ -274,7 +276,12 @@ fn the_dialog_shows_the_sizes_beside_a_section_of_the_hole() {
     h.frames(3);
     let (cb, cbd, depth, dia) = (at("Counterbore Ø"), at("Counterbore depth"), at("Depth"), at("Diameter"));
     assert!(cb.y < cbd.y && cbd.y < depth.y && depth.y < dia.y, "{cb:?} {cbd:?} {depth:?} {dia:?}");
-    assert!(handle_at("dialog:Tip Angle").is_none(), "no tip on a counterbore");
+    assert!(handle_at("dialog:Tip Angle").is_some(), "a counterbore retains the selected angled bottom");
+    if let Some(Kind::Hole { opts, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+        opts.angled = false;
+    }
+    h.frames(3);
+    assert!(handle_at("dialog:Tip Angle").is_none(), "a flat bottom needs no tip angle");
     // Through all: no depth.
     if let Some(Kind::Hole { opts, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
         opts.all = true;
@@ -292,4 +299,89 @@ fn the_dialog_shows_the_sizes_beside_a_section_of_the_hole() {
     h.step(&json!({"text": "7 mm"})).unwrap();
     h.frames(2);
     assert!(matches!(&h.app.dialog.as_ref().unwrap().kind, Kind::Hole { depth, .. } if depth == "7 mm"));
+}
+
+#[test]
+fn tapped_thread_depth_field_keeps_focus_and_typing_separate_from_acceptance() {
+    let mut h = Harness::new();
+    h.app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+    let hole = h.app.run("solid.hole", json!({"position":[20,15,20],"thread":"M6","depth":12})).unwrap()["feature"].as_u64().unwrap();
+    let original = h.app.session.doc.to_json();
+    h.step(&json!({"call":"ui.editFeature","params":{"feature":hole}})).unwrap();
+    h.frames(3);
+    // Opening Edit Feature intentionally rolls the marker back; focusing a field must
+    // preserve that editing state, and Cancel must restore the original marker too.
+    let editing = h.app.session.doc.to_json();
+    assert!(handle_at("dialog:Thread depth").is_none(), "full tapping needs no partial-depth field");
+    h.step(&json!({"click":{"handle":"dialog:Full thread depth"}})).unwrap();
+    h.frames(3);
+    assert!(handle_at("dialog:Thread depth").is_some(), "partial depth belongs beside the section");
+    h.step(&json!({"click":{"handle":"dialog:Thread depth"}})).unwrap();
+    h.step(&json!({"key":"A","cmd":true})).unwrap();
+    h.step(&json!({"text":"1 cm / 2"})).unwrap();
+    h.frames(3);
+    assert_eq!(h.app.session.doc.to_json(), editing, "selecting and typing a dimension must not apply the model");
+    assert!(matches!(&h.app.dialog.as_ref().unwrap().kind, Kind::Hole { opts, .. } if !opts.thread_full_depth && opts.thread_depth == "1 cm / 2"));
+    h.step(&json!({"key":"Escape"})).unwrap();
+    h.frames(3);
+    assert!(h.app.dialog.is_none());
+    assert_eq!(h.app.session.doc.to_json(), original, "Cancel preserves the accepted design");
+}
+
+/// The Preferences split must retain both Hole controls on Tools.
+#[test]
+fn hole_design_preferences_keep_both_controls_and_cancel_after_page_split() {
+    let mut h = Harness::new();
+    h.call("ui.prefs", json!({"language":"en", "open":"Tools"}));
+    let page = rect_of("prefs:page_body").unwrap();
+    for label in ["Snap to face and edge centers", "Move holes by clicking or dragging"] {
+        let mut point = None;
+        for _ in 0..12 {
+            point = h.output.accesskit_update.as_ref().and_then(|tree| {
+                tree.nodes.iter().rev().find_map(|(_, node)| {
+                    if node.label() != Some(label) {
+                        return None;
+                    }
+                    let b = node.bounds()?;
+                    let p = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+                    page.contains(p).then_some(p)
+                })
+            });
+            if point.is_some() {
+                break;
+            }
+            h.call("ui.scroll", json!({"x":page.center().x,"y":page.center().y,"delta":-100}));
+            h.frames(12);
+        }
+        let p = point.unwrap_or_else(|| panic!("Hole preference missing from Tools: {label}"));
+        h.call("ui.click", json!({"x":p.x,"y":p.y}));
+    }
+    assert!(h.app.preferences.hole_snaps && h.app.preferences.hole_moves);
+    h.call("ui.prefs", json!({"button":"cancel"}));
+    assert!(!h.app.preferences.hole_snaps && !h.app.preferences.hole_moves);
+}
+
+#[test]
+fn editing_a_hole_replaces_its_face_instead_of_adding_one() {
+    // #10692: a Single hole has one place; a second face pick while editing replaces it.
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 10, "body_name": "Base"})).unwrap();
+    h.app.run("solid.box", json!({"corner": [0, 0, 10], "length": 20, "width": 30, "height": 10, "operation": "new", "body_name": "Top"})).unwrap();
+    let hole = h.app.run("solid.hole", json!({"position": [30, 15, 10], "diameter": 6, "name": "Hole1"})).unwrap()["feature"].as_u64().unwrap();
+    h.step(&json!({"call": "ui.view", "params": {"view": "top"}})).unwrap();
+    h.settle();
+    h.step(&json!({"call": "ui.editFeature", "params": {"feature": hole}})).unwrap();
+    h.frames(3);
+    assert_eq!(h.app.dialog.as_ref().unwrap().inputs[0].items.len(), 1, "one place on opening");
+    let on_top = Vec3::new(10.0, 15.0, 20.0);
+    let at = screen(&mut h, on_top);
+    h.step(&json!({"click": at})).unwrap();
+    assert_eq!(h.app.dialog.as_ref().unwrap().inputs[0].items.len(), 1, "the pick replaces the place, not '2 selected'");
+    assert!(matches!(places(&h).as_slice(), [p] if p.dist(on_top) < 1e-3), "{:?}", places(&h));
+    h.step(&json!({"key": "Enter"})).unwrap();
+    assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog.as_ref().map(|d| &d.error));
+    let (again, position) = last_hole(&h);
+    assert_eq!(again, hole, "the same feature");
+    assert!(position.dist(on_top) < 1e-3, "OK uses the new face: {position:?}");
 }

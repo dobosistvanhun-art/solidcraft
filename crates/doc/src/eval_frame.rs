@@ -340,7 +340,7 @@ fn corner_plan(
             }
             let (trim, through) = rule(i, j);
             let angle = u.dot(v).clamp(-1.0, 1.0).acos();
-            if trim.is_none() || angle < MIN_CORNER || angle > std::f64::consts::PI - MIN_CORNER {
+            if trim.is_none() || !(MIN_CORNER..=std::f64::consts::PI - MIN_CORNER).contains(&angle) {
                 continue;
             }
             match trim {

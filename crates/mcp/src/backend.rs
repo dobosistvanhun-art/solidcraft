@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use solidcraft_engine::Session;
 use solidcraft_engine::control_pending;
 use solidcraft_engine::render::StandardView;
+use solidcraft_engine::schema::ParamCheck;
 use solidcraft_engine::view::Guides;
 
 /// Something that answers control-channel methods: `engine.execute`, `engine.commands`,
@@ -28,6 +29,15 @@ pub trait Backend {
     /// here, #1833).
     fn in_process(&self) -> bool {
         false
+    }
+    /// A line every tool result carries (a session that is not what the user expects).
+    fn notice(&self) -> Option<String> {
+        None
+    }
+    /// How calls are checked against their commands' typed contracts (`--param-check`): by the
+    /// headless session, or for `Remote` by the app or before the call is sent to it.
+    fn param_check(&self) -> ParamCheck {
+        ParamCheck::Off
     }
 }
 
@@ -102,6 +112,11 @@ pub(crate) struct Waits {
 
 const WAITS: Waits = Waits { pending: PENDING_WAIT, settle: SETTLE_WAIT, poll: POLL_EVERY };
 
+/// The level a control reply says its request was checked at (#9184), if it says one.
+fn echoed(v: &Value) -> Option<ParamCheck> {
+    v.get("param_check").and_then(Value::as_str).and_then(ParamCheck::parse)
+}
+
 /// A control reply as a call's result.
 fn outcome(v: &Value) -> Result<Value, String> {
     if v.get("ok").and_then(Value::as_bool) == Some(true) {
@@ -126,6 +141,14 @@ pub struct Remote {
     /// An outstanding request's end, once a later call waited for it (for `pending`).
     settled: Option<Settled>,
     waits: Waits,
+    /// How calls are checked (`--param-check`): by the app, when it checks a request's own
+    /// level, else here before they are sent.
+    param_check: ParamCheck,
+    /// Whether the connected app checks a request's `param_check` itself (#9184), asked once per
+    /// connection; `None` until asked.
+    app_checks: Option<bool>,
+    /// The level the app said it checked the last reply at (`param_check` beside `ok`).
+    echoed: Option<ParamCheck>,
 }
 
 /// How a tool error starts when no app listens at the bridged address. The agent reads it, and
@@ -151,7 +174,26 @@ impl Remote {
     pub fn new(addr: &str, token: Option<&str>) -> Self {
         let port = addr.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
         let explicit_token = token.map(str::to_string);
-        Self { addr: addr.to_string(), port, conn: None, next_id: 1, explicit_token, outstanding: None, settled: None, waits: WAITS }
+        Self {
+            addr: addr.to_string(),
+            port,
+            conn: None,
+            next_id: 1,
+            explicit_token,
+            outstanding: None,
+            settled: None,
+            waits: WAITS,
+            param_check: ParamCheck::Off,
+            app_checks: None,
+            echoed: None,
+        }
+    }
+
+    /// Check calls against their commands' contracts at `level` (`--param-check`): an app that
+    /// checks a request's own level is sent it, and an older one gets only the calls that pass.
+    pub fn with_param_check(mut self, level: ParamCheck) -> Self {
+        self.param_check = level;
+        self
     }
 
     /// Shorter waits for requests still running (tests).
@@ -163,14 +205,20 @@ impl Remote {
     /// Close the connection. A request still running loses its reply with it.
     fn drop_conn(&mut self) {
         self.conn = None;
+        // The next connection may reach another app (restarted, another version).
+        self.app_checks = None;
         if let Some(o) = self.outstanding.take() {
             self.settled = Some(Settled::Lost { what: o.what });
         }
     }
 
-    /// Connect now, if the app is there (`new` does not); the error says why not.
+    /// See whether the app is there now (`new` does not); the error says why not. The connection
+    /// doesn't stay open: the app closes one that shows no token within a few seconds, and the
+    /// first call may be long away. That call connects again.
     pub fn try_connect(&mut self) -> std::io::Result<()> {
-        self.reconnect()
+        self.reconnect()?;
+        self.drop_conn();
+        Ok(())
     }
 
     /// Failing to reach the app at all is `NotConnected`, so [`Remote::explain`] can tell it from
@@ -264,11 +312,16 @@ impl Remote {
         // The app confines the files this request reaches to the agent's folders (control.rs).
         if let (Some(scope), Some(o)) = (solidcraft_engine::io::vfs::current_scope(), params.as_object_mut()) {
             o.insert("allow_paths".into(), json!(scope.roots().iter().map(|r| r.to_string_lossy()).collect::<Vec<_>>()));
+            // And the folders it opened or saved a design in, which count as its open design's.
+            if !scope.design_roots().is_empty() {
+                o.insert("design_folders".into(), json!(scope.design_roots().iter().map(|r| r.to_string_lossy()).collect::<Vec<_>>()));
+            }
         }
         let mut msg = json!({"id": id, "method": method, "params": params});
         // The token goes with every request (an app restarted mid-session has a new one).
-        if let Some(t) = solidcraft_engine::control_auth::client_token(self.port, self.explicit_token.as_deref()) {
-            msg["token"] = json!(t);
+        let token = solidcraft_engine::control_auth::client_token(self.port, self.explicit_token.as_deref());
+        if let Some(t) = &token {
+            msg["token"] = json!(t.token);
         }
         msg.to_string()
     }
@@ -380,6 +433,7 @@ impl Remote {
         if method != "control.running" {
             self.settle_earlier()?;
         }
+        self.echoed = None;
         let what = control_pending::describe(method, &params);
         let effect = control_pending::effect(method, &params);
         let again = retry_busy.then(|| params.clone());
@@ -397,6 +451,7 @@ impl Remote {
         }
         .map_err(|e| self.explain(&e))?;
         let v: Value = serde_json::from_str(&reply).map_err(|e| format!("bad reply from the app: {e}"))?;
+        self.echoed = echoed(&v);
         // Timed out in the app, still running (#1618): wait for its result on this connection.
         if v.get("running").and_then(Value::as_bool) == Some(true) {
             self.outstanding = Some(Outstanding { what: what.clone(), effect: Some(effect), since: sent });
@@ -406,7 +461,10 @@ impl Remote {
                 self.waits.pending.as_secs()
             );
             return match self.wait_outstanding(self.waits.pending)? {
-                Waited::Done(reply) => outcome(&reply),
+                Waited::Done(reply) => {
+                    self.echoed = echoed(&reply);
+                    outcome(&reply)
+                }
                 Waited::Nothing => {
                     Err(format!("{what} timed out in the app, which kept no result for it: inspect the design before sending it again"))
                 }
@@ -422,16 +480,147 @@ impl Remote {
             self.settle_earlier()?;
             return self.call_once(method, params, false);
         }
-        outcome(&v)
+        // A refused token: say which token file it came from (and whether it is stale).
+        outcome(&v).map_err(|error| {
+            solidcraft_engine::control_auth::client_token(self.port, self.explicit_token.as_deref())
+                .map_or_else(|| error.clone(), |t| t.explain_error(&error))
+        })
+    }
+}
+
+/// What is wrong with `params` for `id` by this server's contracts, as messages; none when it has
+/// no contract for `id` (the app may have commands this server lacks).
+fn contract_issues(id: &str, params: &Value) -> Vec<String> {
+    solidcraft_engine::schema::issues(id, params).into_iter().map(|i| i.message).collect()
+}
+
+/// Give `reply` `issues` as its `param_warnings`, as a headless session at the warn level does; a
+/// reply that has its own (an app that checked the call itself) keeps those.
+fn add_param_warnings(reply: &mut Value, issues: Vec<String>) {
+    if !issues.is_empty()
+        && let Some(o) = reply.as_object_mut()
+    {
+        o.entry("param_warnings").or_insert_with(|| json!(issues));
+    }
+}
+
+impl Remote {
+    /// Whether the app checks a request's `param_check` itself (#9184): asked once per
+    /// connection with `control.capabilities`, which lists the levels it takes; an older app
+    /// answers "unknown method". Any other answer (no app, a busy one) is asked again next time.
+    fn app_checks(&mut self) -> bool {
+        if let Some(known) = self.app_checks {
+            return known;
+        }
+        // Sent ahead of settling a request still running on this connection: the app answers
+        // `control.capabilities` at once, as `control.running`, without taking that one's reply.
+        let line = self.request_line("control.capabilities", json!({}));
+        let reply = self.roundtrip(&line).ok().and_then(|r| serde_json::from_str::<Value>(&r).ok());
+        let known = match reply.as_ref().map(outcome) {
+            Some(Ok(c)) => Some(c["param_check"].as_array().is_some_and(|levels| levels.iter().any(|l| l == self.param_check.name()))),
+            Some(Err(e)) if e.starts_with("unknown method") => Some(false),
+            _ => None,
+        };
+        if self.conn.is_some() {
+            self.app_checks = known;
+        }
+        known.unwrap_or(false)
+    }
+
+    /// The reply to a call sent with this bridge's level: at `strict`, one that doesn't say the
+    /// app checked it at that level is an error, since the call may have run unchecked; and the
+    /// next calls are checked here.
+    fn confirmed(&mut self, reply: Result<Value, String>) -> Result<Value, String> {
+        let unconfirmed = reply.is_ok() && self.echoed != Some(self.param_check);
+        if unconfirmed {
+            self.app_checks = Some(false);
+        }
+        match reply {
+            Ok(_) if unconfirmed && self.param_check == ParamCheck::Strict => {
+                Err("the app did not say it checked this call at --param-check strict, so it may have run unchecked: inspect the design \
+                 before sending it again (the next calls are checked here before they are sent)"
+                    .into())
+            }
+            other => other,
+        }
+    }
+
+    /// `params` with this bridge's level as the request's `param_check`, for an app that checks it.
+    fn at_level(&self, mut params: Value) -> Value {
+        if let Some(o) = params.as_object_mut() {
+            o.insert("param_check".into(), json!(self.param_check.name()));
+        }
+        params
+    }
+
+    /// `engine.execute` checked at this bridge's level. An app that checks a request's level is
+    /// sent it, and checks against its own commands (its reply must say so, see `confirmed`).
+    /// For an older one the check is made here:
+    /// `strict` refuses a call that breaks its command's contract without sending it, and `warn`
+    /// sends it and adds the issues to the app's reply.
+    fn execute_checked(&mut self, params: Value) -> Result<Value, String> {
+        if self.app_checks() {
+            let params = self.at_level(params);
+            let reply = self.call_once("engine.execute", params, true);
+            return self.confirmed(reply);
+        }
+        let id = params.get("command").and_then(Value::as_str).unwrap_or_default();
+        let issues = contract_issues(id, params.get("params").unwrap_or(&Value::Null));
+        if self.param_check == ParamCheck::Strict
+            && let Some(first) = issues.first()
+        {
+            return Err(solidcraft_engine::params::bad(id, first.as_str()).to_string());
+        }
+        let mut reply = self.call_once("engine.execute", params, true)?;
+        add_param_warnings(&mut reply, issues);
+        Ok(reply)
+    }
+
+    /// `engine.batch` checked at this bridge's level, as `execute_checked` checks a call: by an
+    /// app that checks a request's level, else here, where `strict` refuses a batch with a step
+    /// that breaks its command's contract before anything is sent, as the app would refuse it
+    /// unrun, and `warn` adds each step's issues to its result.
+    fn batch_checked(&mut self, params: Value) -> Result<Value, String> {
+        if self.app_checks() {
+            let params = self.at_level(params);
+            let reply = self.call_once("engine.batch", params, true);
+            return self.confirmed(reply);
+        }
+        let steps = params.get("commands").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        if self.param_check == ParamCheck::Strict {
+            if let Some(refusal) = solidcraft_engine::batch_preflight::contracts(steps) {
+                return Ok(refusal.reply(steps.len()));
+            }
+            return self.call_once("engine.batch", params, true);
+        }
+        let issues: Vec<Vec<String>> = steps
+            .iter()
+            .map(|step| {
+                let id = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str).unwrap_or_default();
+                contract_issues(id, step.get("params").unwrap_or(&Value::Null))
+            })
+            .collect();
+        let mut reply = self.call_once("engine.batch", params, true)?;
+        if let Some(results) = reply.get_mut("results").and_then(Value::as_array_mut) {
+            for (result, issues) in results.iter_mut().zip(issues) {
+                add_param_warnings(result, issues);
+            }
+        }
+        Ok(reply)
     }
 }
 
 impl Backend for Remote {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        if method == "control.pending" {
-            return self.pending_status();
+        match method {
+            "control.pending" => self.pending_status(),
+            "engine.execute" if self.param_check != ParamCheck::Off => self.execute_checked(params),
+            "engine.batch" if self.param_check != ParamCheck::Off => self.batch_checked(params),
+            _ => self.call_once(method, params, true),
         }
-        self.call_once(method, params, true)
+    }
+    fn param_check(&self) -> ParamCheck {
+        self.param_check
     }
     fn has_ui(&self) -> bool {
         true
@@ -557,5 +746,87 @@ impl Backend for Headless {
     }
     fn in_process(&self) -> bool {
         true
+    }
+    fn param_check(&self) -> ParamCheck {
+        self.session.param_check
+    }
+}
+
+/// `solidcraft-cli mcp` with no `--connect`: a headless session while no app runs, which gives
+/// way to the app the moment one is found, as long as the session has no work of its own yet.
+/// Once it has, it stays headless (the work is not carried over) and every tool result says so.
+pub struct Auto {
+    headless: Option<Headless>,
+    remote: Option<Remote>,
+    /// The port of the running app, when there is one.
+    discover: Box<dyn FnMut() -> Option<u16>>,
+    token: Option<String>,
+}
+
+impl Auto {
+    pub fn new(headless: Headless, discover: Box<dyn FnMut() -> Option<u16>>, token: Option<&str>) -> Self {
+        Auto { headless: Some(headless), remote: None, discover, token: token.map(str::to_owned) }
+    }
+
+    /// Switch to the app when the session is still empty and one is running.
+    fn look_for_app(&mut self) {
+        let empty = self.headless.as_ref().is_some_and(|h| h.session.doc.features.is_empty());
+        if !empty {
+            return;
+        }
+        if let Some(port) = (self.discover)() {
+            eprintln!("solidcraft mcp: the SolidCraft app is running now; bridged to 127.0.0.1:{port}");
+            let level = self.param_check();
+            self.remote = Some(Remote::new(&format!("127.0.0.1:{port}"), self.token.as_deref()).with_param_check(level));
+            self.headless = None;
+        }
+    }
+}
+
+impl Backend for Auto {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        if self.remote.is_none() {
+            self.look_for_app();
+        }
+        match (&mut self.remote, &mut self.headless) {
+            (Some(r), _) => r.call(method, params),
+            (None, Some(h)) => h.call(method, params),
+            (None, None) => Err("no session".into()),
+        }
+    }
+    fn has_ui(&self) -> bool {
+        self.remote.is_some()
+    }
+    fn describe(&self) -> String {
+        match (&self.remote, &self.headless) {
+            (Some(r), _) => r.describe(),
+            (None, Some(h)) => format!(
+                "{}, because the SolidCraft app was not running when this server started; if it starts before any design work \
+                 is done here, the next call is bridged to it",
+                h.describe()
+            ),
+            (None, None) => String::new(),
+        }
+    }
+    fn design_path(&self) -> Option<String> {
+        self.headless.as_ref().and_then(Headless::design_path)
+    }
+    fn in_process(&self) -> bool {
+        self.remote.is_none()
+    }
+    fn param_check(&self) -> ParamCheck {
+        match (&self.remote, &self.headless) {
+            (Some(r), _) => r.param_check(),
+            (None, Some(h)) => h.param_check(),
+            (None, None) => ParamCheck::Off,
+        }
+    }
+    fn notice(&self) -> Option<String> {
+        self.headless.as_ref().map(|_| {
+            "Note: this is a headless session because the SolidCraft app was not found; the user cannot see this work. \
+             Ask them to start SolidCraft. While this session has no features, the next call connects to the app; once it \
+             has work, it stays here."
+                .to_owned()
+        })
     }
 }

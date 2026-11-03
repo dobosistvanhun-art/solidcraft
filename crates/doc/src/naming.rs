@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use solidcraft_geom::{Aabb3, Mesh, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Aabb3, Mesh, Vec2, Vec3};
 
 use crate::history_names::Names;
 use crate::lineage::Lineage;
@@ -163,6 +163,10 @@ const MAX_DEPTH: usize = 400;
 /// Up to this many sample points per face.
 const SAMPLES: usize = 9;
 
+/// Up to this many sample points per face where a sheet's panel kept in place names the face it is
+/// part of (see [`geometric_from`]).
+const PANEL_SAMPLES: usize = 256;
+
 /// Unit normals of each face's triangles.
 fn normals(m: &Mesh, nf: usize) -> Vec<Vec<Vec3>> {
     let mut per: Vec<Vec<Vec3>> = vec![Vec::new(); nf];
@@ -178,6 +182,11 @@ fn normals(m: &Mesh, nf: usize) -> Vec<Vec<Vec3>> {
 
 /// Triangle centroids spread over each face: face → points.
 fn samples(m: &Mesh, nf: usize) -> Vec<Vec<Vec3>> {
+    samples_up_to(m, nf, SAMPLES)
+}
+
+/// [`samples`] with up to `most` points per face.
+fn samples_up_to(m: &Mesh, nf: usize, most: usize) -> Vec<Vec<Vec3>> {
     let mut per: Vec<Vec<Vec3>> = vec![Vec::new(); nf];
     for (t, f) in m.triangles.iter().zip(&m.tri_face) {
         if let (Some(v), Some([a, b, c])) = (per.get_mut(*f as usize), m.tri(t)) {
@@ -186,11 +195,11 @@ fn samples(m: &Mesh, nf: usize) -> Vec<Vec<Vec3>> {
     }
     per.into_iter()
         .map(|v| {
-            if v.len() <= SAMPLES {
+            if v.len() <= most {
                 return v;
             }
-            let step = v.len() as f64 / SAMPLES as f64;
-            (0..SAMPLES).filter_map(|i| v.get((i as f64 * step) as usize).copied()).collect()
+            let step = v.len() as f64 / most as f64;
+            (0..most).filter_map(|i| v.get((i as f64 * step) as usize).copied()).collect()
         })
         .collect()
 }
@@ -297,9 +306,61 @@ pub(crate) fn warm_names<'a>(bodies: impl Iterator<Item = &'a ModelBody>) {
     }
 }
 
+/// Bodies whose names are worked out one from the other, oldest first, at most this many apart
+/// (see [`warm_chain`]).
+const WARM_STEP: usize = 16;
+
+/// Up to this many earlier versions of a body are walked to name it from the oldest up.
+const MAX_CHAIN: usize = 100_000;
+
+/// The body `b`'s names are worked out from first: the body it is a moved copy of, else the
+/// body of its name before the feature that made it (`None`: none, or past [`MAX_DEPTH`]).
+fn predecessor(b: &ModelBody) -> Option<&ModelBody> {
+    if let Some(source) = &b.names.copy_of {
+        return Some(source);
+    }
+    let o = b.names.origin.as_ref().filter(|o| o.depth < MAX_DEPTH)?;
+    o.before.body(&b.name)
+}
+
+/// Work out the names of the earlier versions of `b` that are not known yet, oldest first and
+/// every [`WARM_STEP`]th, so that naming `b` never recurses through more than that many of them.
+/// A body's names are found from the names of the body it was made from, which are found the
+/// same way: a body moved or changed by a few hundred features in a row whose names nothing
+/// asked for overflowed the window thread's stack the first time something did (a fillet after
+/// them evaluated again when an earlier feature is reordered or moved: #7587, #7926). `ready` says whether a
+/// body's names are known, `name` works them out. The names are the same either way.
+fn warm_chain(b: &ModelBody, ready: fn(&ModelBody) -> bool, name: fn(&ModelBody)) {
+    let mut chain: Vec<&ModelBody> = Vec::new();
+    let mut at = b;
+    while chain.len() < MAX_CHAIN
+        && let Some(p) = predecessor(at)
+        && !ready(p)
+    {
+        chain.push(p);
+        at = p;
+    }
+    if chain.len() <= WARM_STEP {
+        return;
+    }
+    for p in chain.iter().rev().step_by(WARM_STEP) {
+        name(p);
+    }
+}
+
 /// A body's names, with what finding them again needs: from the history of the feature that
 /// made it where it reports one, else from geometry (unverified).
 pub(crate) fn names(b: &ModelBody) -> Arc<Names> {
+    if let Some(known) = b.names.names.get() {
+        return known.clone();
+    }
+    warm_chain(
+        b,
+        |x| x.names.names.get().is_some(),
+        |x| {
+            let _ = names(x);
+        },
+    );
     // A moved copy has its source's names (the source's cell keeps them for both).
     if let Some(source) = &b.names.copy_of {
         return b.names.names.get_or_init(|| names(source)).clone();
@@ -324,6 +385,16 @@ pub(crate) fn names(b: &ModelBody) -> Arc<Names> {
 /// as those builds gave them, pieces of a split face numbered along the longest axis of their
 /// spread (`#1`, `#2`, …).
 pub(crate) fn legacy_face_names(b: &ModelBody) -> Arc<Vec<String>> {
+    if let Some(known) = b.names.legacy.get() {
+        return known.clone();
+    }
+    warm_chain(
+        b,
+        |x| x.names.legacy.get().is_some(),
+        |x| {
+            let _ = legacy_face_names(x);
+        },
+    );
     if let Some(source) = &b.names.copy_of {
         return legacy_face_names(source);
     }
@@ -393,6 +464,7 @@ fn geometric_from(b: &ModelBody, o: &NamingOrigin, nf: usize, names_of: fn(&Mode
             | FeatureKind::Cylinder { operation: crate::Operation::NewBody, .. }
             | FeatureKind::Sphere { operation: crate::Operation::NewBody, .. }
             | FeatureKind::Torus { operation: crate::Operation::NewBody, .. }
+            | FeatureKind::Cone { operation: crate::Operation::NewBody, .. }
             | FeatureKind::Extrude { operation: crate::Operation::NewBody, .. }
             | FeatureKind::Revolve { operation: crate::Operation::NewBody, .. }
     );
@@ -442,17 +514,45 @@ fn geometric_from(b: &ModelBody, o: &NamingOrigin, nf: usize, names_of: fn(&Mode
         inputs.iter().find(|(x, _, _)| x.name == b.name),
     ) {
         let input = std::slice::from_ref(input);
-        for (name, ps) in names.iter_mut().zip(&pts) {
+        let mut dense: Option<Vec<Vec<Vec3>>> = None;
+        for (fi, (name, ps)) in names.iter_mut().zip(&pts).enumerate() {
             if name.is_some() {
                 continue;
             }
-            let back: Option<Vec<Vec3>> = ps.iter().map(|p| after.point_before(before, *p)).collect();
-            if let Some(back) = back.filter(|b| !b.is_empty()) {
+            // The panel the feature kept in place (the base an unfold lays the flanges out beside)
+            // lies on its own face before, and that face names the whole face it is part of now:
+            // a flat face spans that panel, the panels laid out beside it and the bend strips
+            // between them, whatever share of it they take. The few sample points above may all
+            // miss it (a bend strip is many small triangles), so the face is looked at closer.
+            let dense = dense.get_or_insert_with(|| samples_up_to(&m, nf, PANEL_SAMPLES));
+            if let Some(kept) = dense.get(fi).and_then(|ps| plurality(ps, input, tol)) {
+                *name = Some(kept);
+                continue;
+            }
+            // A point on a bend lies on no panel and has no place before; the face's other points
+            // do. At least half of them must, so a face that is mostly bend is not named from a
+            // few points.
+            let back: Vec<Vec3> = ps.iter().filter_map(|p| after.point_before(before, *p)).collect();
+            if !back.is_empty() && back.len() * 2 >= ps.len() {
                 *name = vote(&back, input, tol, None);
             }
         }
     }
+    // A feature that built a tool and reported no history. Two meshes of one curved face are only
+    // as close as their chord tolerances, which follow the body's size: a tool that makes the body
+    // bigger divides its round walls differently, and those walls miss their own faces at `tol`.
+    // Named by role they would become faces of this feature, nowhere near what it built.
+    if matches!(o.feature.kind, FeatureKind::Extrude { .. } | FeatureKind::Revolve { .. } | FeatureKind::Sweep { .. } | FeatureKind::Loft { .. }) {
+        let chord = b.display_tol() + inputs.iter().map(|(x, _, _)| x.display_tol()).fold(0.0, f64::max);
+        for (fi, name) in names.iter_mut().enumerate().filter(|(_, name)| name.is_none()) {
+            let curved = ns.get(fi).is_some_and(|n| n.windows(2).any(|w| w[0].cross(w[1]).len() > 1e-6));
+            if curved && let Some(ps) = pts.get(fi) {
+                *name = vote(ps, &inputs, chord, None);
+            }
+        }
+    }
     let empty = Vec::new();
+    let curves = std::cell::OnceCell::new();
     let names: Vec<String> = names
         .into_iter()
         .enumerate()
@@ -465,7 +565,7 @@ fn geometric_from(b: &ModelBody, o: &NamingOrigin, nf: usize, names_of: fn(&Mode
                 {
                     return format!("F{fid}:inner:{}", strip_piece(&n));
                 }
-                role_name(&o.feature, &o.before, ps, nn, fi, fid)
+                role_name(&o.feature, &o.before, ps, nn, fi, fid, &curves)
             })
         })
         .collect();
@@ -554,6 +654,28 @@ fn vote(ps: &[Vec3], inputs: &[(&ModelBody, FaceIndex, Arc<Vec<String>>)], tol: 
     votes.first().filter(|(_, n)| *n * 2 >= ps.len().max(1) && votes.get(1).is_none_or(|(_, other)| n > other)).map(|(n, _)| n.clone())
 }
 
+/// The input face the most of `ps` lie on (pieces counted as their face), if at least two and a
+/// sixteenth of them lie on one: the face a sheet's unmoved panel was part of.
+fn plurality(ps: &[Vec3], inputs: &[(&ModelBody, FaceIndex, Arc<Vec<String>>)], tol: f64) -> Option<String> {
+    let mut votes: Vec<(String, usize)> = Vec::new();
+    for p in ps {
+        for (_, idx, nm) in inputs {
+            if let Some(f) = idx.face_at(*p, tol)
+                && let Some(n) = nm.get(f)
+            {
+                let n = strip_piece(n);
+                match votes.iter_mut().find(|(v, _)| v == n) {
+                    Some(v) => v.1 += 1,
+                    None => votes.push((n.to_string(), 1)),
+                }
+                break;
+            }
+        }
+    }
+    votes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    votes.first().filter(|(_, n)| *n >= 2 && *n * 16 >= ps.len()).map(|(n, _)| n.clone())
+}
+
 /// A face name without its piece qualifiers: the face it is a piece of (`F2:top` for
 /// `F2:top#[F4:side:l1]`, for pieces of pieces, and for the numbered pieces of older designs).
 pub fn strip_piece(n: &str) -> &str {
@@ -634,7 +756,7 @@ pub(crate) fn face_centres(b: &ModelBody) -> Vec<Vec3> {
 }
 
 /// The name of a face new to `f`.
-fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usize, fid: u64) -> String {
+fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usize, fid: u64, curves: &std::cell::OnceCell<Curves>) -> String {
     let c = ps.iter().fold(Vec3::ZERO, |a, p| a + *p) * (1.0 / ps.len().max(1) as f64);
     match &f.kind {
         FeatureKind::Extrude { sketch, .. } => {
@@ -647,11 +769,16 @@ fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usi
                 return format!("F{fid}:{}", crate::lineage::extrude_cap_role((c - ss.plane.origin).dot(n)));
             }
             let q = ss.plane.to_local(c);
-            nearest_curve(ss, Vec2::new(q.x, q.y)).map(|id| format!("F{fid}:side:{id}")).unwrap_or_else(|| format!("F{fid}:face:{fi}"))
+            curves
+                .get_or_init(|| Curves::of(ss))
+                .nearest(Vec2::new(q.x, q.y))
+                .map(|(_, id)| id)
+                .map(|id| format!("F{fid}:side:{id}"))
+                .unwrap_or_else(|| format!("F{fid}:face:{fi}"))
         }
         FeatureKind::Revolve { sketch, axis, .. } => {
             let Some(ss) = before.sketch(sketch.0) else { return format!("F{fid}:face:{fi}") };
-            let Ok((o2, d2)) = crate::eval::revolve_axis(ss, axis, &|name| crate::eval::construction_axis_in(None, before, name, 0)) else {
+            let Ok((o2, d2)) = crate::eval::revolve_axis(ss, axis, before, &|name| crate::eval::construction_axis_in(None, before, name, 0)) else {
                 return format!("F{fid}:face:{fi}");
             };
             let (o, d) = (ss.plane.to_world(o2), (ss.plane.to_world(o2 + d2) - ss.plane.to_world(o2)).normalized().unwrap_or(Vec3::Z));
@@ -671,7 +798,7 @@ fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usi
                 .filter_map(|u| {
                     let w = ss.plane.to_local(o + d * t + *u * r);
                     let q2 = Vec2::new(w.x, w.y);
-                    nearest_curve_dist(ss, q2)
+                    curves.get_or_init(|| Curves::of(ss)).nearest(q2)
                 })
                 .min_by(|a, b| a.0.total_cmp(&b.0));
             best.map(|(_, id)| format!("F{fid}:side:{id}")).unwrap_or_else(|| format!("F{fid}:face:{fi}"))
@@ -695,7 +822,12 @@ fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usi
             // A side: the profile curve under its sample nearest the start.
             let Some(p0) = ps.iter().min_by(|a, b| h(a).abs().total_cmp(&h(b).abs())) else { return format!("F{fid}:face:{fi}") };
             let q = ss.plane.to_local(*p0);
-            nearest_curve(ss, Vec2::new(q.x, q.y)).map(|id| format!("F{fid}:side:{id}")).unwrap_or_else(|| format!("F{fid}:face:{fi}"))
+            curves
+                .get_or_init(|| Curves::of(ss))
+                .nearest(Vec2::new(q.x, q.y))
+                .map(|(_, id)| id)
+                .map(|id| format!("F{fid}:side:{id}"))
+                .unwrap_or_else(|| format!("F{fid}:face:{fi}"))
         }
         FeatureKind::Box { .. } => {
             let n = ns.first().copied().unwrap_or(Vec3::Z);
@@ -734,42 +866,51 @@ fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usi
     }
 }
 
-/// The sketch curve (id) nearest a point in the sketch plane, and how near.
-fn nearest_curve_dist(ss: &crate::SolvedSketch, q: Vec2) -> Option<(f64, String)> {
-    let mut best: Option<(f64, String)> = None;
-    for (ci, c) in ss.sketch.curves.iter().enumerate() {
-        if c.construction {
-            continue;
-        }
-        for s in ss.sketch.segs(ci) {
-            let d = seg_dist(&s, q);
-            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
-                best = Some((d, c.id.clone()));
-            }
-        }
-    }
-    best
+/// A sketch's (non-construction) curves as the polylines a face's name is looked up on, each with
+/// its box: a face swept from one of many curves (a sheet of holes) is named without measuring
+/// its distance to every curve.
+struct Curves {
+    segs: Vec<(String, Vec<Vec2>, (Vec2, Vec2))>,
 }
 
-/// The sketch curve (id) nearest a point in the sketch plane.
-fn nearest_curve(ss: &crate::SolvedSketch, q: Vec2) -> Option<String> {
-    let mut best: Option<(f64, String)> = None;
-    for (ci, c) in ss.sketch.curves.iter().enumerate() {
-        if c.construction {
-            continue;
-        }
-        for s in ss.sketch.segs(ci) {
-            let d = seg_dist(&s, q);
-            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
-                best = Some((d, c.id.clone()));
+impl Curves {
+    fn of(ss: &crate::SolvedSketch) -> Self {
+        let mut segs = Vec::new();
+        for (ci, c) in ss.sketch.curves.iter().enumerate() {
+            if c.construction {
+                continue;
+            }
+            for s in ss.sketch.segs(ci) {
+                let pts = s.polyline(1e-3);
+                let Some(&first) = pts.first() else { continue };
+                let b =
+                    pts.iter().fold((first, first), |(lo, hi), p| (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))));
+                segs.push((c.id.clone(), pts, b));
             }
         }
+        Self { segs }
     }
-    best.map(|(_, id)| id)
+
+    /// The curve (id) nearest `q`, and how near: the first of the nearest in the sketch's order.
+    /// A curve whose box is farther than the nearest so far (by more than rounding) can't be nearer.
+    fn nearest(&self, q: Vec2) -> Option<(f64, String)> {
+        let mut best: Option<(f64, &str)> = None;
+        for (id, pts, b) in &self.segs {
+            let (lo, hi) = b;
+            let out = Vec2::new((lo.x - q.x).max(q.x - hi.x).max(0.0), (lo.y - q.y).max(q.y - hi.y).max(0.0));
+            if best.is_some_and(|(bd, _)| out.len() > bd + 1e-9 * (1.0 + q.len())) {
+                continue;
+            }
+            let d = polyline_dist(pts, q);
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, id));
+            }
+        }
+        best.map(|(d, id)| (d, id.to_string()))
+    }
 }
 
-fn seg_dist(s: &Seg2, q: Vec2) -> f64 {
-    let pts = s.polyline(1e-3);
+fn polyline_dist(pts: &[Vec2], q: Vec2) -> f64 {
     pts.windows(2)
         .map(|w| {
             let (a, b) = (w[0], w[1]);
@@ -1209,5 +1350,55 @@ mod tests {
         first.join().unwrap();
         second.join().unwrap();
         assert!(weak.iter().all(|node| node.upgrade().is_none()));
+    }
+
+    /// A face is named after the nearest sketch curve; skipping curves by their boxes finds the
+    /// same curve as measuring every one, the first of equally near ones included.
+    #[test]
+    fn the_curve_index_finds_the_curve_a_full_scan_finds() {
+        use solidcraft_sketch::{Sketch, find_profiles, solve};
+        let mut sketch = Sketch::new();
+        for i in 0..6 {
+            for j in 0..4 {
+                sketch.add_circle(Vec2::new(10. * f64::from(i), 10. * f64::from(j)), 2.5, None, Some(&format!("c{i}_{j}"))).unwrap();
+            }
+        }
+        sketch.add_line(Vec2::new(-5., -5.), Vec2::new(55., -5.), None, None, Some("bottom")).unwrap();
+        sketch.add_arc(Vec2::new(25., 15.), Vec2::new(45., 15.), Vec2::new(5., 15.), [None; 3], Some("arc")).unwrap();
+        let hidden = sketch.add_line(Vec2::new(-5., 12.), Vec2::new(60., 12.), None, None, Some("guide")).unwrap();
+        sketch.curves[hidden].construction = true;
+        let report = solve(&mut sketch);
+        let profiles = find_profiles(&sketch);
+        let ss = crate::SolvedSketch {
+            feature: 1,
+            name: "S".into(),
+            plane: solidcraft_geom::Plane::XY,
+            sketch,
+            report,
+            profiles,
+            ends: Default::default(),
+        };
+        let full_scan = |q: Vec2| {
+            let mut best: Option<(f64, String)> = None;
+            for (ci, c) in ss.sketch.curves.iter().enumerate().filter(|(_, c)| !c.construction) {
+                for s in ss.sketch.segs(ci) {
+                    let d = polyline_dist(&s.polyline(1e-3), q);
+                    if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                        best = Some((d, c.id.clone()));
+                    }
+                }
+            }
+            best
+        };
+        let curves = Curves::of(&ss);
+        // A grid of points over and around the sketch; x = 5, 15, ... lie midway between circles.
+        for x in -16..=124 {
+            for y in -16..=84 {
+                let q = Vec2::new(f64::from(x) * 0.5, f64::from(y) * 0.5);
+                assert_eq!(curves.nearest(q), full_scan(q), "at {q:?}");
+            }
+        }
+        assert_eq!(curves.nearest(Vec2::new(5., 0.)).map(|(_, id)| id).as_deref(), Some("c0_0"), "a tie keeps the first curve");
+        assert!(curves.segs.iter().all(|(id, ..)| id != "guide"), "construction curves name nothing");
     }
 }

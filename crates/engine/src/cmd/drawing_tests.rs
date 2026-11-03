@@ -216,9 +216,9 @@ fn hostile_drawing_parameters_are_refused() {
     }
     // A damaged drawing is drawn as a sheet with an error, never a crash.
     if let Some(d) = s.doc_mut().drawings.first_mut() {
-        d.views.push(solidcraft_doc::drawing::DrawView {
+        d.views.push(solidcraft_doc::model_drawing::DrawView {
             id: 7,
-            kind: solidcraft_doc::drawing::ViewKind::Detail { parent: 7, center: [f64::NAN, 0.0], radius: 1.0 },
+            kind: solidcraft_doc::model_drawing::ViewKind::Detail { parent: 7, center: [f64::NAN, 0.0], radius: 1.0 },
             at: [0.0, 0.0],
             scale: None,
             label: "Z".into(),
@@ -430,7 +430,7 @@ fn dimensions_are_put_where_asked_and_pick_only_what_is_there() {
     // 5 mm off a corner is in the air.
     assert!(s.execute("drawing.dimension", &json!({"drawing": id, "view": top, "kind": "auto", "points": [[145, 120], [250, 125]]})).is_err());
     let kind = |s: &Session| s.doc.drawings[0].dims.last().map(|d| d.kind);
-    use solidcraft_doc::drawing::DimKind;
+    use solidcraft_doc::model_drawing::DimKind;
     // Diagonal corners: above them horizontal, beside them vertical, off a corner aligned.
     for (place, want, text) in
         [([200.0, 190.0], DimKind::Horizontal, "100"), ([265.0, 150.0], DimKind::Vertical, "50"), ([270.0, 190.0], DimKind::Aligned, "111,8")]

@@ -89,7 +89,7 @@ pub(crate) fn paint_orbit(p: &Painter, rect: Rect, pivot: usize) {
         p.line_segment([centre, c.at(x - 11.0, y + 5.5)], grey);
     }
     if pivot == 1 {
-        // A restrained screen-space crosshair makes "View centre" distinct from origin.
+        // A restrained screen-space crosshair makes "View center" distinct from origin.
         let guide = Stroke::new(c.width(1.0), t.form_dim.gamma_multiply(0.7));
         for (a, b) in [((x - 9.0, y), (x - 5.0, y)), ((x + 5.0, y), (x + 9.0, y)), ((x, y - 9.0), (x, y - 5.0))] {
             p.line_segment([c.at(a.0, a.1), c.at(b.0, b.1)], guide);
@@ -121,6 +121,17 @@ pub(crate) fn paint_orbit(p: &Painter, rect: Rect, pivot: usize) {
     }
 }
 
+/// Axis tips of the orientation figure on its 120 x 100 canvas, as `(x, y, triad index, label)`,
+/// drawn from the centre `(60, 48)`. Z up has X toward the viewer on the right and Y away on the
+/// right, as the view's axis gizmo draws them (#5680).
+fn orientation_axes(y_up: bool) -> [(f32, f32, usize, &'static str); 3] {
+    if y_up {
+        [(94.0, 65.0, 0, "X"), (60.0, 13.0, 1, "Y"), (26.0, 65.0, 2, "Z")]
+    } else {
+        [(94.0, 65.0, 0, "X"), (94.0, 31.0, 1, "Y"), (60.0, 13.0, 2, "Z")]
+    }
+}
+
 /// Orientation uses the same 30-degree ground plane as the model cards, with unmistakable
 /// axis arrows and readable labels rather than an unrelated generic cube.
 pub(crate) fn paint_orientation(p: &Painter, rect: Rect, y_up: bool) {
@@ -131,13 +142,8 @@ pub(crate) fn paint_orientation(p: &Painter, rect: Rect, y_up: bool) {
     let ground = [c.at(60.0, 32.0), c.at(97.0, 50.5), c.at(60.0, 69.0), c.at(23.0, 50.5)];
     face(&p, ground, t.form_dim.gamma_multiply(0.035));
     p.add(Shape::closed_line(ground.to_vec(), Stroke::new(c.width(0.8), t.form_dim.gamma_multiply(0.20))));
-    let axes = if y_up {
-        [(94.0, 65.0, 0, "X"), (60.0, 13.0, 1, "Y"), (26.0, 65.0, 2, "Z")]
-    } else {
-        [(94.0, 65.0, 0, "X"), (26.0, 65.0, 1, "Y"), (60.0, 13.0, 2, "Z")]
-    };
-    for (x, y, index, label) in axes {
-        let colour = t.triad.get(index).copied().unwrap_or(t.form_ink);
+    for (x, y, index, label) in orientation_axes(y_up) {
+        let colour = t.axes().get(index).copied().unwrap_or(t.form_ink);
         let end = c.at(x, y);
         // A halo keeps every shaft distinct from the subtle ground and the other axes.
         p.line_segment([centre, end], Stroke::new(c.width(4.2), t.viewport_top));
@@ -237,11 +243,13 @@ pub(crate) fn paint_layout(ui: &mut egui::Ui, state: super::preferences::LayoutP
     crate::icons::glyphs::brand_mark_silhouette(&p, object_centre, c.width(22.0), quiet);
     p.circle_filled(c.at(110.0 - inset, top + 7.0), c.width(3.5), quiet);
     let history = match state.history {
-        1 => panel(inset, top, 10.0, bottom - top, "", t.selected_bg),
-        2 => panel(bx, top + browser_height + gap, bw, bottom - top - browser_height - gap, "History", t.selected_bg),
-        _ => panel(inset, bottom - 10.0, 120.0 - inset * 2.0, 10.0, "History", t.selected_bg),
+        1 => Some(panel(inset, top, 10.0, bottom - top, "", t.selected_bg)),
+        2 => Some(panel(bx, top + browser_height + gap, bw, bottom - top - browser_height - gap, "History", t.selected_bg)),
+        // In the browser: no history panel of its own.
+        3 => None,
+        _ => Some(panel(inset, bottom - 10.0, 120.0 - inset * 2.0, 10.0, "History", t.selected_bg)),
     };
-    if state.history == 1 {
+    if let Some(history) = history.filter(|_| state.history == 1) {
         // A single vertical mark reads as the narrow icon-only history rail.
         p.line_segment(
             [history.center_top() + vec2(0.0, t.space_8), history.center_bottom() - vec2(0.0, t.space_8)],
@@ -250,4 +258,144 @@ pub(crate) fn paint_layout(ui: &mut egui::Ui, state: super::preferences::LayoutP
     }
     crate::scenario::publish_rect("prefs:layout_preview", outer);
     super::text(ui, crate::i18n::tr("prefs.preview_choices"), super::Text::Note("preview"));
+}
+
+#[allow(unused_imports, reason = "painted by the Preferences pages of #9875 to #9883")]
+pub(crate) use super::preferences_figure_ops::ThemeSample;
+use super::preferences_figure_ops::paint;
+
+#[allow(dead_code, reason = "painted by the Preferences pages of #9875 to #9883")]
+/// A theme card's miniature application window, drawn with the theme's own `sample` colours.
+pub(crate) fn paint_theme_thumbnail(p: &Painter, rect: Rect, sample: &ThemeSample) {
+    paint(p, rect, &super::preferences_figure_data::THEME_THUMBNAIL, Some(sample), None);
+}
+
+#[allow(dead_code, reason = "painted by the Preferences pages of #9875 to #9883")]
+/// The "System" theme card: `light` with `dark` over a slanted band of it (the board clips the dark
+/// half to the polygon 56 %,0 / 100 %,0 / 100 %,100 % / 40 %,100 %).
+pub(crate) fn paint_theme_system(p: &Painter, rect: Rect, light: &ThemeSample, dark: &ThemeSample) {
+    const BAND: [[f32; 2]; 4] = [[69.44, 0.0], [124.0, 0.0], [124.0, 76.0], [49.6, 76.0]];
+    let figure = &super::preferences_figure_data::THEME_THUMBNAIL;
+    paint(p, rect, figure, Some(light), None);
+    paint(p, rect, figure, Some(dark), Some(&BAND));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::orientation_axes;
+
+    /// Both orientation figures draw right-handed axes (#5680): seen from above, the turn from X
+    /// to Y and from Y to Z is counter-clockwise on screen (negative cross product, as the canvas y
+    /// axis points down), the way the view's axis gizmo draws them. (Z to X is not tested: with Z
+    /// up, Y points away from the viewer and that turn is clockwise.)
+    #[test]
+    fn orientation_figures_are_right_handed() {
+        for y_up in [false, true] {
+            let axes = orientation_axes(y_up);
+            let v: Vec<(f32, f32)> = axes.iter().map(|(x, y, _, _)| (x - 60.0, y - 48.0)).collect();
+            assert_eq!(axes.map(|a| a.3), ["X", "Y", "Z"]);
+            for i in 0..2 {
+                let (a, b) = (v[i], v[i + 1]);
+                let cross = a.0 * b.1 - a.1 * b.0;
+                assert!(cross < 0.0, "y_up {y_up}: {} to {} turns clockwise (mirrored figure)", axes[i].3, axes[i + 1].3);
+            }
+        }
+    }
+
+    use super::{ThemeSample, paint_theme_system, paint_theme_thumbnail};
+    use crate::theme::Tokens;
+    use crate::ui_kit::preferences_figure_data::FIGURES;
+    use egui::{Pos2, Rect, vec2};
+
+    /// Shapes a figure paints into `rect` on a fresh frame, in the given theme.
+    fn shapes(rect: Rect, paint: impl Fn(&egui::Painter, Rect)) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = crate::fonts::test_context();
+        let mut output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), ..Default::default() }, |ui| {
+                paint(ui.painter(), rect);
+            });
+        output.textures_delta.clear();
+        output.shapes
+    }
+
+    fn rects() -> Vec<Rect> {
+        let nan = f32::NAN;
+        vec![
+            Rect::from_min_size(Pos2::ZERO, vec2(0.0, 0.0)),
+            Rect::from_min_size(Pos2::ZERO, vec2(0.2, 0.2)),
+            Rect::from_min_size(Pos2::new(5.0, 5.0), vec2(1.0, 1.0)),
+            Rect::from_min_size(Pos2::new(5.0, 5.0), vec2(3.0, 200.0)),
+            Rect::from_min_size(Pos2::new(5.0, 5.0), vec2(120.0, 64.0)),
+            Rect::from_min_size(Pos2::new(-50.0, -50.0), vec2(300.0, 300.0)),
+            Rect::from_min_size(Pos2::ZERO, vec2(1.0e5, 1.0e5)),
+            Rect::from_min_size(Pos2::ZERO, vec2(f32::INFINITY, 10.0)),
+            Rect::from_min_size(Pos2::new(nan, 0.0), vec2(10.0, 10.0)),
+            Rect::from_min_size(Pos2::ZERO, vec2(-40.0, 30.0)),
+            Rect::from_min_size(Pos2::ZERO, vec2(nan, nan)),
+        ]
+    }
+
+    /// Every figure, in both themes, paints at size zero, tiny, normal, huge and non-finite without
+    /// panicking, and at a normal size stays inside its rectangle with a bounded number of shapes.
+    #[test]
+    fn every_preference_figure_paints_safely_at_any_size_in_both_themes() {
+        let previous = crate::theme::is_dark();
+        for dark in [false, true] {
+            crate::theme::set_dark(dark);
+            assert!(!FIGURES.is_empty());
+            for (name, size, paint) in FIGURES {
+                for rect in rects() {
+                    let _ = shapes(rect, paint);
+                }
+                let rect = Rect::from_min_size(Pos2::new(20.0, 10.0), vec2(size[0] * 2.0, size[1] * 2.0));
+                let painted = shapes(rect, paint);
+                assert!(!painted.is_empty() && painted.len() < 700, "{name}: {} shapes", painted.len());
+                for shape in &painted {
+                    let bounds = shape.shape.visual_bounding_rect().intersect(shape.clip_rect);
+                    if bounds.is_positive() {
+                        assert!(rect.expand(1.0).contains_rect(bounds), "{name}: {bounds:?} outside {rect:?}");
+                    }
+                }
+            }
+        }
+        crate::theme::set_dark(previous);
+    }
+
+    /// The figures read the theme: the same figure paints different colours in light and dark.
+    #[test]
+    fn preference_figures_follow_the_theme() {
+        let previous = crate::theme::is_dark();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(120.0, 64.0));
+        let colours = |dark: bool| {
+            crate::theme::set_dark(dark);
+            let mut all = Vec::new();
+            for shape in shapes(rect, super::super::preferences_figure_data::paint_orbit_origin) {
+                if let egui::Shape::Rect(r) = shape.shape {
+                    all.push(r.fill);
+                }
+            }
+            all
+        };
+        let (light, dark) = (colours(false), colours(true));
+        assert!(!light.is_empty() && light != dark);
+        crate::theme::set_dark(previous);
+    }
+
+    #[test]
+    fn theme_thumbnails_paint_with_the_sample_colours_and_a_slanted_system_band() {
+        let (light, dark) = (ThemeSample::from_tokens(&Tokens::light()), ThemeSample::from_tokens(&Tokens::dark()));
+        assert_ne!(light, dark);
+        let rect = Rect::from_min_size(Pos2::new(4.0, 4.0), vec2(124.0, 76.0));
+        for rect in rects().into_iter().chain([rect]) {
+            let _ = shapes(rect, |p, r| paint_theme_thumbnail(p, r, &light));
+            let _ = shapes(rect, |p, r| paint_theme_system(p, r, &light, &dark));
+        }
+        let single = shapes(rect, |p, r| paint_theme_thumbnail(p, r, &light)).len();
+        let system = shapes(rect, |p, r| paint_theme_system(p, r, &light, &dark)).len();
+        assert!(system > single, "the dark band adds shapes over the light card");
+        for shape in shapes(rect, |p, r| paint_theme_system(p, r, &light, &dark)) {
+            let bounds = shape.shape.visual_bounding_rect().intersect(shape.clip_rect);
+            assert!(!bounds.is_positive() || rect.expand(1.0).contains_rect(bounds), "{bounds:?}");
+        }
+    }
 }

@@ -1,464 +1,305 @@
-//! Drawings: sheets of 2D views of the model, with a frame, a title block, dimensions and
-//! notes. A drawing saves only what it is made of — the sheet, the views (where they sit, how
-//! they look at the model), the dimensions (which model points they measure) and the notes;
-//! the lines are projected from the current model whenever it is shown or exported, so a
-//! drawing follows every change of the model.
+//! A drawing (#3890): sheets of paper that draw designs saved in their own files. A drawing is a
+//! file of its own, `"format": "solidcraft-drawing/N"`, versioned by the same code as designs
+//! ([`DRAWING`]); format 1 is this record.
 //!
-//! Sheet coordinates are millimetres from the sheet's lower left corner, x to the right and y up.
-//! A view's own coordinates are model millimetres in its projection plane (`u` to the right,
-//! `v` up), centred on the model's bounding box; a view at scale `s` puts the point (u, v) at
-//! `view.at + s·(u, v)` on the sheet.
+//! - **Sources** are the designs it draws: an id and the design file's path, relative to the
+//!   drawing's folder once the drawing is saved, else as given, with `/` between folders (a linked
+//!   design's [`DesignLink`](crate::DesignLink) rule). What a design was when the drawing last saw
+//!   it is not saved here.
+//! - **Sheets**: the paper, a copy of its drawing border, the resolution its pictures are rendered
+//!   at, the component it documents, and whether it is left out of the sheet count or of printing.
+//!   The border is a copy of the profile it was made with, never a name, so a later built-in never
+//!   changes a saved drawing.
+//! - **Units** follow each view's design or are one length unit for the whole drawing. The
+//!   **language** is the content's, a BCP 47 tag chosen when the drawing is made, whatever the
+//!   interface's is. **Properties** follow [`Metadata`]'s rules.
+//!
+//! The rules, which every later kind of record (views, annotations, tables) keeps too:
+//! - Every object has an id of [`crate::ids`]: random, so objects added side by side never take
+//!   the same one, and written as 13 characters of base32. No two objects share an id, and a run
+//!   never gives a removed object's id again ([`Drawing::allocate_id`]).
+//! - Every reference between records is an id and must resolve: a file with one that doesn't is
+//!   damaged and refused, never patched.
+//! - 1 to [`MAX_SHEETS`] sheets and at most [`MAX_SOURCES`] sources; names of 1 to
+//!   [`MAX_NAME_BYTES`] bytes; paths of 1 to [`MAX_PATH_BYTES`] bytes, without NUL.
+//! - Nothing derived is saved, and a drawing always saves as the same bytes: fields in their
+//!   order, maps sorted.
+//! - A later change to the record is one file in `src/drawing/format/pending/` (its README).
+//!
+//! [`Drawing::from_json`] reads a file in this order: at most [`MAX_DRAWING_BYTES`] of text, the
+//! family's format check, every number in range, the upgrade, the typed record, then
+//! [`Drawing::validate`].
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::Vec3;
+use serde_json::Value;
+use solidcraft_geom::drawing_sheet::{self, DrawingBorderProfile};
 
-/// The largest number of drawings, views, dimensions or notes a design may hold (a damaged or
-/// hostile file is refused rather than drawn).
-pub const MAX_ITEMS: usize = 2000;
+use crate::format::DRAWING;
+use crate::ids::{self, IdSource};
+use crate::{DocError, Metadata, Result, expr};
 
-/// ISO 216 sheet sizes (width × height in landscape, mm).
-pub const SHEET_SIZES: &[(&str, f64, f64)] =
-    &[("A4", 297.0, 210.0), ("A3", 420.0, 297.0), ("A2", 594.0, 420.0), ("A1", 841.0, 594.0), ("A0", 1189.0, 841.0)];
+/// The most sheets a drawing may have.
+pub const MAX_SHEETS: usize = 1000;
+/// The most designs a drawing may draw.
+pub const MAX_SOURCES: usize = 64;
+/// The longest name of a drawing or a sheet, in bytes.
+pub const MAX_NAME_BYTES: usize = 256;
+/// The longest path to a design, in bytes.
+pub const MAX_PATH_BYTES: usize = 4096;
+/// The longest language tag: what RFC 5646 asks every reader to take (§4.4.1).
+pub const MAX_LANGUAGE_CHARS: usize = 35;
+/// The largest drawing read, as JSON text.
+pub const MAX_DRAWING_BYTES: usize = 16 << 20;
+/// The resolution a sheet's pictures (its shaded views) are rendered at unless it says, in dots
+/// per inch.
+pub const DEFAULT_DPI: f64 = 300.0;
+/// The lowest resolution a sheet may ask for.
+pub const MIN_DPI: f64 = 25.0;
+/// The highest resolution a sheet may ask for.
+pub const MAX_DPI: f64 = 2400.0;
 
-/// The scales a drawing offers (enlargements, full size, reductions — ISO 5455).
-pub const SCALES: &[&str] = &["10:1", "5:1", "2:1", "1:1", "1:2", "1:2.5", "1:5", "1:10", "1:20", "1:50", "1:100"];
-
-/// A scale such as `1:2` or `2:1` as a factor (sheet mm per model mm).
-pub fn parse_scale(text: &str) -> Option<f64> {
-    let (a, b) = text.trim().split_once(':')?;
-    let (a, b) = (a.trim().replace(',', ".").parse::<f64>().ok()?, b.trim().replace(',', ".").parse::<f64>().ok()?);
-    let s = a / b;
-    (s.is_finite() && (1e-4..=1e3).contains(&s)).then_some(s)
-}
-
-/// How the views of a drawing are laid out around their parent: ISO E (first angle, the European
-/// standard: the view from the left is put to the right) or ISO A (third angle).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Projection {
-    #[default]
-    First,
-    Third,
-}
-
-/// The sheet: size, orientation and the title block's texts.
+/// A drawing: its sheets and the designs they draw.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Sheet {
-    /// A4 … A0.
-    pub size: String,
-    #[serde(default = "yes")]
-    pub landscape: bool,
-}
-
-fn yes() -> bool {
-    true
-}
-
-impl Default for Sheet {
-    fn default() -> Self {
-        Sheet { size: "A3".into(), landscape: true }
-    }
-}
-
-impl Sheet {
-    /// Width and height (mm); an unknown size is A3.
-    pub fn dims(&self) -> (f64, f64) {
-        let (w, h) = SHEET_SIZES.iter().find(|(n, ..)| n.eq_ignore_ascii_case(self.size.trim())).map(|(_, w, h)| (*w, *h)).unwrap_or((420.0, 297.0));
-        if self.landscape { (w, h) } else { (h, w) }
-    }
-}
-
-/// The title block's fields (ISO 7200, the commonly filled ones).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TitleBlock {
-    pub title: String,
-    pub number: String,
-    pub company: String,
-    pub drawn_by: String,
-    pub checked_by: String,
-    pub date: String,
-    /// Empty: the part's physical material.
-    pub material: String,
-    pub revision: String,
-    /// General tolerances (e.g. "ISO 2768-m").
-    pub tolerances: String,
-}
-
-impl TitleBlock {
-    /// The fields by key, in the order the block shows them.
-    pub fn fields_mut(&mut self) -> [(&'static str, &mut String); 9] {
-        [
-            ("title", &mut self.title),
-            ("number", &mut self.number),
-            ("company", &mut self.company),
-            ("drawn_by", &mut self.drawn_by),
-            ("checked_by", &mut self.checked_by),
-            ("date", &mut self.date),
-            ("material", &mut self.material),
-            ("revision", &mut self.revision),
-            ("tolerances", &mut self.tolerances),
-        ]
-    }
-}
-
-/// Where a view looks from.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum ViewKind {
-    /// Looking at the model from a standard direction: front, back, top, bottom, left, right or iso.
-    Base { orientation: String },
-    /// Projected from another view toward one side of it: right, left, above or below (iso: a
-    /// pictorial view of the parent's orientation).
-    Projected { parent: u64, side: String },
-    /// A section of another view along the line `a`–`b` (the parent view's own coordinates),
-    /// looking the way the arrows point (`flip` turns them round).
-    Section {
-        parent: u64,
-        a: [f64; 2],
-        b: [f64; 2],
-        #[serde(default)]
-        flip: bool,
-    },
-    /// An enlarged part of another view: the circle about `center` (parent coordinates) of `radius`.
-    Detail { parent: u64, center: [f64; 2], radius: f64 },
-    /// A sheet metal body's flat pattern, as cut: its outline and cut-outs, with its bend lines
-    /// (chain lines, each with its direction, angle and radius). `body` empty: the last sheet
-    /// metal body.
-    Flat {
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        body: String,
-    },
-}
-
-/// A view on the sheet.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DrawView {
-    pub id: u64,
-    #[serde(flatten)]
-    pub kind: ViewKind,
-    /// Where its centre sits on the sheet (mm).
-    pub at: [f64; 2],
-    /// Its own scale (`2:1`); none: the drawing's (a detail view: twice its parent's).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scale: Option<String>,
-    /// Its name on the sheet: `A` for section A–A, detail B; empty for the main views.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub label: String,
-    /// Draw the hidden edges (dashed).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub hidden: bool,
-    /// A projected or section view put anywhere: not kept in line with its parent, nor taken
-    /// along when the parent moves.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub free: bool,
-}
-
-/// What a dimension measures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DimKind {
-    /// The horizontal distance between two points (in the view).
-    Horizontal,
-    /// The vertical distance.
-    Vertical,
-    /// The true distance, along the line between them.
-    Aligned,
-    /// A circle's or arc's diameter (`a` the centre, `b` a point on it).
-    Diameter,
-    /// Its radius.
-    Radius,
-    /// The angle at `a` from `b` to `c`.
-    Angle,
-}
-
-/// A model point a dimension measures: on a body's vertex or edge, kept by its index so it
-/// follows the model, with the point it had when picked for when the index no longer fits.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DimRef {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body: String,
-    /// The edge (in the body's edge order) the point belongs to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub edge: Option<usize>,
-    /// start | end | center (the circle's centre).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub at: String,
-    /// The point when it was picked (model mm), used when the edge is gone.
-    pub point: Vec3,
-}
-
-impl DimRef {
-    pub fn at_point(p: Vec3) -> DimRef {
-        DimRef { body: String::new(), edge: None, at: String::new(), point: p }
-    }
-}
-
-/// A dimension in a view.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DrawDim {
-    pub id: u64,
-    pub view: u64,
-    pub kind: DimKind,
-    pub refs: Vec<DimRef>,
-    /// How far the dimension line stands off the measured points (sheet mm; signed: the side).
-    #[serde(default)]
-    pub offset: f64,
-    /// Its text in place of the measured value (`<>` stands for the value).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub text: String,
-    /// A tolerance after the value: `±0.1`, `+0.2/-0.1`, or a fit such as `H7`.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub tolerance: String,
-    /// Where a linear dimension meets a circle or arc it measures to: its centre (empty), the
-    /// near side of it (`min`: between the arcs) or the far side (`max`: over them).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub arc: String,
-    /// Where it was put, in its view's own coordinates (model mm about the view's centre, so it
-    /// moves with the view): a linear dimension's line runs through it and its text sits there; a
-    /// diameter's or radius' leader runs out to it; an angle's arc passes through it. None: `offset`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<[f64; 2]>,
-}
-
-/// A note on the sheet.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DrawNote {
-    pub id: u64,
-    pub at: [f64; 2],
-    pub text: String,
-    /// Text height (mm).
-    #[serde(default = "note_height")]
-    pub height: f64,
-}
-
-fn note_height() -> f64 {
-    3.5
-}
-
-/// A drawing: one sheet and what is on it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Drawing {
+    /// `solidcraft-drawing/N`: the format this build writes, whatever the file said.
+    pub format: String,
+    /// The changes of `format` this drawing has while they are pending
+    /// ([`Family::pending_names`](crate::format::Family::pending_names)). Empty, and not saved,
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub format_pending: Vec<String>,
+    pub name: String,
+    /// The designs the drawing draws.
+    pub sources: Vec<Source>,
+    /// The drawing's properties and other tools' data, kept as they are.
+    #[serde(default, skip_serializing_if = "Metadata::is_empty")]
+    pub properties: Metadata,
+    #[serde(default)]
+    pub units: Units,
+    /// The language of the drawing's content, a BCP 47 tag (`en-GB`).
+    pub language: String,
+    /// In order, each behind its own `Arc`, so an undo step shares every sheet it didn't change.
+    pub sheets: Vec<Arc<Sheet>>,
+}
+
+/// A design the drawing draws.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    #[serde(with = "crate::ids")]
+    pub id: u64,
+    /// The design file: relative to the drawing's folder once the drawing is saved, else as given
+    /// (`/` separates folders).
+    pub path: String,
+}
+
+/// The length unit a drawing gives its measurements in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Units {
+    /// Each view's design's own units.
+    #[default]
+    FollowModel,
+    /// One length unit for the whole drawing, by its name in [`expr::UNITS`] (`mm`, `in`).
+    Fixed { unit: String },
+}
+
+/// One sheet of a drawing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sheet {
+    #[serde(with = "crate::ids")]
     pub id: u64,
     pub name: String,
+    /// The paper: its size and the way it lies.
+    pub sheet: drawing_sheet::Sheet,
+    /// A copy of the drawing border's profile (`None`: no drawing border).
+    pub border: Option<DrawingBorderProfile>,
+    /// The resolution its pictures (its shaded views) are rendered at, in dots per inch.
+    #[serde(default = "default_dpi")]
+    pub dpi: f64,
+    /// The component the sheet documents, which its title block reads.
+    pub documents: Option<SheetComponent>,
     #[serde(default)]
-    pub sheet: Sheet,
-    /// The views' scale (`1:2`).
-    #[serde(default = "full_size")]
-    pub scale: String,
-    #[serde(default)]
-    pub projection: Projection,
-    #[serde(default)]
-    pub title: TitleBlock,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub views: Vec<DrawView>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dims: Vec<DrawDim>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub notes: Vec<DrawNote>,
-    /// The height of its dimensions' text (mm; arrowheads in proportion); none: 3.5.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text_height: Option<f64>,
-    /// The bodies drawn: empty for every visible one.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bodies: Vec<String>,
-    #[serde(default)]
-    pub next_id: u64,
+    pub excluded: Excluded,
 }
 
-fn full_size() -> String {
-    "1:1".into()
+/// A component of one of the drawing's designs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetComponent {
+    /// The [`Source`]'s id.
+    #[serde(with = "crate::ids")]
+    pub source: u64,
+    /// The component's id in that design, as the design writes it (0: the design itself).
+    pub component: u64,
+}
+
+/// What a sheet is left out of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Excluded {
+    /// The sheet count ("sheet 2 of 3" on the other sheets).
+    pub count: bool,
+    /// Printing and exporting every sheet.
+    pub print: bool,
+}
+
+fn default_dpi() -> f64 {
+    DEFAULT_DPI
 }
 
 impl Drawing {
-    pub fn new(id: u64, name: &str) -> Drawing {
-        Drawing {
-            id,
+    /// A drawing of no designs yet, named `name` and written in `language`, with one sheet named
+    /// `sheet`: the paper `paper` with a copy of `border`, its id from `id_source`.
+    pub fn new(
+        name: &str,
+        language: &str,
+        sheet: &str,
+        paper: drawing_sheet::Sheet,
+        border: Option<DrawingBorderProfile>,
+        id_source: &mut IdSource,
+    ) -> Result<Drawing> {
+        let id = id_source.next(&BTreeSet::new())?;
+        let first = Sheet { id, name: sheet.into(), sheet: paper, border, dpi: DEFAULT_DPI, documents: None, excluded: Excluded::default() };
+        let drawing = Drawing {
+            format: DRAWING.format_string(DRAWING.current()),
+            format_pending: DRAWING.pending_names(),
             name: name.into(),
-            sheet: Sheet::default(),
-            scale: full_size(),
-            projection: Projection::First,
-            title: TitleBlock::default(),
-            views: Vec::new(),
-            dims: Vec::new(),
-            notes: Vec::new(),
-            text_height: None,
-            bodies: Vec::new(),
-            next_id: 1,
+            sources: Vec::new(),
+            properties: Metadata::default(),
+            units: Units::default(),
+            language: language.into(),
+            sheets: vec![Arc::new(first)],
+        };
+        drawing.validate()?;
+        Ok(drawing)
+    }
+
+    /// Read a drawing file's JSON (any format this build knows; older ones are upgraded). A file
+    /// that breaks a rule of the record is damaged and refused, never patched.
+    pub fn from_json(s: &str) -> Result<Drawing> {
+        if s.len() > MAX_DRAWING_BYTES {
+            return Err(DocError::Invalid(format!("drawing too large (at most {} MiB)", MAX_DRAWING_BYTES >> 20)));
         }
+        let mut v: Value = serde_json::from_str(s).map_err(|e| DocError::Invalid(format!("not a SolidCraft drawing: {e}")))?;
+        let (version, applied) = DRAWING.take_version(&mut v)?;
+        DRAWING.check_numbers(&v, "properties")?;
+        DRAWING.upgrade(&mut v, version, applied.as_deref())?;
+        let d: Drawing = serde_json::from_value(v).map_err(damaged)?;
+        d.validate().map_err(damaged)?;
+        Ok(Drawing { format: DRAWING.format_string(DRAWING.current()), format_pending: DRAWING.pending_names(), ..d })
     }
 
-    /// A new id for a view, dimension or note.
-    pub fn take_id(&mut self) -> u64 {
-        let used = self.views.iter().map(|v| v.id).chain(self.dims.iter().map(|d| d.id)).chain(self.notes.iter().map(|n| n.id)).max().unwrap_or(0);
-        self.next_id = self.next_id.max(used + 1);
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+    /// The drawing's JSON: the same bytes for the same drawing. JSON longer than a read takes
+    /// ([`MAX_DRAWING_BYTES`]) is refused, so every drawing saved opens again: other tools'
+    /// properties are kept as they came, and indenting them can make a drawing that read in
+    /// under the limit save over it.
+    pub fn to_json(&self) -> Result<String> {
+        let text = serde_json::to_string_pretty(self).map_err(|e| DocError::Invalid(format!("drawing not saved: {e}")))?;
+        require(text.len() <= MAX_DRAWING_BYTES, || format!("drawing too large to save (at most {} MiB)", MAX_DRAWING_BYTES >> 20))?;
+        Ok(text)
     }
 
-    pub fn view(&self, id: u64) -> Option<&DrawView> {
-        self.views.iter().find(|v| v.id == id)
+    /// An id for a new object: one no object of the drawing has, from `id_source`, which never
+    /// gives one twice.
+    pub fn allocate_id(&self, id_source: &mut IdSource) -> Result<u64> {
+        id_source.next(&self.ids().collect())
     }
 
-    /// Its dimensions' text height (mm): its own when it makes sense, else 3.5.
-    pub fn dim_text(&self) -> f64 {
-        self.text_height.filter(|h| h.is_finite() && (1.0..=20.0).contains(h)).unwrap_or(3.5)
+    /// Every object's id, of every kind: what a new id must differ from. Each later kind adds its
+    /// own here.
+    fn ids(&self) -> impl Iterator<Item = u64> {
+        self.sources.iter().map(|s| s.id).chain(self.sheets.iter().map(|s| s.id))
     }
 
-    /// The drawing's scale factor (1:1 when it doesn't read).
-    pub fn scale_factor(&self) -> f64 {
-        parse_scale(&self.scale).unwrap_or(1.0)
-    }
-
-    /// A view's scale factor: its own, a detail's twice its parent's, else the drawing's.
-    pub fn view_scale(&self, v: &DrawView) -> f64 {
-        if let Some(s) = v.scale.as_deref().and_then(parse_scale) {
-            return s;
+    /// The record's rules (the module's notes): what reading a file checks, and what every edit
+    /// keeps.
+    pub fn validate(&self) -> Result<()> {
+        require((1..=MAX_SHEETS).contains(&self.sheets.len()), || format!("a drawing has 1 to {MAX_SHEETS} sheets"))?;
+        require(self.sources.len() <= MAX_SOURCES, || format!("a drawing draws at most {MAX_SOURCES} designs"))?;
+        check_name(&self.name, "the drawing's")?;
+        require(is_language_tag(&self.language), || {
+            format!("the language is not a BCP 47 tag of 2 to {MAX_LANGUAGE_CHARS} characters (such as `en` or `en-GB`)")
+        })?;
+        if let Units::Fixed { unit } = &self.units {
+            // A length unit of the expression unit table, written as the table writes it.
+            let length = unit.trim() == unit.as_str() && expr::unit_info(unit).is_some_and(|(kind, _)| kind == expr::Kind::Length);
+            require(length, || "the drawing's unit is not a length unit (such as `mm` or `in`)".into())?;
         }
-        match &v.kind {
-            ViewKind::Detail { parent, .. } => {
-                self.view(*parent).filter(|p| p.id != v.id).map_or(self.scale_factor(), |p| self.view_scale_once(p)) * 2.0
+        let mut seen = BTreeSet::new();
+        for id in self.ids() {
+            require(id != 0, || "an object has the id 0, which is never one".into())?;
+            require(seen.insert(id), || format!("two objects have the id {}", ids::encode(id)))?;
+        }
+        for source in &self.sources {
+            let path = &source.path;
+            require(!path.is_empty() && path.len() <= MAX_PATH_BYTES && !path.contains('\0'), || {
+                format!("source {}: a design's path is 1 to {MAX_PATH_BYTES} bytes, without NUL", ids::encode(source.id))
+            })?;
+        }
+        for sheet in &self.sheets {
+            self.check_sheet(sheet).map_err(|e| DocError::Invalid(format!("sheet {}: {e}", ids::encode(sheet.id))))?;
+        }
+        Ok(())
+    }
+
+    /// A sheet's own rules, and that the source it documents is one of the drawing's.
+    fn check_sheet(&self, sheet: &Sheet) -> Result<()> {
+        check_name(&sheet.name, "its")?;
+        sheet.sheet.size_mm().map_err(from_sheet)?;
+        if let Some(border) = &sheet.border {
+            border.validate().map_err(from_sheet)?;
+        }
+        require((MIN_DPI..=MAX_DPI).contains(&sheet.dpi), || format!("its pictures are {MIN_DPI} to {MAX_DPI} dpi"))?;
+        match sheet.documents {
+            Some(SheetComponent { source, .. }) => {
+                let named = || format!("it documents source {}, which the drawing doesn't have", ids::encode(source));
+                require(self.sources.iter().any(|s| s.id == source), named)
             }
-            _ => self.scale_factor(),
+            None => Ok(()),
         }
     }
+}
 
-    fn view_scale_once(&self, v: &DrawView) -> f64 {
-        v.scale.as_deref().and_then(parse_scale).unwrap_or(self.scale_factor())
-    }
+/// `Ok` when `ok`, else the rule `broken` names.
+fn require(ok: bool, broken: impl FnOnce() -> String) -> Result<()> {
+    if ok { Ok(()) } else { Err(DocError::Invalid(broken())) }
+}
 
-    /// The views that hang off `id`, directly or further down.
-    pub fn descendants(&self, id: u64) -> Vec<u64> {
-        let mut out = vec![id];
-        let mut i = 0;
-        while let Some(&cur) = out.get(i) {
-            for v in &self.views {
-                let p = match &v.kind {
-                    ViewKind::Base { .. } | ViewKind::Flat { .. } => None,
-                    ViewKind::Projected { parent, .. } | ViewKind::Section { parent, .. } | ViewKind::Detail { parent, .. } => Some(*parent),
-                };
-                if p == Some(cur) && !out.contains(&v.id) && out.len() < MAX_ITEMS {
-                    out.push(v.id);
-                }
-            }
-            i += 1;
-        }
-        out
-    }
+/// A name: 1 to [`MAX_NAME_BYTES`] bytes, not only spaces, without control characters.
+fn check_name(name: &str, whose: &str) -> Result<()> {
+    require(!name.trim().is_empty() && name.len() <= MAX_NAME_BYTES && !name.chars().any(char::is_control), || {
+        format!("{whose} name is 1 to {MAX_NAME_BYTES} bytes, not only spaces, without control characters")
+    })
+}
 
-    /// The next free letter for a section or detail view (A, B, … skipping I, O, Q).
-    pub fn next_label(&self) -> String {
-        let used: Vec<&str> = self.views.iter().map(|v| v.label.as_str()).collect();
-        let letters = "ABCDEFGHJKLMNPRSTUVWXYZ";
-        for c in letters.chars() {
-            let s = c.to_string();
-            if !used.contains(&s.as_str()) {
-                return s;
-            }
-        }
-        for n in 2.. {
-            for c in letters.chars() {
-                let s = format!("{c}{n}");
-                if !used.contains(&s.as_str()) {
-                    return s;
-                }
-            }
-        }
-        String::new()
-    }
+/// A well-formed language tag, as far as a drawing needs (RFC 5646 §2.1): 2 to
+/// [`MAX_LANGUAGE_CHARS`] characters, subtags of 1 to 8 ASCII letters and digits joined by `-`,
+/// the first of 2 to 8 letters (`en`, `en-GB`, `zh-Hans-CN`). Whether the subtags are registered
+/// isn't checked, and a private-use tag alone (`x-…`) isn't taken.
+fn is_language_tag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let first = subtags.next().unwrap_or_default();
+    (2..=MAX_LANGUAGE_CHARS).contains(&tag.len())
+        && (2..=8).contains(&first.len())
+        && first.bytes().all(|b| b.is_ascii_alphabetic())
+        && subtags.all(|s| (1..=8).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
 
-    /// A drawing whose numbers all make sense (a damaged file is refused, not drawn).
-    pub fn is_sane(&self) -> bool {
-        let finite2 = |p: &[f64; 2]| p.iter().all(|x| x.is_finite() && x.abs() < 1e6);
-        self.views.len() <= MAX_ITEMS
-            && self.dims.len() <= MAX_ITEMS
-            && self.notes.len() <= MAX_ITEMS
-            && self.views.iter().all(|v| {
-                finite2(&v.at)
-                    && match &v.kind {
-                        ViewKind::Section { a, b, .. } => finite2(a) && finite2(b),
-                        ViewKind::Detail { center, radius, .. } => finite2(center) && radius.is_finite() && *radius > 0.0,
-                        _ => true,
-                    }
-            })
-            && self
-                .dims
-                .iter()
-                .all(|d| d.offset.is_finite() && d.at.is_none_or(|p| finite2(&p)) && d.refs.len() <= 3 && d.refs.iter().all(|r| r.point.is_finite()))
-            && self.notes.iter().all(|n| finite2(&n.at) && n.height.is_finite() && n.height > 0.0 && n.height < 100.0)
-    }
+/// A file that breaks a rule of the record.
+fn damaged(e: impl std::fmt::Display) -> DocError {
+    DocError::Invalid(format!("damaged drawing: {e}"))
+}
+
+fn from_sheet(e: drawing_sheet::Invalid) -> DocError {
+    DocError::Invalid(e.to_string())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scales_and_sheets_read() {
-        assert_eq!(parse_scale("1:2"), Some(0.5));
-        assert_eq!(parse_scale(" 5 : 1 "), Some(5.0));
-        assert_eq!(parse_scale("1:2,5"), Some(0.4));
-        for bad in ["", "1", "1:0", "0:1", "a:b", "1:1e9"] {
-            assert_eq!(parse_scale(bad), None, "{bad}");
-        }
-        assert!(SCALES.iter().all(|s| parse_scale(s).is_some()));
-        assert_eq!(Sheet { size: "a4".into(), landscape: false }.dims(), (210.0, 297.0));
-        assert_eq!(Sheet { size: "?".into(), landscape: true }.dims(), (420.0, 297.0));
-    }
-
-    #[test]
-    fn ids_labels_and_descendants() {
-        let mut d = Drawing::new(1, "D");
-        let base = d.take_id();
-        d.views.push(DrawView {
-            id: base,
-            kind: ViewKind::Base { orientation: "front".into() },
-            at: [100.0, 100.0],
-            scale: None,
-            label: String::new(),
-            hidden: false,
-            free: false,
-        });
-        let side = d.take_id();
-        d.views.push(DrawView {
-            id: side,
-            kind: ViewKind::Projected { parent: base, side: "right".into() },
-            at: [200.0, 100.0],
-            scale: None,
-            label: String::new(),
-            hidden: false,
-            free: false,
-        });
-        let sec = d.take_id();
-        d.views.push(DrawView {
-            id: sec,
-            kind: ViewKind::Section { parent: side, a: [0.0, -10.0], b: [0.0, 10.0], flip: false },
-            at: [300.0, 100.0],
-            scale: None,
-            label: d.next_label(),
-            hidden: false,
-            free: false,
-        });
-        assert_eq!(d.views.last().map(|v| v.label.as_str()), Some("A"));
-        assert_eq!(d.next_label(), "B");
-        assert_eq!(d.descendants(base), vec![base, side, sec]);
-        assert_eq!(d.descendants(sec), vec![sec]);
-        assert!(d.take_id() > sec && d.is_sane());
-        // A view naming itself as its parent ends the walk.
-        d.views.push(DrawView {
-            id: 99,
-            kind: ViewKind::Detail { parent: 99, center: [0.0, 0.0], radius: 5.0 },
-            at: [0.0, 0.0],
-            scale: None,
-            label: "B".into(),
-            hidden: false,
-            free: false,
-        });
-        assert_eq!(d.descendants(99), vec![99]);
-        assert!(d.view_scale(d.view(99).unwrap()) > 0.0);
-        let json = serde_json::to_string(&d).unwrap();
-        let back: Drawing = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, d);
-    }
-}
+#[path = "drawing_tests.rs"]
+mod tests;

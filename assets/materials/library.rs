@@ -8,7 +8,7 @@ pub const DEFAULT_DENSITY: f64 = 1.29;
 
 /// Physical materials: name and density (g/cm³).
 /// The generic ones first (older designs name them), then grades by their standard name.
-pub const MATERIALS: [(&str, f64); 31] = [
+pub const MATERIALS: &[(&str, f64)] = &[
     (DEFAULT_MATERIAL, DEFAULT_DENSITY),
     ("Steel", 7.85),
     ("Stainless Steel", 8.0),

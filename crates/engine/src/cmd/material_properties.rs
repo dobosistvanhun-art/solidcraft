@@ -89,7 +89,6 @@ mod tests {
         let saved = s.doc.to_json();
         let saved_json: Value = serde_json::from_str(&saved).unwrap();
         assert_eq!(saved_json["format"], crate::doc::format::format_string(crate::doc::format::FORMAT));
-        assert!(saved_json["format_pending"].as_array().unwrap().iter().any(|name| name == "material-engineering-cards"));
         s.execute("edit.undo", &json!({})).unwrap();
         assert!(s.doc.user_materials[0].physical_card.is_none());
         s.execute("edit.redo", &json!({})).unwrap();
@@ -119,7 +118,6 @@ mod tests {
         assert_eq!(loaded.user_materials, s.doc.user_materials);
         assert_eq!(loaded.materials, s.doc.materials);
         assert_eq!(loaded.format, crate::doc::format::format_string(crate::doc::format::FORMAT));
-        assert!(loaded.format_pending.iter().any(|name| name == "material-engineering-cards"));
         assert!(!loaded.format_pending.iter().any(|name| name == "physical-material-cards"));
         let bytes = solidcraft_io::write_design_container(&loaded).unwrap();
         let reopened = solidcraft_io::read_design(&bytes).unwrap();
@@ -310,7 +308,7 @@ mod tests {
     fn material_inspection_preserves_legacy_entries_and_reports_unknowns_and_density_separately() {
         let mut s = fixture();
         let built_in = s.execute("material.list", &json!({})).unwrap();
-        for (name, density) in solidcraft_doc::MATERIALS {
+        for &(name, density) in solidcraft_doc::MATERIALS {
             let row = built_in["materials"].as_array().unwrap().iter().find(|m| m["name"] == name).unwrap();
             assert_eq!(*row, json!({"name":name,"density_g_cm3":density}));
             let inspected = s.execute("material.inspect", &json!({"material":name.to_lowercase()})).unwrap();

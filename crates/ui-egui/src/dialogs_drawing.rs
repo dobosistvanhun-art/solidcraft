@@ -22,7 +22,7 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, pos2, vec2};
 use serde_json::{Value, json};
-use solidcraft_engine::doc::drawing::{SCALES, SHEET_SIZES, ViewKind};
+use solidcraft_engine::doc::model_drawing::{SCALES, SHEET_SIZES, ViewKind};
 
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind};
@@ -273,7 +273,7 @@ pub(crate) fn active(app: &SolveApp) -> bool {
     matches!(app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Drawing(_)))
 }
 
-fn drawing<'a>(app: &'a SolveApp, k: &DrawUi) -> Option<&'a solidcraft_engine::doc::drawing::Drawing> {
+fn drawing<'a>(app: &'a SolveApp, k: &DrawUi) -> Option<&'a solidcraft_engine::doc::model_drawing::Drawing> {
     k.drawing.and_then(|id| app.session.doc.drawings.iter().find(|d| d.id == id))
 }
 
@@ -497,7 +497,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
             if (enter || idle) && tol != x.tolerance {
                 edit = Some(json!({"tolerance": tol.clone()}));
             }
-            use solidcraft_engine::doc::drawing::DimKind;
+            use solidcraft_engine::doc::model_drawing::DimKind;
             if matches!(x.kind, DimKind::Horizontal | DimKind::Vertical | DimKind::Aligned) && !x.arc.is_empty() && x.arc != "sharp" {
                 // Between the arcs' centres, near or far sides (a virtual sharp stays one).
                 let mut side = ["center", "min", "max"].iter().position(|a| *a == x.arc.as_str()).unwrap_or(0);
@@ -556,7 +556,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
             run(app, k, "drawing.edit", json!({"drawing": id, "text_height": h}));
         }
         let projections = ["First angle (ISO E)", "Third angle (ISO A)"];
-        let mut proj = usize::from(d.projection == solidcraft_engine::doc::drawing::Projection::Third);
+        let mut proj = usize::from(d.projection == solidcraft_engine::doc::model_drawing::Projection::Third);
         let b = proj;
         choice_row(ui, "Projection", "drw_proj", &mut proj, &projections);
         if proj != b {
@@ -608,7 +608,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
 }
 
 /// A view's name for the panel: its kind and orientation or label.
-fn view_name(d: &solidcraft_engine::doc::drawing::Drawing, v: &solidcraft_engine::doc::drawing::DrawView) -> String {
+fn view_name(d: &solidcraft_engine::doc::model_drawing::Drawing, v: &solidcraft_engine::doc::model_drawing::DrawView) -> String {
     let tr = crate::i18n::tr_label;
     match &v.kind {
         ViewKind::Base { orientation } => {
@@ -924,7 +924,7 @@ fn aligned_to(at: [f64; 2], centres: &[[f64; 2]], reach: f64) -> ([f64; 2], Opti
 /// slides along its line (with Shift held it goes anywhere, and is then free); others line up
 /// with the centres of the views not moving with them. With the guides' centres.
 fn drag_to(
-    d: &solidcraft_engine::doc::drawing::Drawing,
+    d: &solidcraft_engine::doc::model_drawing::Drawing,
     id: u64,
     start: [f64; 2],
     at0: [f64; 2],
@@ -1853,7 +1853,7 @@ mod tests {
         click(&mut h, [280.0, 90.0]);
         let d = h.app.session.doc.drawings[0].clone();
         assert_eq!(d.views.len(), 4, "{:?}", ui(&h).status);
-        let side = |v: &solidcraft_engine::doc::drawing::DrawView| match &v.kind {
+        let side = |v: &solidcraft_engine::doc::model_drawing::DrawView| match &v.kind {
             ViewKind::Projected { side, .. } => side.clone(),
             _ => String::new(),
         };
@@ -1940,7 +1940,7 @@ mod tests {
         let d = h.app.session.doc.drawings[0].clone();
         assert_eq!(d.dims.len(), 1, "{:?}", ui(&h).status);
         let x = &d.dims[0];
-        assert_eq!(x.kind, solidcraft_engine::doc::drawing::DimKind::Horizontal);
+        assert_eq!(x.kind, solidcraft_engine::doc::model_drawing::DimKind::Horizontal);
         let drawn = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
         let texts: Vec<String> =
             drawn["prims"].as_array().unwrap().iter().filter(|p| p["type"] == "text").filter_map(|p| p["text"].as_str().map(String::from)).collect();
@@ -1954,7 +1954,7 @@ mod tests {
         assert!(matches!(ui(&h).dim_picks.first().map(|p| p.1), Some(Pick::Circle(.., true))), "{:?}", ui(&h).dim_picks);
         click(&mut h, [150.0, 150.0]);
         let d = h.app.session.doc.drawings[0].clone();
-        assert_eq!(d.dims.last().map(|x| x.kind), Some(solidcraft_engine::doc::drawing::DimKind::Diameter), "{:?}", ui(&h).status);
+        assert_eq!(d.dims.last().map(|x| x.kind), Some(solidcraft_engine::doc::model_drawing::DimKind::Diameter), "{:?}", ui(&h).status);
         let drawn = h.app.session.execute("drawing.render", &json!({"drawing": d.id})).unwrap();
         assert!(drawn["prims"].as_array().unwrap().iter().any(|p| p["text"] == "Ø20"));
     }

@@ -3,7 +3,7 @@
 //! model (see `view_dxf/drawing_views.rs`).
 
 use serde_json::{Value, json};
-use solidcraft_doc::drawing::{
+use solidcraft_doc::model_drawing::{
     DimKind, DimRef, DrawDim, DrawNote, DrawView, Drawing, MAX_ITEMS, Projection, SCALES, SHEET_SIZES, ViewKind, parse_scale,
 };
 use solidcraft_geom::Vec2;
@@ -993,7 +993,7 @@ pub fn pdf_of(drawn: &SheetDrawn, title: &str) -> Vec<u8> {
 }
 
 /// The DXF of a drawn sheet (1:1 on the sheet, mm).
-pub fn dxf_of(drawn: &SheetDrawn) -> String {
+pub fn dxf_of(drawn: &SheetDrawn) -> Result<String> {
     use solidcraft_io::{DxfEntity, DxfLayer, DxfLinetype, DxfShape};
     let layers = vec![
         DxfLayer::new("VISIBLE", 7),
@@ -1040,7 +1040,7 @@ pub fn dxf_of(drawn: &SheetDrawn) -> String {
             }
         }
     }
-    solidcraft_io::write_dxf_drawing(&layers, &out)
+    Ok(solidcraft_io::write_dxf_drawing(&layers, &out)?)
 }
 
 fn path_param<'a>(p: &'a Value, cmd: &str) -> Result<Option<&'a str>> {
@@ -1072,7 +1072,7 @@ fn export_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     let i = find(s, p, cmd)?;
     let d = s.doc.drawings.get(i).ok_or_else(|| bad(cmd, "no such drawing"))?;
     let drawn = dv::draw(s, d);
-    let text = dxf_of(&drawn);
+    let text = dxf_of(&drawn)?;
     let errors: Vec<Value> = drawn.errors.iter().map(|(id, e)| json!({"id": id, "error": e})).collect();
     match path_param(p, cmd)? {
         Some(path) => {

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use solidcraft_doc::drawing::{DimKind, DimRef, DrawDim, DrawView, Drawing, Projection, ViewKind};
+use solidcraft_doc::model_drawing::{DimKind, DimRef, DrawDim, DrawView, Drawing, Projection, ViewKind};
 use solidcraft_geom::{Aabb3, Mesh, Vec2, Vec3};
 use solidcraft_kernel::EdgeCircle;
 use solidcraft_render::Camera;
@@ -751,10 +751,10 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
                     points.push(PickPoint { at: m - c, kind: "mid", hidden: false });
                     snaps.push(snap(m, "flat".into(), None));
                 }
-                Seg2::Arc { center, radius, .. } => {
-                    if !edges.iter().any(|x| x.kind == "circle" && x.a.dist(center - c) < 1e-6 && x.r == Some(radius)) {
-                        edges.push(PickEdge { kind: "circle", a: center - c, b: None, r: Some(radius), full: round, hidden: false, model: None });
-                    }
+                Seg2::Arc { center, radius, .. }
+                    if !edges.iter().any(|x| x.kind == "circle" && x.a.dist(center - c) < 1e-6 && x.r == Some(radius)) =>
+                {
+                    edges.push(PickEdge { kind: "circle", a: center - c, b: None, r: Some(radius), full: round, hidden: false, model: None });
                 }
                 _ => {}
             }

@@ -384,6 +384,7 @@ fn rule_contract_keys_and_readers_match() {
             "gap",
             "hem_gap",
             "k_factor",
+            "material",
             "name",
             "relief_depth",
             "relief_width",

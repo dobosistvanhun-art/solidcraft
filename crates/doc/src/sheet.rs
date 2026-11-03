@@ -527,6 +527,7 @@ pub struct RuleValues {
     pub gap: f64,
     /// The K-factor is worked out (`auto`) for this material class: each bend from its own radius
     /// over the thickness ([`auto_k_factor`]); `k_factor` is the rule radius's.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub k_auto: Option<MaterialClass>,
     pub angle_display: AngleDisplay,
 }

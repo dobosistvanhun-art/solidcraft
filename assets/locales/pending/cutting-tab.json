@@ -1,4 +1,20 @@
 {
+  "ar": {
+    "cmd.sketch_export_cut_dxf": "حفظ DXF للقطع",
+    "ui.heading_cutting": "القطع",
+    "ui.heading_dimension": "الأبعاد",
+    "ui.heading_draw": "رسم",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "القطع"
+  },
+  "de": {
+    "cmd.sketch_export_cut_dxf": "Schneid-DXF speichern",
+    "ui.heading_cutting": "SCHNEIDEN",
+    "ui.heading_dimension": "BEMASSUNG",
+    "ui.heading_draw": "ZEICHNEN",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "Schneiden"
+  },
   "en": {
     "cmd.sketch_export_cut_dxf": "Save Cut DXF",
     "ui.heading_cutting": "CUTTING",
@@ -7,6 +23,14 @@
     "ui.heading_dxf": "DXF",
     "ui.tab_cutting": "Cutting"
   },
+  "he": {
+    "cmd.sketch_export_cut_dxf": "שמירת DXF לחיתוך",
+    "ui.heading_cutting": "חיתוך",
+    "ui.heading_dimension": "מידות",
+    "ui.heading_draw": "שרטוט",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "חיתוך"
+  },
   "hu": {
     "cmd.sketch_export_cut_dxf": "Vágási DXF mentése",
     "ui.heading_cutting": "VÁGÁS",
@@ -14,5 +38,29 @@
     "ui.heading_draw": "RAJZOLÁS",
     "ui.heading_dxf": "DXF",
     "ui.tab_cutting": "Vágás"
+  },
+  "ja": {
+    "cmd.sketch_export_cut_dxf": "切断用 DXF を保存",
+    "ui.heading_cutting": "切断",
+    "ui.heading_dimension": "寸法",
+    "ui.heading_draw": "作図",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "切断"
+  },
+  "vi": {
+    "cmd.sketch_export_cut_dxf": "Lưu DXF để cắt",
+    "ui.heading_cutting": "CẮT",
+    "ui.heading_dimension": "KÍCH THƯỚC",
+    "ui.heading_draw": "VẼ",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "Cắt"
+  },
+  "zh": {
+    "cmd.sketch_export_cut_dxf": "保存切割 DXF",
+    "ui.heading_cutting": "切割",
+    "ui.heading_dimension": "尺寸",
+    "ui.heading_draw": "绘图",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "切割"
   }
 }

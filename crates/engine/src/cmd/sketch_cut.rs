@@ -106,7 +106,7 @@ fn cut_dxf_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let mut entities = Vec::new();
     let (mut outer, mut inner) = (0, 0);
     for (i, lp) in loops.iter().enumerate() {
-        let layer = if depth(&loops, i) % 2 == 0 {
+        let layer = if depth(&loops, i).is_multiple_of(2) {
             outer += 1;
             OUTER_LAYER
         } else {

@@ -16,7 +16,8 @@ fn run(s: &mut Session, id: &str, p: Value) -> Value {
 /// The layer of each entity in the ENTITIES section (group code 8 after a code 0).
 fn entity_layers(dxf: &str) -> Vec<String> {
     let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
-    let start = lines.iter().position(|l| *l == "ENTITIES").unwrap_or(lines.len());
+    // "ENTITIES" is the value of a code-2 pair: the section's pairs start on the next line.
+    let start = lines.iter().position(|l| *l == "ENTITIES").map_or(lines.len(), |i| i + 1);
     let mut out = Vec::new();
     let mut i = start;
     while i + 1 < lines.len() {

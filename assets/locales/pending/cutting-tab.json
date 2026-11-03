@@ -1,0 +1,18 @@
+{
+  "en": {
+    "cmd.sketch_export_cut_dxf": "Save Cut DXF",
+    "ui.heading_cutting": "CUTTING",
+    "ui.heading_dimension": "DIMENSION",
+    "ui.heading_draw": "DRAW",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "Cutting"
+  },
+  "hu": {
+    "cmd.sketch_export_cut_dxf": "Vágási DXF mentése",
+    "ui.heading_cutting": "VÁGÁS",
+    "ui.heading_dimension": "MÉRETEZÉS",
+    "ui.heading_draw": "RAJZOLÁS",
+    "ui.heading_dxf": "DXF",
+    "ui.tab_cutting": "Vágás"
+  }
+}

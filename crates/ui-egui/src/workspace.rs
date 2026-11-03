@@ -343,6 +343,50 @@ pub const SECTIONS: &[Section] = &[
     },
     Section { tab: "DRAWING", panel: "ANNOTATE", promoted: 2, ids: &["drawing.dimension", "drawing.note"] },
     Section { tab: "DRAWING", panel: "EXPORT", promoted: 2, ids: &["drawing.export_pdf", "drawing.export_dxf"] },
+    // Flat cutting drawings (laser, plasma, waterjet): the sketcher's drawing tools, a closed-contour
+    // check and a cutting DXF, on one tab that stays while its sketch is open.
+    Section { tab: CUT_TAB, panel: "SKETCH", promoted: 2, ids: &["sketch.create", "sketch.finish"] },
+    Section {
+        tab: CUT_TAB,
+        panel: "DRAW",
+        promoted: 6,
+        ids: &[
+            "sketch.line",
+            "sketch.rectangle.two_point",
+            "sketch.circle.center",
+            "sketch.arc.three_point",
+            "sketch.slot.center_to_center",
+            "sketch.polygon.inscribed",
+            "sketch.rectangle.center",
+            "sketch.rectangle.rounded",
+            "sketch.arc.center_point",
+            "sketch.point",
+            "sketch.text",
+        ],
+    },
+    Section {
+        tab: CUT_TAB,
+        panel: "MODIFY",
+        promoted: 4,
+        ids: &[
+            "sketch.trim",
+            "sketch.extend",
+            "sketch.offset",
+            "sketch.fillet",
+            "sketch.break",
+            "sketch.move",
+            "sketch.copy",
+            "sketch.paste",
+            "sketch.scale",
+            "sketch.mirror",
+            "sketch.pattern.rectangular",
+            "sketch.pattern.circular",
+            "sketch.delete",
+        ],
+    },
+    Section { tab: CUT_TAB, panel: "DIMENSION", promoted: 1, ids: &["sketch.dimension"] },
+    Section { tab: CUT_TAB, panel: "CHECK", promoted: 2, ids: &["sketch.loose_ends", "sketch.loose_ends.tie"] },
+    Section { tab: CUT_TAB, panel: "DXF", promoted: 2, ids: &["sketch.insert_dxf", "sketch.export_cut_dxf", "sketch.export_dxf"] },
 ];
 
 // Migration data only: Render commands remain registered, but have no live ribbon sections.
@@ -657,7 +701,12 @@ pub const SPECIALTY_TABS: &[SpecialtyTab] = &[
     SpecialtyTab { tab: "SHEET METAL", icon: "sheet" },
     SpecialtyTab { tab: "WELDMENTS", icon: "frame_member" },
     SpecialtyTab { tab: "DRAWING", icon: "dimension" },
+    SpecialtyTab { tab: CUT_TAB, icon: "sketch_dxf" },
 ];
+
+/// The flat cutting-drawing tab: it keeps the ribbon while its own sketch is open, so drawing,
+/// checking and saving the DXF stay on one tab.
+pub const CUT_TAB: &str = "CUTTING";
 
 /// A tab's row in the toolbar menu: the icon of the command that leads the tab (Model › Create ›
 /// Extrude, Inspect › Measure, View › Views and so on).
@@ -757,7 +806,10 @@ pub fn sync_context(app: &mut crate::SolveApp) {
         } else {
             None
         };
-        app.ui.tab = if app.session.active_sketch.is_some() {
+        let cut_sketch = app.session.active_sketch.is_some() && !was_sketch && app.ui.tab == CUT_TAB;
+        app.ui.tab = if cut_sketch {
+            CUT_TAB
+        } else if app.session.active_sketch.is_some() {
             "SKETCH"
         } else if let Some(back) = back.as_deref().filter(|t| *t != "SKETCH" && visible_tabs(app).contains(t)) {
             // Finishing a sketch goes back to the tab it came from (#3250).
@@ -993,7 +1045,7 @@ mod tests {
     fn contextual_tabs_follow_the_active_body_and_allow_other_tabs() {
         let mut h = crate::scenario::Harness::new();
         let mut fresh = TABS.to_vec();
-        fresh.extend(["SHEET METAL", "WELDMENTS", "DRAWING"]);
+        fresh.extend(["SHEET METAL", "WELDMENTS", "DRAWING", CUT_TAB]);
         assert_eq!(visible_tabs(&h.app), fresh, "SHEET METAL, WELDMENTS and DRAWING are reachable before any sheet body, member or drawing exists");
         h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
         assert_eq!(h.app.ui.tab, "SKETCH");

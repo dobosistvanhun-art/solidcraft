@@ -113,6 +113,7 @@ pub mod sketch_clipboard;
 mod sketch_constraints;
 mod sketch_construction;
 mod sketch_create;
+mod sketch_cut;
 mod sketch_ends;
 mod sketch_equation;
 mod sketch_freeform;
@@ -319,6 +320,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(sketch_import::COMMANDS.iter());
     v.extend(sketch_inspect::COMMANDS.iter());
     v.extend(sketch_ends::COMMANDS.iter());
+    v.extend(sketch_cut::COMMANDS.iter());
     v.extend(sketch_canvas::COMMANDS.iter());
     v.extend(canvas_sketch::COMMANDS.iter());
     v.extend(point_cloud::COMMANDS.iter());

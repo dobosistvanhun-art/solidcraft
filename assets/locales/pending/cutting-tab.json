@@ -5,7 +5,8 @@
     "ui.heading_dimension": "الأبعاد",
     "ui.heading_draw": "رسم",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "القطع"
+    "ui.tab_cutting": "القطع",
+    "ui.ribbon_tie_ends": "ربط الأطراف"
   },
   "de": {
     "cmd.sketch_export_cut_dxf": "Schneid-DXF speichern",
@@ -13,7 +14,8 @@
     "ui.heading_dimension": "BEMASSUNG",
     "ui.heading_draw": "ZEICHNEN",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "Schneiden"
+    "ui.tab_cutting": "Schneiden",
+    "ui.ribbon_tie_ends": "Enden schließen"
   },
   "en": {
     "cmd.sketch_export_cut_dxf": "Save Cut DXF",
@@ -21,7 +23,8 @@
     "ui.heading_dimension": "DIMENSION",
     "ui.heading_draw": "DRAW",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "Cutting"
+    "ui.tab_cutting": "Cutting",
+    "ui.ribbon_tie_ends": "Tie Ends"
   },
   "he": {
     "cmd.sketch_export_cut_dxf": "שמירת DXF לחיתוך",
@@ -29,7 +32,8 @@
     "ui.heading_dimension": "מידות",
     "ui.heading_draw": "שרטוט",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "חיתוך"
+    "ui.tab_cutting": "חיתוך",
+    "ui.ribbon_tie_ends": "חיבור קצוות"
   },
   "hu": {
     "cmd.sketch_export_cut_dxf": "Vágási DXF mentése",
@@ -37,7 +41,8 @@
     "ui.heading_dimension": "MÉRETEZÉS",
     "ui.heading_draw": "RAJZOLÁS",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "Vágás"
+    "ui.tab_cutting": "Vágás",
+    "ui.ribbon_tie_ends": "Végek zárása"
   },
   "ja": {
     "cmd.sketch_export_cut_dxf": "切断用 DXF を保存",
@@ -45,7 +50,8 @@
     "ui.heading_dimension": "寸法",
     "ui.heading_draw": "作図",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "切断"
+    "ui.tab_cutting": "切断",
+    "ui.ribbon_tie_ends": "端点を結合"
   },
   "vi": {
     "cmd.sketch_export_cut_dxf": "Lưu DXF để cắt",
@@ -53,7 +59,8 @@
     "ui.heading_dimension": "KÍCH THƯỚC",
     "ui.heading_draw": "VẼ",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "Cắt"
+    "ui.tab_cutting": "Cắt",
+    "ui.ribbon_tie_ends": "Nối đầu mút"
   },
   "zh": {
     "cmd.sketch_export_cut_dxf": "保存切割 DXF",
@@ -61,6 +68,7 @@
     "ui.heading_dimension": "尺寸",
     "ui.heading_draw": "绘图",
     "ui.heading_dxf": "DXF",
-    "ui.tab_cutting": "切割"
+    "ui.tab_cutting": "切割",
+    "ui.ribbon_tie_ends": "连接端点"
   }
 }

@@ -520,6 +520,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("sketch.dimension", "Dimension"),
     ("sketch.finish", "Finish Sketch"),
     ("sketch.inspect", "Sketch Report"),
+    ("sketch.loose_ends.tie", "Tie Ends"),
     ("sketch.pattern.circular", "Circular"),
     ("sketch.pattern.rectangular", "Rectangular"),
     ("sketch.rectangle.two_point", "Rectangle"),

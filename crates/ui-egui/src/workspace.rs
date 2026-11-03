@@ -349,7 +349,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         tab: CUT_TAB,
         panel: "DRAW",
-        promoted: 6,
+        promoted: 4,
         ids: &[
             "sketch.line",
             "sketch.rectangle.two_point",
@@ -1196,7 +1196,7 @@ mod tests {
         let rows: Vec<_> = crate::toolbar_custom::toolbar_items(&h.app).into_iter().filter(|i| i.id == "ui.toolbarTab").collect();
         assert_eq!(
             rows.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
-            ["Model", "Surface", "Assemble", "Insert", "Inspect", "Manage", "View", "Sheet Metal", "Weldments"]
+            ["Model", "Surface", "Assemble", "Insert", "Inspect", "Manage", "View", "Sheet Metal", "Weldments", "Drawing", "Cutting"]
         );
         assert!(rows.iter().all(|i| i.shortcut == "current"), "all existing tabs stay on by default");
         h.step(&json!({"click":{"handle":"ribbon:add_tab"}})).unwrap();

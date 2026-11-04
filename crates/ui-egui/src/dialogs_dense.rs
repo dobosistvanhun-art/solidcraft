@@ -90,6 +90,7 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
             crate::dialogs_assembly::Asm::FromBodies => Some("component.from_bodies"),
             crate::dialogs_assembly::Asm::NewComponent { .. } => Some("component.create"),
             crate::dialogs_assembly::Asm::Joint(f) => Some(if f.as_built { "joint.as_built" } else { "joint.create" }),
+            crate::dialogs_assembly::Asm::Constrain(_) => Some("joint.constrain"),
             crate::dialogs_assembly::Asm::JointOrigin { .. } => Some("joint.origin"),
             crate::dialogs_assembly::Asm::RigidGroup => Some("joint.rigid_group"),
             crate::dialogs_assembly::Asm::MotionLink { .. } => Some("joint.motion_link"),

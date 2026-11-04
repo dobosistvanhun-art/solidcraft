@@ -6,7 +6,13 @@
     "ui.constraint_opposed": "متعاكس",
     "ui.constraint_selection_1": "التحديد 1",
     "ui.constraint_selection_2": "التحديد 2",
-    "ui.constraint_solution": "الحل"
+    "ui.constraint_solution": "الحل",
+    "help.joint.constrain": "يضع قيد تجميع كلاسيكي بين تحديدين: تطابق أو محاذاة مستوية أو زاوية أو تماس أو إدخال، مع إزاحة. استخدمه لتركيب الأجزاء بعضها على بعض بوجوهها وثقوبها كما في تجميع CAD تقليدي.",
+    "help.sketch.delete": "يحذف منحنيات الرسم ونقاطه وأبعاده المحددة. استخدمه لإزالة الخطوط التي لم تعد تحتاجها من الرسم.",
+    "help.sketch.export_cut_dxf": "يحفظ الرسم كملف DXF للقطع: كل محيط مغلق مرة واحدة، الحواف الخارجية على طبقة OUTER والثقوب على INNER، بالمليمتر. استخدمه لإرسال جزء إلى قاطع ليزر أو بلازما أو نفث مائي.",
+    "help.sketch.export_dxf": "يحفظ منحنيات الرسم كملف DXF. استخدمه لتسليم رسم ثنائي الأبعاد إلى برنامج CAD أو CAM آخر.",
+    "help.sketch.loose_ends": "يعرض أطراف المنحنيات التي لا تلمس أي منحنى آخر. استخدمه للعثور على الفجوات التي تمنع إغلاق المحيط.",
+    "help.sketch.loose_ends.tie": "يربط الأطراف السائبة القريبة من بعضها. استخدمه لإغلاق محيط رُسم أو استُورد بفجوات صغيرة."
   },
   "de": {
     "cmd.joint_constrain": "Abhängigkeit",
@@ -15,7 +21,13 @@
     "ui.constraint_opposed": "Entgegengesetzt",
     "ui.constraint_selection_1": "Auswahl 1",
     "ui.constraint_selection_2": "Auswahl 2",
-    "ui.constraint_solution": "Lösung"
+    "ui.constraint_solution": "Lösung",
+    "help.joint.constrain": "Setzt eine klassische Baugruppen-Abhängigkeit zwischen zwei Auswahlen: Passend, Bündig, Winkel, Tangential oder Einfügen, mit Abstand. Damit fügen Sie Teile über ihre Flächen und Bohrungen zusammen, wie in einer herkömmlichen CAD-Baugruppe.",
+    "help.sketch.delete": "Löscht die gewählten Skizzenkurven, Punkte und Bemaßungen. Damit entfernen Sie nicht mehr benötigte Linien aus einer Zeichnung.",
+    "help.sketch.export_cut_dxf": "Speichert die Skizze als Schneid-DXF: jede geschlossene Kontur einmal, Außenkanten auf OUTER, Löcher auf INNER, in Millimetern. Damit schicken Sie ein Teil an einen Laser-, Plasma- oder Wasserstrahlschneider.",
+    "help.sketch.export_dxf": "Speichert die Kurven der Skizze als DXF-Datei. Damit geben Sie eine 2D-Zeichnung an ein anderes CAD- oder CAM-Programm weiter.",
+    "help.sketch.loose_ends": "Zeigt Kurvenenden, die keine andere Kurve berühren. Damit finden Sie die Lücken, die eine Kontur offen lassen.",
+    "help.sketch.loose_ends.tie": "Verbindet nahe beieinander liegende offene Enden. Damit schließen Sie eine Kontur, die mit kleinen Lücken gezeichnet oder importiert wurde."
   },
   "en": {
     "cmd.joint_constrain": "Constrain",
@@ -24,7 +36,13 @@
     "ui.constraint_opposed": "Opposed",
     "ui.constraint_selection_1": "Selection 1",
     "ui.constraint_selection_2": "Selection 2",
-    "ui.constraint_solution": "Solution"
+    "ui.constraint_solution": "Solution",
+    "help.joint.constrain": "Places a classic assembly constraint between two picks: Mate, Flush, Angle, Tangent or Insert, with an offset. Use it to put parts against each other by their faces and holes, the way you would in a traditional CAD assembly.",
+    "help.sketch.delete": "Deletes the selected sketch curves, points and dimensions. Use it to clear lines you no longer need from a drawing.",
+    "help.sketch.export_cut_dxf": "Saves the sketch as a cutting DXF: every closed contour once, part edges on the OUTER layer and holes on INNER, in millimetres. Use it to send a part to a laser, plasma or waterjet cutter.",
+    "help.sketch.export_dxf": "Saves the sketch's curves as a DXF file. Use it to hand a 2D drawing to another CAD or CAM program.",
+    "help.sketch.loose_ends": "Shows the ends of curves that touch no other curve. Use it to find the gaps that keep a contour from closing.",
+    "help.sketch.loose_ends.tie": "Joins loose ends that lie close together. Use it to close a contour that was drawn or imported with small gaps."
   },
   "he": {
     "cmd.joint_constrain": "אילוץ",
@@ -33,7 +51,13 @@
     "ui.constraint_opposed": "מנוגד",
     "ui.constraint_selection_1": "בחירה 1",
     "ui.constraint_selection_2": "בחירה 2",
-    "ui.constraint_solution": "פתרון"
+    "ui.constraint_solution": "פתרון",
+    "help.joint.constrain": "מציב אילוץ הרכבה קלאסי בין שתי בחירות: התאמה, בגובה אחד, זווית, משיק או הכנסה, עם היסט. השתמשו בו כדי להרכיב חלקים זה על זה לפי הפאות והחורים שלהם, כמו בהרכבת CAD מסורתית.",
+    "help.sketch.delete": "מוחק את עקומות הסקיצה, הנקודות והמידות שנבחרו. השתמשו בו כדי להסיר מהשרטוט קווים שאינם נחוצים עוד.",
+    "help.sketch.export_cut_dxf": "שומר את הסקיצה כ-DXF לחיתוך: כל קו מתאר סגור פעם אחת, קצוות החלק בשכבה OUTER והחורים ב-INNER, במילימטרים. השתמשו בו כדי לשלוח חלק לחותך לייזר, פלזמה או סילון מים.",
+    "help.sketch.export_dxf": "שומר את עקומות הסקיצה כקובץ DXF. השתמשו בו כדי להעביר שרטוט דו-ממדי לתוכנת CAD או CAM אחרת.",
+    "help.sketch.loose_ends": "מציג קצוות עקומות שאינם נוגעים בשום עקומה אחרת. השתמשו בו כדי למצוא את הפערים שמונעים מקו מתאר להיסגר.",
+    "help.sketch.loose_ends.tie": "מחבר קצוות פתוחים הקרובים זה לזה. השתמשו בו כדי לסגור קו מתאר שצויר או יובא עם פערים קטנים."
   },
   "hu": {
     "cmd.joint_constrain": "Kényszer",
@@ -42,7 +66,13 @@
     "ui.constraint_opposed": "Szemben",
     "ui.constraint_selection_1": "1. kijelölés",
     "ui.constraint_selection_2": "2. kijelölés",
-    "ui.constraint_solution": "Megoldás"
+    "ui.constraint_solution": "Megoldás",
+    "help.joint.constrain": "Klasszikus összeállítási kényszert hoz létre két kijelölés között: illesztés, egy síkba, szög, érintő vagy beillesztés, eltolással. Használja az alkatrészek lapjaik és furataik szerinti összerakására, ahogy egy hagyományos CAD-összeállításban.",
+    "help.sketch.delete": "Törli a kijelölt vázlatgörbéket, pontokat és méreteket. Használja a rajzból a már nem kellő vonalak eltávolítására.",
+    "help.sketch.export_cut_dxf": "A vázlatot vágási DXF-ként menti: minden zárt kontúrt egyszer, a külső kontúrokat az OUTER, a lyukakat az INNER rétegre, milliméterben. Használja lézer-, plazma- vagy vízsugaras vágónak szánt alkatrészhez.",
+    "help.sketch.export_dxf": "A vázlat görbéit DXF-fájlba menti. Használja 2D rajz átadására egy másik CAD- vagy CAM-programnak.",
+    "help.sketch.loose_ends": "Megmutatja azokat a görbevégeket, amelyek nem érnek más görbéhez. Használja annak megtalálására, miért nem zárul egy kontúr.",
+    "help.sketch.loose_ends.tie": "Összeköti az egymáshoz közeli szabad végeket. Használja kis résekkel rajzolt vagy beolvasott kontúr lezárására."
   },
   "ja": {
     "cmd.joint_constrain": "拘束",
@@ -51,7 +81,13 @@
     "ui.constraint_opposed": "反対向き",
     "ui.constraint_selection_1": "選択 1",
     "ui.constraint_selection_2": "選択 2",
-    "ui.constraint_solution": "解"
+    "ui.constraint_solution": "解",
+    "help.joint.constrain": "2 つの選択の間にクラシックなアセンブリ拘束（メイト、同一平面、角度、正接、挿入）をオフセット付きで配置します。従来の CAD アセンブリのように、面や穴で部品同士を組み付けるときに使います。",
+    "help.sketch.delete": "選択したスケッチの曲線、点、寸法を削除します。図面から不要になった線を取り除くときに使います。",
+    "help.sketch.export_cut_dxf": "スケッチを切断用 DXF として保存します。閉じた輪郭は各 1 回、外形は OUTER レイヤー、穴は INNER レイヤー、単位はミリメートルです。レーザー、プラズマ、ウォータージェット切断機に部品を送るときに使います。",
+    "help.sketch.export_dxf": "スケッチの曲線を DXF ファイルとして保存します。2D 図面を別の CAD や CAM プログラムに渡すときに使います。",
+    "help.sketch.loose_ends": "他のどの曲線にも接していない曲線の端点を表示します。輪郭が閉じない原因となる隙間を見つけるときに使います。",
+    "help.sketch.loose_ends.tie": "近くにある開いた端点同士をつなぎます。小さな隙間を残して描いた、または読み込んだ輪郭を閉じるときに使います。"
   },
   "vi": {
     "cmd.joint_constrain": "Ràng buộc",
@@ -60,7 +96,13 @@
     "ui.constraint_opposed": "Ngược chiều",
     "ui.constraint_selection_1": "Lựa chọn 1",
     "ui.constraint_selection_2": "Lựa chọn 2",
-    "ui.constraint_solution": "Phương án"
+    "ui.constraint_solution": "Phương án",
+    "help.joint.constrain": "Đặt một ràng buộc lắp ráp cổ điển giữa hai lựa chọn: khớp mặt, đồng phẳng, góc, tiếp xúc hoặc lắp vào, kèm độ lệch. Dùng để ghép các chi tiết với nhau theo mặt và lỗ của chúng, như trong lắp ráp CAD truyền thống.",
+    "help.sketch.delete": "Xóa các đường cong, điểm và kích thước phác thảo đã chọn. Dùng để bỏ khỏi bản vẽ những đường không còn cần.",
+    "help.sketch.export_cut_dxf": "Lưu bản phác thảo thành DXF để cắt: mỗi đường bao kín một lần, cạnh ngoài trên lớp OUTER và lỗ trên lớp INNER, đơn vị milimét. Dùng để gửi chi tiết tới máy cắt laser, plasma hoặc tia nước.",
+    "help.sketch.export_dxf": "Lưu các đường cong của bản phác thảo thành tệp DXF. Dùng để chuyển bản vẽ 2D sang chương trình CAD hoặc CAM khác.",
+    "help.sketch.loose_ends": "Hiển thị các đầu đường cong không chạm vào đường cong nào khác. Dùng để tìm các khe hở khiến đường bao không kín.",
+    "help.sketch.loose_ends.tie": "Nối các đầu hở nằm gần nhau. Dùng để khép kín đường bao được vẽ hoặc nhập vào với các khe hở nhỏ."
   },
   "zh": {
     "cmd.joint_constrain": "约束",
@@ -69,6 +111,12 @@
     "ui.constraint_opposed": "反向",
     "ui.constraint_selection_1": "选择 1",
     "ui.constraint_selection_2": "选择 2",
-    "ui.constraint_solution": "解"
+    "ui.constraint_solution": "解",
+    "help.joint.constrain": "在两个选择之间放置经典装配约束：配合、齐平、角度、相切或插入，可带偏移。用于像传统 CAD 装配那样按面和孔把零件装到一起。",
+    "help.sketch.delete": "删除选中的草图曲线、点和尺寸。用于从图中去掉不再需要的线。",
+    "help.sketch.export_cut_dxf": "将草图保存为切割 DXF：每个封闭轮廓一次，外轮廓在 OUTER 图层，孔在 INNER 图层，单位为毫米。用于把零件发送到激光、等离子或水射流切割机。",
+    "help.sketch.export_dxf": "将草图曲线保存为 DXF 文件。用于把二维图交给其他 CAD 或 CAM 程序。",
+    "help.sketch.loose_ends": "显示不与任何其他曲线相接的曲线端点。用于找出使轮廓无法闭合的缺口。",
+    "help.sketch.loose_ends.tie": "连接彼此靠近的开放端点。用于闭合绘制或导入时留有小缺口的轮廓。"
   }
 }

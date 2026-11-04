@@ -1385,7 +1385,8 @@ mod tests {
         let specs = solidcraft_engine::command_specs();
         let ids = |tab, panel| layout(tab, panel, &specs).unwrap().0.iter().map(|c| c.id).collect::<Vec<_>>();
         let joints = ids("ASSEMBLE", "JOINTS");
-        assert_eq!(joints.first().copied(), Some("joint.create"));
+        // Constrain first, as a classic assembly places parts; Joint right after it.
+        assert_eq!(joints.get(..2), Some(&["joint.constrain", "joint.create"][..]));
         assert!(ids("ASSEMBLE", "MOTION").contains(&"joint.drive"));
         assert!(ids("ASSEMBLE", "COMPONENTS").contains(&"component.create"));
         let sheet = ids("SHEET METAL", "CREATE");

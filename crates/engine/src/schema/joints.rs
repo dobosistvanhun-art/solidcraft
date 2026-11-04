@@ -108,6 +108,82 @@ pub struct EditJointResult {
     pub param_warnings: Vec<String>,
 }
 
+/// Which assembly constraint `joint.constrain` places, as a designer names it.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConstraintType {
+    /// Two faces against each other (or an axis on an axis, a point or an axis on a face).
+    Mate,
+    /// Two faces side by side, pointing the same way.
+    Flush,
+    /// Two faces (or two axes) at an angle.
+    Angle,
+    /// A cylinder touching a face.
+    Tangent,
+    /// A round edge into a round edge: on one axis, their faces against each other.
+    Insert,
+}
+
+/// How a constraint meets: faces against each other or the same way; a cylinder outside or
+/// inside the face it touches.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConstraintSolution {
+    Opposed,
+    Aligned,
+    Outside,
+    Inside,
+}
+
+/// Place an assembly constraint between two parts by what was picked on them, as in a classic
+/// assembly: a face (planar or round), a round edge (`circle`), a straight edge or a vertex
+/// (`point`), each a world point on the part. The constraint is a joint (`joint.list` lists it,
+/// `joint.edit` and `joint.delete` work on it); the part moves no further than it needs.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ConstrainParams {
+    #[serde(rename = "type")]
+    pub kind: ConstraintType,
+    /// The first pick: `{occurrence, face | circle | edge | point: [x, y, z]}` in world coordinates.
+    pub a: JointOriginParam,
+    /// The second pick, on another part.
+    pub b: JointOriginParam,
+    /// The gap between the two (mm or an expression). Default: 0.
+    #[serde(default)]
+    pub offset: Option<LengthExpr>,
+    /// An angle constraint's angle between the faces' normals (or the axes). Default: 0.
+    #[serde(default)]
+    pub angle: Option<AngleExpr>,
+    /// opposed (default for mate and insert) | aligned (flush's); a tangent's outside (default) | inside.
+    #[serde(default)]
+    pub solution: Option<ConstraintSolution>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub quiet: Option<bool>,
+}
+
+/// What `joint.constrain` returns: the joint made for the constraint, the joint type it is,
+/// and the solve's report as `joint.create` gives it.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ConstrainResult {
+    pub joint: u64,
+    pub name: String,
+    /// The joint type the constraint is made of (planar, cylindrical, revolute, angle, …).
+    pub kind: String,
+    pub conflicts: Vec<JointProblem>,
+    pub errors: Vec<JointProblem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dof: Option<Vec<OccurrenceDof>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<Vec<u64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// In the warn parameter-check mode: what the call's parameters got wrong.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
 #[cfg(test)]
 #[path = "joints_tests.rs"]
 mod tests;

@@ -2185,7 +2185,7 @@ mod reach;
 
 #[path = "joints_face.rs"]
 mod face;
-pub use face::{end_faces, face_name_at, named_face_spot, pin_end, round_end_at};
+pub use face::{PickedSurface, end_faces, face_name_at, named_face_spot, pin_end, round_end_at, surface_at};
 #[path = "joints_relations.rs"]
 mod relations;
 pub use reach::{REACH_TOL, Reach, Reached, reach};

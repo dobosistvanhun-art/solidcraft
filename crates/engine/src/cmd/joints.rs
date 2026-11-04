@@ -18,7 +18,10 @@ use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
 const EDIT_CONTRACT: TypedContract<crate::schema::joints::EditJointParams> = TypedContract::new();
+const CONSTRAIN_CONTRACT: TypedContract<crate::schema::joints::ConstrainParams> = TypedContract::new();
 
+#[path = "joints_constrain.rs"]
+mod constrain;
 #[path = "joints_inspect.rs"]
 mod inspect;
 
@@ -38,6 +41,19 @@ pub static COMMANDS: &[CommandSpec] = &[
          kept with the joint and worked out again whenever the design changes, so the joint follows the parameters it names; a joint whose \
          expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
+    CommandSpec::new("joint.constrain", "Constrain", constrain::constrain)
+        .at("SOLID", "ASSEMBLE")
+        .icon("joint")
+        .contract(&CONSTRAIN_CONTRACT)
+        .output(output_schema_for::<crate::schema::joints::ConstrainResult>)
+        .params(
+            "type: mate|flush|angle|tangent|insert; a, b: picks {occurrence?, face|circle|edge|point: [x,y,z] world} (a face planar or round, \
+             a round edge as circle, a straight edge, a vertex as point); offset?: mm or expression (default 0); angle?: deg or expression \
+             (angle only); solution?: opposed|aligned (mate, flush, insert) | outside|inside (tangent); name?; quiet?. Made of a joint chosen \
+             by the picks (mate face-face: planar; round-round: cylindrical; face-point: point_on_plane; face-round: line_on_plane; \
+             round-point: point_on_line; flush: planar aligned; angle: angle; tangent: line_on_plane a radius off; insert: revolute), \
+             starting where the parts are",
+        ),
     CommandSpec::new("joint.as_built", "As-Built Joint", as_built).at("SOLID", "ASSEMBLE").icon("as_built").params(
         "type, a: occurrence, b: occurrence (stay where they are); at?: joint origin (default: b's origin) — the joint's frame; one on a or b is kept on its face or hole there, so the joint follows it as the design changes; \
          name?; limits?: [[min, max] | null…]; quiet?: bool",
@@ -1797,6 +1813,9 @@ pub(crate) fn overlapping_pairs(boxes: &[Aabb3], limit: usize) -> (Vec<(usize, u
 #[cfg(test)]
 #[path = "joints_as_built_tests.rs"]
 mod as_built_tests;
+#[cfg(test)]
+#[path = "joints_constrain_tests.rs"]
+mod constrain_tests;
 #[cfg(test)]
 #[path = "joint_edge_tests.rs"]
 mod edge_tests;

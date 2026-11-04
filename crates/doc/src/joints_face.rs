@@ -288,6 +288,42 @@ pub(super) fn x_axis(doc: &Document, st: &ModelState, component: u64, x: Option<
 /// as near the facets of the plate's face round the rim). `round` prefers a cylinder on a tie
 /// (a pick on a hole's rim names its wall). `None`: no named face there.
 pub fn face_name_at(doc: &Document, st: &ModelState, component: u64, pick: Vec3, round: bool) -> Option<String> {
+    let (b, f) = face_at(doc, st, component, pick, round)?;
+    crate::naming::face_names(b).get(f).filter(|n| !n.is_empty()).cloned()
+}
+
+/// The kind of surface picked on a component's body (the component's coordinates): what an
+/// assembly constraint reads a pick as.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PickedSurface {
+    /// A planar face, its outward normal.
+    Plane { normal: Vec3 },
+    /// A cylindrical face: its axis, its radius, and whether it is a hole's wall.
+    Cylinder { axis: Vec3, radius: f64, internal: bool },
+    /// Any other face (a cone, a sphere, a spline).
+    Other,
+}
+
+/// The surface of the face at `pick` on a component's bodies (the component's coordinates), as
+/// [`face_name_at`] finds the face. `None`: no face there.
+pub fn surface_at(doc: &Document, st: &ModelState, component: u64, pick: Vec3) -> Option<PickedSurface> {
+    let (b, f) = face_at(doc, st, component, pick, false)?;
+    let offset = doc.model_body_offset(b).copied().unwrap_or(IDENTITY);
+    Some(match solidcraft_kernel::face_surface(&b.body, f) {
+        Some(solidcraft_kernel::FaceSurface::Plane { normal, .. }) => PickedSurface::Plane { normal: apply_vector(&offset, normal) },
+        Some(solidcraft_kernel::FaceSurface::Cylinder { .. }) => {
+            let mesh = b.mesh();
+            match solidcraft_kernel::cylinder_face(&b.body, &mesh, f) {
+                Some(c) => PickedSurface::Cylinder { axis: apply_vector(&offset, c.axis.into()), radius: c.radius, internal: c.internal },
+                None => PickedSurface::Other,
+            }
+        }
+        _ => PickedSurface::Other,
+    })
+}
+
+/// The body and face index at `pick` (the component's coordinates); see [`face_name_at`].
+fn face_at<'a>(doc: &Document, st: &'a ModelState, component: u64, pick: Vec3, round: bool) -> Option<(&'a ModelBody, usize)> {
     let mut best: Option<(f64, &ModelBody, usize)> = None;
     for b in component_bodies(doc, st, component) {
         if b.body.is_mesh() {
@@ -322,7 +358,7 @@ pub fn face_name_at(doc: &Document, st: &ModelState, component: u64, pick: Vec3,
         }
     }
     let (_, b, f) = best?;
-    crate::naming::face_names(b).get(f).filter(|n| !n.is_empty()).cloned()
+    Some((b, f))
 }
 
 /// A circle-centre snap for the round end of a component's cylindrical face centred at

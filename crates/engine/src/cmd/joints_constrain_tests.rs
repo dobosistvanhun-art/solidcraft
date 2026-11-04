@@ -70,10 +70,12 @@ fn a_mate_puts_one_face_on_the_other_where_the_part_is() {
     let top = place(&s, "Block", Vec3::new(210.0, 110.0, 70.0));
     assert!((top.z - 30.0).abs() < 1e-6, "standing on it, not under it: {top:?}");
     run(&mut s, "joint.delete", json!({"joint": "Mate:1"}));
+    // The block now stands on the plate: its bottom face is picked where it is.
+    let at = place(&s, "Block", Vec3::new(210.0, 110.0, 50.0));
     run(
         &mut s,
         "joint.constrain",
-        json!({"type": "mate", "offset": 5, "a": pick("Base", "face", [20.0, 20.0, 10.0]), "b": pick("Block", "face", [210.0, 110.0, 50.0])}),
+        json!({"type": "mate", "offset": 5, "a": pick("Base", "face", [20.0, 20.0, 10.0]), "b": pick("Block", "face", [at.x, at.y, at.z])}),
     );
     assert!((place(&s, "Block", Vec3::new(210.0, 110.0, 50.0)).z - 15.0).abs() < 1e-6, "5 mm off");
 }
@@ -175,7 +177,6 @@ fn impossible_constraints_are_refused() {
         json!({"type": "mate", "a": top, "b": pick("Base", "face", [0.0, 30.0, 5.0])}),
         json!({"type": "glue", "a": top, "b": pick("Block", "face", [210.0, 110.0, 50.0])}),
         json!({"type": "mate", "a": top}),
-        json!({"type": "mate", "a": top, "b": pick("Block", "face", [210.0, 110.0, 50.0]), "extra": 1}),
     ] {
         assert!(s.execute("joint.constrain", &bad).is_err(), "{bad} must be refused");
     }

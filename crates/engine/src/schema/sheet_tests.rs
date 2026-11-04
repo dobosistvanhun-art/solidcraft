@@ -64,7 +64,7 @@ fn schemas_and_the_key_check_agree() {
             "type",
         ]),
     );
-    assert_keys(input_schema_for::<PerforateParams>(), &keys(&["body", "diameter", "margin", "pattern", "pitch", "profiles", "sketch"]));
+    assert_keys(input_schema_for::<PerforateParams>(), &keys(&["body", "diameter", "height", "margin", "pattern", "pitch", "profiles", "shape", "sketch"]));
     assert_keys(input_schema_for::<HemParams>(), &keys(&["body", "edges", "flip", "gap", "length"]));
     assert_keys(input_schema_for::<FoldParams>(), &keys(&["angle", "body", "curve", "fixed", "flip", "points", "position", "radius", "sketch"]));
     assert_keys(input_schema_for::<UnfoldParams>(), &keys(&["body"]));
@@ -206,6 +206,7 @@ fn strict_keeps_todays_errors() {
         ("sheet.flange", json!({"edges": [[0, 0, 0]], "height": 10, "then": [{"height": 5, "turn": 1}]})),
         ("sheet.perforate", json!({"diameter": 2, "pitch": 5, "pattern": "hex"})),
         ("sheet.perforate", json!({"diameter": 2, "pitch": 5, "pattern": "Square"})),
+        ("sheet.perforate", json!({"diameter": 2, "pitch": 5, "shape": "hexagon"})),
         ("sheet.hem", json!({"edges": [], "length": 5})),
         ("sheet.hem", json!({"edges": 5, "length": 5})),
         ("sheet.hem", json!({"edges": null, "length": 5})),

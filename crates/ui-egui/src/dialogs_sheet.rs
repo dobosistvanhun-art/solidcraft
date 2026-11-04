@@ -20,6 +20,11 @@ use crate::theme::Tokens;
 
 const PERFORATION_PATTERNS: [&str; 2] = ["staggered", "square"];
 const PERFORATION_LABELS: [&str; 2] = ["ui.perforate_staggered", "ui.perforate_square"];
+/// The hole shapes a perforation offers (the command's `shape`) and their labels.
+const HOLE_SHAPES: [&str; 3] = ["round", "square", "rectangle"];
+const HOLE_SHAPE_LABELS: [&str; 3] = ["ui.perforate_round", "ui.perforate_shape_square", "ui.perforate_rectangle"];
+/// The size field's label for each hole shape: a diameter, a side, a width.
+const HOLE_SIZE_LABELS: [&str; 3] = ["ui.diameter", "ui.perforate_side", "ui.perforate_width"];
 
 const FOLD_POSITIONS: [&str; 4] = ["centerline", "start", "end", "mould"];
 const FOLD_POSITION_LABELS: [&str; 4] = ["Centerline", "Start of Bend", "End of Bend", "Outside Mould Line"];
@@ -61,12 +66,15 @@ crate::dialog_descriptor::dialog_descriptors! {
     #[derive(Clone, Debug)]
     pub enum Sm {
         Perforate("sheet.perforate", "ui.perforate_title", [("Body (last if none)", BODIES | FACES, false)],
-            FeatureKind::SheetPerforate { diameter, pitch, margin, pattern, .. }) {
+            FeatureKind::SheetPerforate { diameter, pitch, shape, height, margin, pattern, .. }) {
+            shape: usize = 0 => shape.as_deref().and_then(|s| HOLE_SHAPES.iter().position(|x| *x == s)).unwrap_or(0),
             diameter: String = "3 mm".into() => diameter.to_string(),
+            height: String = "6 mm".into() => height.as_ref().map(ToString::to_string).unwrap_or_else(|| "6 mm".into()),
             pitch: String = "6 mm".into() => pitch.to_string(),
             margin: String = String::new() => margin.as_deref().map(str::to_string).unwrap_or_default(),
             pattern: usize = 0 => pattern.as_deref().and_then(|p| PERFORATION_PATTERNS.iter().position(|x| *x == p)).unwrap_or(0),
-        } => json!({"diameter": diameter, "pitch": pitch, "pattern": PERFORATION_PATTERNS.get(*pattern).copied().unwrap_or("staggered")});
+        } => json!({"diameter": diameter, "pitch": pitch, "shape": HOLE_SHAPES.get(*shape).copied().unwrap_or("round"),
+                    "pattern": PERFORATION_PATTERNS.get(*pattern).copied().unwrap_or("staggered")});
         Hem("sheet.hem", "HEM", [("Edges", EDGES, true)],
             FeatureKind::SheetHem { length, gap, flip, .. }) {
             length: String = "5 mm".into() => length.to_string(),
@@ -440,8 +448,12 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
                 crate::ui_kit::Text::Hint("sheet_loft"),
             );
         }
-        Sm::Perforate { diameter, pitch, margin, pattern } => {
-            enter |= expr_row(ui, "ui.diameter", diameter);
+        Sm::Perforate { shape, diameter, height, pitch, margin, pattern } => {
+            choice_row(ui, "ui.perforate_shape", "sm_perforate_shape", shape, &HOLE_SHAPE_LABELS);
+            enter |= expr_row(ui, HOLE_SIZE_LABELS.get(*shape).copied().unwrap_or("ui.diameter"), diameter);
+            if HOLE_SHAPES.get(*shape) == Some(&"rectangle") {
+                enter |= expr_row(ui, "ui.perforate_height", height);
+            }
             enter |= expr_row(ui, "ui.perforate_pitch", pitch);
             enter |= hint_row(ui, "Margin", margin, crate::i18n::tr_label("ui.perforate_margin_default"));
             choice_row(ui, "Pattern", "sm_perforate_pattern", pattern, &PERFORATION_LABELS);
@@ -890,9 +902,13 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             put(&mut p, &[("radius", radius)]);
             ("sheet.path_flange", p)
         }
-        Sm::Perforate { margin, .. } => {
+        Sm::Perforate { margin, shape, height, .. } => {
             let mut p = json!({});
             put(&mut p, &[("margin", margin)]);
+            // Only a rectangle has a height of its own (a square's side is the size field).
+            if HOLE_SHAPES.get(*shape) == Some(&"rectangle") {
+                put(&mut p, &[("height", height)]);
+            }
             match items(inputs, 0).first() {
                 Some(Sel::Body { name }) => p["body"] = json!(name),
                 Some(Sel::Face { body, .. }) => p["body"] = json!(body),
@@ -1279,15 +1295,20 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &Dial
         app.flat_view.cache_perforations(&app.session, body);
         let clip = rect.intersect(painter.clip_rect());
         let pixels_per_point = painter.ctx().pixels_per_point();
-        for &(centre, radius) in &app.flat_view.perforations {
-            let radius = (radius * scale) as f32;
+        for &(centre, hx, hy, round) in &app.flat_view.perforations {
+            let (hx, hy) = ((hx * scale) as f32, (hy * scale) as f32);
             // Egui uses logical points; reject holes smaller than one physical pixel.
-            if !radius.is_finite() || radius * 2.0 * pixels_per_point < 1.0 {
+            if !hx.is_finite() || !hy.is_finite() || hx.min(hy) * 2.0 * pixels_per_point < 1.0 {
                 continue;
             }
             let centre = to((centre.x, centre.y));
-            if centre.x.is_finite() && centre.y.is_finite() && clip.intersects(Rect::from_center_size(centre, vec2(radius * 2.0, radius * 2.0))) {
-                painter.circle_stroke(centre, radius, Stroke::new(1.4, t.text));
+            let bounds = Rect::from_center_size(centre, vec2(hx * 2.0, hy * 2.0));
+            if centre.x.is_finite() && centre.y.is_finite() && clip.intersects(bounds) {
+                if round {
+                    painter.circle_stroke(centre, hx, Stroke::new(1.4, t.text));
+                } else {
+                    painter.rect_stroke(bounds, 0.0, Stroke::new(1.4, t.text), egui::StrokeKind::Middle);
+                }
             }
         }
     }
@@ -1368,7 +1389,8 @@ pub struct FlatView {
     pub fitted: bool,
     /// Flat centres stay out of the command JSON and are reused while navigating.
     perforation_key: Option<(std::sync::Weak<solidcraft_engine::doc::ModelState>, String)>,
-    perforations: Vec<(Vec2, f64)>,
+    /// Hole centres with half their width and height, and whether they are round.
+    perforations: Vec<(Vec2, f64, f64, bool)>,
 }
 
 impl Default for FlatView {
@@ -1402,7 +1424,9 @@ impl FlatView {
             }
             let Ok(centres) = sheet.perforation_holes(field) else { continue };
             let remaining = MAX_HOLES.saturating_sub(self.perforations.len());
-            self.perforations.extend(centres.into_iter().take(remaining).map(|centre| (centre, field.diameter / 2.0)));
+            let (hx, hy) = field.half_size();
+            let round = field.shape.is_round();
+            self.perforations.extend(centres.into_iter().take(remaining).map(|centre| (centre, hx, hy, round)));
         }
     }
 

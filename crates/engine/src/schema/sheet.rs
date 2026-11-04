@@ -314,6 +314,15 @@ fn blanks() -> String {
     format!("[{class}]*")
 }
 
+/// A perforation's `shape`: round, square or rectangle.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PerforationShape {
+    Round,
+    Square,
+    Rectangle,
+}
+
 /// A perforation's `pattern` (read by `sheet::perforation_pattern`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PerforationPattern(pub String);
@@ -417,16 +426,24 @@ pub struct FlangeParams {
     pub common: FeatureCommon,
 }
 
-/// Add a field of round perforations over a whole flat sheet, or inside a sketch's outline: holes
-/// in the flat pattern, the DXF (layer PERFORATION) and the measured volume, not cut into the
-/// solid. `participants` changes nothing.
+/// Add a field of round, square or rectangular perforations over a whole flat sheet, or inside a
+/// sketch's outline: holes in the flat pattern, the DXF (layer PERFORATION) and the measured
+/// volume, not cut into the solid. `participants` changes nothing.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PerforateParams {
-    /// The holes' diameter, more than 0.
+    /// A round hole's diameter, a square hole's side, a rectangular hole's width (along the
+    /// flat's x); more than 0.
     pub diameter: LengthExpr,
     /// The distance between hole centres, more than the diameter.
     pub pitch: LengthExpr,
+    /// The holes' shape. Default: round.
+    #[serde(default)]
+    pub shape: Option<PerforationShape>,
+    /// A rectangular hole's height (along the flat's y), more than 0. Needed for a rectangle,
+    /// refused for the other shapes.
+    #[serde(default)]
+    pub height: Option<LengthExpr>,
     /// How far the holes stay clear of the sheet's edges, cut-outs and bends, and of the outline,
     /// at least 0. Default: the diameter.
     #[serde(default)]

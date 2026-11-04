@@ -709,7 +709,7 @@ pub(super) fn sheet_eval(
             tag_flanges(sh, n0, f.id);
             rebuild_sheet(st, i)
         }
-        FeatureKind::SheetPerforate { diameter, pitch, margin, pattern, body, sketch, profiles } => {
+        FeatureKind::SheetPerforate { diameter, pitch, shape, height, margin, pattern, body, sketch, profiles } => {
             // Without a body name the field goes on the newest sheet, as the command's own body lookup does.
             let i = match body {
                 Some(_) => sheet_for(st, body, None)?,
@@ -726,9 +726,32 @@ pub(super) fn sheet_eval(
                 Some("square") => true,
                 Some(o) => return Err(DocError::Invalid(format!("perforation pattern {o:?}: use \"staggered\" or \"square\""))),
             };
+            let shape = match shape.as_deref() {
+                None => crate::sheet::HoleShape::Round,
+                Some(t) => crate::sheet::HoleShape::parse(t)
+                    .ok_or_else(|| DocError::Invalid(format!("perforation shape {t:?}: use \"round\", \"square\" or \"rectangle\"")))?,
+            };
+            let h = match (shape, height) {
+                (crate::sheet::HoleShape::Rectangle, Some(e)) => val(vals, e, Kind::Length)?,
+                (crate::sheet::HoleShape::Rectangle, None) => return Err(DocError::Invalid("a rectangular perforation needs a height".into())),
+                _ => 0.0,
+            };
             if !(d > 0.0 && pitch > d && margin >= 0.0) {
                 return Err(DocError::Invalid(format!(
                     "perforation needs diameter > 0, pitch > diameter and margin >= 0 (diameter {d}, pitch {pitch}, margin {margin})"
+                )));
+            }
+            if shape == crate::sheet::HoleShape::Rectangle && !(h > 0.0) {
+                return Err(DocError::Invalid(format!("a rectangular perforation needs a height > 0 (height {h})")));
+            }
+            // Rows must not run into each other: straight above a hole is the next row but one
+            // (staggered) or the next row (square); a staggered row's holes sit half a pitch across.
+            let size_y = if shape == crate::sheet::HoleShape::Rectangle { h } else { d };
+            let dy = if square { pitch } else { pitch * 3f64.sqrt() / 2.0 };
+            let rows_clear = if square { dy > size_y } else { 2.0 * dy > size_y && (dy > size_y || pitch / 2.0 > d) };
+            if !shape.is_round() && !rows_clear {
+                return Err(DocError::Invalid(format!(
+                    "the holes of neighbouring rows overlap: make the pitch ({pitch}) larger or the holes smaller (height {size_y})"
                 )));
             }
             // The outline sketch's profiles, where they lie on the sheet now.
@@ -742,7 +765,17 @@ pub(super) fn sheet_eval(
                 None => None,
             };
             let sh = st.sheets.get_mut(i).ok_or_else(|| DocError::Invalid("sheet".into()))?;
-            sh.perforations.push(crate::sheet::SheetPerforation { feature: f.id, diameter: d, pitch, margin, square, from_right: false, outline });
+            sh.perforations.push(crate::sheet::SheetPerforation {
+                feature: f.id,
+                diameter: d,
+                pitch,
+                margin,
+                square,
+                shape,
+                height: h,
+                from_right: false,
+                outline,
+            });
             Ok(())
         }
         FeatureKind::SheetHem { edges, length, gap, flip, body } => {

@@ -1,0 +1,74 @@
+{
+  "ar": {
+    "ui.perforate_height": "الارتفاع",
+    "ui.perforate_rectangle": "مستطيل",
+    "ui.perforate_round": "دائري",
+    "ui.perforate_shape": "شكل الثقب",
+    "ui.perforate_shape_square": "مربع",
+    "ui.perforate_side": "طول الضلع",
+    "ui.perforate_width": "العرض"
+  },
+  "de": {
+    "ui.perforate_height": "Höhe",
+    "ui.perforate_rectangle": "Rechteckig",
+    "ui.perforate_round": "Rund",
+    "ui.perforate_shape": "Lochform",
+    "ui.perforate_shape_square": "Quadratisch",
+    "ui.perforate_side": "Seitenlänge",
+    "ui.perforate_width": "Breite"
+  },
+  "en": {
+    "ui.perforate_height": "Height",
+    "ui.perforate_rectangle": "Rectangle",
+    "ui.perforate_round": "Round",
+    "ui.perforate_shape": "Hole Shape",
+    "ui.perforate_shape_square": "Square Hole",
+    "ui.perforate_side": "Side",
+    "ui.perforate_width": "Width"
+  },
+  "he": {
+    "ui.perforate_height": "גובה",
+    "ui.perforate_rectangle": "מלבן",
+    "ui.perforate_round": "עגול",
+    "ui.perforate_shape": "צורת החור",
+    "ui.perforate_shape_square": "ריבוע",
+    "ui.perforate_side": "אורך צלע",
+    "ui.perforate_width": "רוחב"
+  },
+  "hu": {
+    "ui.perforate_height": "Magasság",
+    "ui.perforate_rectangle": "Téglalap",
+    "ui.perforate_round": "Kör",
+    "ui.perforate_shape": "Lyukforma",
+    "ui.perforate_shape_square": "Négyzet",
+    "ui.perforate_side": "Oldalhossz",
+    "ui.perforate_width": "Szélesség"
+  },
+  "ja": {
+    "ui.perforate_height": "高さ",
+    "ui.perforate_rectangle": "長方形",
+    "ui.perforate_round": "丸",
+    "ui.perforate_shape": "穴の形状",
+    "ui.perforate_shape_square": "正方形",
+    "ui.perforate_side": "辺の長さ",
+    "ui.perforate_width": "幅"
+  },
+  "vi": {
+    "ui.perforate_height": "Chiều cao",
+    "ui.perforate_rectangle": "Hình chữ nhật",
+    "ui.perforate_round": "Tròn",
+    "ui.perforate_shape": "Hình dạng lỗ",
+    "ui.perforate_shape_square": "Hình vuông",
+    "ui.perforate_side": "Cạnh",
+    "ui.perforate_width": "Chiều rộng"
+  },
+  "zh": {
+    "ui.perforate_height": "高度",
+    "ui.perforate_rectangle": "矩形",
+    "ui.perforate_round": "圆形",
+    "ui.perforate_shape": "孔形状",
+    "ui.perforate_shape_square": "正方形",
+    "ui.perforate_side": "边长",
+    "ui.perforate_width": "宽度"
+  }
+}

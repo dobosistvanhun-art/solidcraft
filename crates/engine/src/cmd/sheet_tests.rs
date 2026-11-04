@@ -5699,6 +5699,102 @@ fn perforate_supports_a_square_pattern_and_refuses_impossible_values() {
     }
 }
 
+/// The PERFORATION layer's LWPOLYLINE entities (square and rectangular holes), each as its points.
+fn perforation_polylines(dxf: &str) -> Vec<Vec<(f64, f64)>> {
+    let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < lines.len() {
+        if lines[i] == "0" && lines[i + 1] == "LWPOLYLINE" {
+            let (mut layer, mut pts, mut x) = ("", Vec::new(), 0.0);
+            let mut j = i + 2;
+            while j + 1 < lines.len() && lines[j] != "0" {
+                match lines[j] {
+                    "8" => layer = lines[j + 1],
+                    "10" => x = lines[j + 1].parse().unwrap_or(0.0),
+                    "20" => pts.push((x, lines[j + 1].parse().unwrap_or(0.0))),
+                    _ => {}
+                }
+                j += 2;
+            }
+            if layer == "PERFORATION" {
+                out.push(pts);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Square holes: a 2 mm side on a 4 mm square grid over 30 x 20 takes the same places as Ø2 round holes,
+/// each hole is a closed 2 x 2 square in the DXF (no circles), and the volume drops by side² × thickness each.
+#[test]
+fn perforation_with_square_holes_writes_squares_and_counts_their_area() {
+    let mut s = Session::default();
+    outline_blank(&mut s, json!([[0, 0], [30, 0], [30, 20], [0, 20]]));
+    let before = volume(&mut s);
+    run(&mut s, "sheet.perforate", json!({"diameter": "2", "pitch": "4", "margin": "0", "pattern": "square", "shape": "square"}));
+    let f = flat(&mut s);
+    assert_eq!(f["perforations"][0]["count"].as_u64(), Some(8 * 5), "{}", f["perforations"]);
+    assert_eq!(f["perforations"][0]["shape"], "square");
+    assert!(rel(f["perforations"][0]["open_area_mm2"].as_f64().unwrap_or(0.0), 40.0 * 4.0) < 1e-9);
+    assert!(rel(before - volume(&mut s), 40.0 * 4.0 * 0.8) < 1e-9);
+    let dxf = run(&mut s, "sheet.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    assert!(perforation_circles(&dxf).is_empty(), "square holes are not circles");
+    let squares = perforation_polylines(&dxf);
+    assert_eq!(squares.len(), 40);
+    for sq in &squares {
+        let (xs, ys): (Vec<f64>, Vec<f64>) = sq.iter().copied().unzip();
+        let w = xs.iter().copied().fold(f64::MIN, f64::max) - xs.iter().copied().fold(f64::MAX, f64::min);
+        let h = ys.iter().copied().fold(f64::MIN, f64::max) - ys.iter().copied().fold(f64::MAX, f64::min);
+        assert!((w - 2.0).abs() < 1e-9 && (h - 2.0).abs() < 1e-9, "{sq:?}");
+        assert_eq!(sq.first(), sq.last(), "a closed outline: {sq:?}");
+    }
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    assert_eq!(flat(&mut reopened)["perforations"][0]["shape"], "square", "the shape is saved with the design");
+}
+
+/// Rectangular holes 4 wide and 1 high, a 6 mm square grid, margin 1, over 30 x 20: each hole stays the margin
+/// clear of the edges by its own width and height (5 columns from x 3, 3 rows from y 1.5).
+#[test]
+fn perforation_with_rectangular_holes_keeps_its_width_and_height_clear_of_the_edges() {
+    let mut s = Session::default();
+    outline_blank(&mut s, json!([[0, 0], [30, 0], [30, 20], [0, 20]]));
+    run(&mut s, "sheet.perforate", json!({"diameter": "4", "height": "1", "pitch": "6", "margin": "1", "pattern": "square", "shape": "rectangle"}));
+    let f = flat(&mut s);
+    assert_eq!(f["perforations"][0]["count"].as_u64(), Some(5 * 3), "{}", f["perforations"]);
+    assert_eq!(f["perforations"][0]["height"].as_f64(), Some(1.0));
+    let dxf = run(&mut s, "sheet.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    let rects = perforation_polylines(&dxf);
+    assert_eq!(rects.len(), 15);
+    let (lo_x, lo_y) = rects.iter().flatten().fold((f64::MAX, f64::MAX), |(a, b), &(x, y)| (a.min(x), b.min(y)));
+    let (hi_x, hi_y) = rects.iter().flatten().fold((f64::MIN, f64::MIN), |(a, b), &(x, y)| (a.max(x), b.max(y)));
+    assert!((lo_x - 1.0).abs() < 1e-9 && (lo_y - 1.0).abs() < 1e-9, "the margin from the lower-left edges: {lo_x} {lo_y}");
+    assert!(hi_x <= 29.0 + 1e-9 && hi_y <= 19.0 + 1e-9, "the margin from the upper-right edges: {hi_x} {hi_y}");
+}
+
+/// A rectangle needs its height, the other shapes refuse one, an unknown shape is refused, and holes that would
+/// run into the next row are refused.
+#[test]
+fn perforation_shapes_refuse_impossible_values() {
+    let mut s = Session::default();
+    outline_blank(&mut s, json!([[0, 0], [30, 0], [30, 20], [0, 20]]));
+    for bad in [
+        json!({"diameter": "2", "pitch": "4", "shape": "rectangle"}),
+        json!({"diameter": "2", "pitch": "4", "shape": "round", "height": "1"}),
+        json!({"diameter": "2", "pitch": "4", "shape": "square", "height": "1"}),
+        json!({"diameter": "2", "pitch": "4", "shape": "hexagon"}),
+        json!({"diameter": "2", "pitch": "4", "shape": "rectangle", "height": "0"}),
+        json!({"diameter": "2", "pitch": "2", "shape": "square"}),
+        json!({"diameter": "1", "height": "5", "pitch": "4", "pattern": "square", "shape": "rectangle"}),
+        json!({"diameter": "4", "height": "6", "pitch": "5", "shape": "rectangle"}),
+    ] {
+        assert!(s.execute("sheet.perforate", &bad).is_err(), "{bad} must be refused");
+    }
+}
+
 /// The hole centres `staggered_count` counts, over the box (x0, y0)..(x1, y1).
 fn staggered_centres(x0: f64, y0: f64, x1: f64, y1: f64, d: f64, pitch: f64, margin: f64) -> Vec<(f64, f64)> {
     let (clear, dy) = (d / 2.0 + margin, pitch * 3f64.sqrt() / 2.0);

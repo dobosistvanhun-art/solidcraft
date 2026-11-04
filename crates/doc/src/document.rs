@@ -1339,16 +1339,24 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         body: Option<BodyName>,
     },
-    /// A perforation field (#732): round holes of `diameter` on a staggered (60°) or square grid of `pitch` over the
-    /// whole flat sheet, or inside the closed profiles of `sketch` when it is given, kept `margin` (default: the
-    /// diameter) clear of its edges, cut-outs, bend zones and the outline. Stored like a cosmetic thread: the holes go
-    /// to the flat pattern, the DXF and the measured volume, not into the B-rep, so a panel can carry tens of thousands
-    /// of them.
+    /// A perforation field (#732): holes on a staggered (60°) or square grid of `pitch` over the whole flat sheet,
+    /// or inside the closed profiles of `sketch` when it is given, kept `margin` (default: the diameter) clear of its
+    /// edges, cut-outs, bend zones and the outline. The holes are round (`diameter`), square (side `diameter`) or
+    /// rectangular (`diameter` wide along the flat's x, `height` high), by `shape`. Stored like a cosmetic thread: the
+    /// holes go to the flat pattern, the DXF and the measured volume, not into the B-rep, so a panel can carry tens
+    /// of thousands of them.
     SheetPerforate {
         #[walk(length = "Diameter")]
         diameter: Expr,
         #[walk(length = "Pitch")]
         pitch: Expr,
+        /// "round" (default), "square" or "rectangle".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<String>,
+        /// A rectangular hole's height.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Height")]
+        height: Option<Expr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Margin")]
         margin: Option<Expr>,

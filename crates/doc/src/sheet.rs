@@ -841,10 +841,17 @@ pub struct SheetBore {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetPerforation {
     pub feature: u64,
+    /// A round hole's diameter, a square hole's side, a rectangular hole's width (along the flat's x).
     pub diameter: f64,
     pub pitch: f64,
     pub margin: f64,
     pub square: bool,
+    /// The holes' shape (round by default).
+    #[serde(default, skip_serializing_if = "HoleShape::is_round")]
+    pub shape: HoleShape,
+    /// A rectangular hole's height (along the flat's y); 0 for the other shapes.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub height: f64,
     /// The grid runs from the flat's right edge instead of its left: the field of a mirrored
     /// copy, whose holes are the mirror image of its source's.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -853,6 +860,122 @@ pub struct SheetPerforation {
     /// regions, margin clear of their edges, on a grid that starts from their bounding box. None: the whole flat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<Vec<Region2>>,
+}
+
+/// The shape of a perforation's holes. Square and rectangular holes have their sides along the
+/// flat's axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoleShape {
+    #[default]
+    Round,
+    Square,
+    Rectangle,
+}
+
+impl HoleShape {
+    pub fn is_round(&self) -> bool {
+        *self == HoleShape::Round
+    }
+
+    /// The name a design and a command use.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HoleShape::Round => "round",
+            HoleShape::Square => "square",
+            HoleShape::Rectangle => "rectangle",
+        }
+    }
+
+    pub fn parse(t: &str) -> Option<HoleShape> {
+        match t {
+            "round" => Some(HoleShape::Round),
+            "square" => Some(HoleShape::Square),
+            "rectangle" => Some(HoleShape::Rectangle),
+            _ => None,
+        }
+    }
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
+impl SheetPerforation {
+    /// Half the hole's width and height (a round hole: its radius twice).
+    pub fn half_size(&self) -> (f64, f64) {
+        match self.shape {
+            HoleShape::Round | HoleShape::Square => (self.diameter / 2.0, self.diameter / 2.0),
+            HoleShape::Rectangle => (self.diameter / 2.0, self.height / 2.0),
+        }
+    }
+
+    /// One hole's area (mm²).
+    pub fn hole_area(&self) -> f64 {
+        let (hx, hy) = self.half_size();
+        match self.shape {
+            HoleShape::Round => std::f64::consts::PI * hx * hx,
+            _ => 4.0 * hx * hy,
+        }
+    }
+
+    /// The length around one hole (mm): its wall's area is this times the thickness.
+    pub fn hole_perimeter(&self) -> f64 {
+        let (hx, hy) = self.half_size();
+        match self.shape {
+            HoleShape::Round => std::f64::consts::PI * 2.0 * hx,
+            _ => 4.0 * (hx + hy),
+        }
+    }
+
+    /// A square or rectangular hole's corners around `c`, counter-clockwise; None for a round hole.
+    pub fn hole_corners(&self, c: Vec2) -> Option<[Vec2; 4]> {
+        if self.shape.is_round() {
+            return None;
+        }
+        let (hx, hy) = self.half_size();
+        Some([Vec2::new(c.x - hx, c.y - hy), Vec2::new(c.x + hx, c.y - hy), Vec2::new(c.x + hx, c.y + hy), Vec2::new(c.x - hx, c.y + hy)])
+    }
+}
+
+/// The distance from the axis-aligned box of half size `hx` × `hy` around `c` to the segment `a`–`b`
+/// (0 where they meet).
+fn box_segment_distance(c: Vec2, hx: f64, hy: f64, (a, b): (Vec2, Vec2)) -> f64 {
+    let (a, b) = (a - c, b - c);
+    // Liang–Barsky: does the segment enter the box?
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    let mut meets = true;
+    for (p, q) in [(-d.x, a.x + hx), (d.x, hx - a.x), (-d.y, a.y + hy), (d.y, hy - a.y)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                meets = false;
+                break;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+            if t0 > t1 {
+                meets = false;
+                break;
+            }
+        }
+    }
+    if meets {
+        return 0.0;
+    }
+    let to_box = |p: Vec2| ((p.x.abs() - hx).max(0.0)).hypot((p.y.abs() - hy).max(0.0));
+    let to_seg = |p: Vec2| {
+        let l = d.dot(d);
+        let t = if l > 0.0 { ((p - a).dot(d) / l).clamp(0.0, 1.0) } else { 0.0 };
+        p.dist(a + d * t)
+    };
+    let corners = [Vec2::new(-hx, -hy), Vec2::new(hx, -hy), Vec2::new(hx, hy), Vec2::new(-hx, hy)];
+    corners.iter().map(|&k| to_seg(k)).fold(to_box(a).min(to_box(b)), f64::min)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2613,7 +2736,11 @@ impl SheetBody {
     pub fn perforation_holes(&self, p: &SheetPerforation) -> Result<Vec<Vec2>> {
         let regions = self.flat_regions()?;
         let zones = self.bend_zones();
-        let clear = p.diameter / 2.0 + p.margin;
+        let (hx, hy) = p.half_size();
+        // How far a hole reaches from its centre (the bucket search radius), and how far its
+        // centre stays from the field's sides across and along the rows.
+        let clear = if p.shape.is_round() { hx } else { hx.hypot(hy) } + p.margin;
+        let (clear_x, clear_y) = (hx + p.margin, hy + p.margin);
         let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
         let mut add = |l: &Loop2| {
             let pts = l.polyline(1e-3);
@@ -2672,22 +2799,26 @@ impl SheetBody {
         let mut row = 0usize;
         let Aabb2 { min: flo, max: fhi } = field;
         loop {
-            let y = flo.y + clear + row as f64 * dy;
-            if y > fhi.y - clear + 1e-9 {
+            let y = flo.y + clear_y + row as f64 * dy;
+            if y > fhi.y - clear_y + 1e-9 {
                 break;
             }
             let shift = if !p.square && row % 2 == 1 { p.pitch / 2.0 } else { 0.0 };
             // Steps across the row from its first hole; a mirrored field counts from the right.
             let mut step = 0.0;
-            while flo.x + clear + shift + step <= fhi.x - clear + 1e-9 {
-                let x = if p.from_right { fhi.x - clear - shift - step } else { flo.x + clear + shift + step };
+            while flo.x + clear_x + shift + step <= fhi.x - clear_x + 1e-9 {
+                let x = if p.from_right { fhi.x - clear_x - shift - step } else { flo.x + clear_x + shift + step };
                 let c = Vec2::new(x, y);
                 let (i, j) = idx(x, y);
                 let near = grid.get(j * nx + i).map(Vec::as_slice).unwrap_or(&[]);
                 if regions.iter().any(|r| r.contains(c))
                     && p.outline.as_ref().is_none_or(|o| o.iter().any(|r| r.contains(c)))
                     && !zones.iter().any(|z| z.contains(c))
-                    && near.iter().all(|&k| segs.get(k).is_none_or(|&s| dist(c, s) >= clear - 1e-9))
+                    && near.iter().all(|&k| {
+                        segs.get(k).is_none_or(|&s| {
+                            if p.shape.is_round() { dist(c, s) >= clear - 1e-9 } else { box_segment_distance(c, hx, hy, s) >= p.margin - 1e-9 }
+                        })
+                    })
                 {
                     out.push(c);
                 }
@@ -2700,10 +2831,7 @@ impl SheetBody {
 
     /// Open area of all perforation fields (mm²): what they take out of the sheet's faces.
     pub fn perforated_area(&self) -> f64 {
-        self.perforations
-            .iter()
-            .map(|p| self.perforation_holes(p).map_or(0.0, |h| h.len() as f64) * std::f64::consts::PI * (p.diameter / 2.0).powi(2))
-            .sum()
+        self.perforations.iter().map(|p| self.perforation_holes(p).map_or(0.0, |h| h.len() as f64) * p.hole_area()).sum()
     }
 
     /// Topology counted by faces and loops: a round hole is one face bounded by two closed circular

@@ -69,11 +69,33 @@ pub(crate) fn joint_choice(name: &str, kind: JointKind) -> String {
     format!("{name} ({})", crate::i18n::tr_label(kind_label(kind)))
 }
 
+/// The assembly constraints the Constrain dialog places (the command's `type`) and their labels.
+const CONSTRAINTS: [&str; 5] = ["mate", "flush", "angle", "tangent", "insert"];
+const CONSTRAINT_LABELS: [&str; 5] = ["Mate", "Flush", "Angle", "Tangent", "Insert"];
+/// The solutions a constraint offers: faces against each other or the same way (mate, flush,
+/// insert), a cylinder outside or inside the face (tangent).
+const FACING: [&str; 2] = ["opposed", "aligned"];
+const FACING_LABELS: [&str; 2] = ["Opposed", "Aligned"];
+const SIDES: [&str; 2] = ["outside", "inside"];
+const SIDE_LABELS: [&str; 2] = ["Outside", "Inside"];
+
+/// The Constrain dialog: a classic assembly constraint between two picks.
+#[derive(Clone, Debug)]
+pub struct ConstrainForm {
+    /// Index into `CONSTRAINTS`.
+    pub ty: usize,
+    pub offset: String,
+    pub angle: String,
+    /// Index into `FACING` (or `SIDES` for a tangent).
+    pub solution: usize,
+}
+
 /// What a joint origin input accepts (snaps on faces, edges and vertices).
 pub const SNAPS: u16 = FACES | EDGES | VERTICES;
 /// Commands whose effect is where occurrences sit (previewed on the placed model).
 const MOVES: &[&str] = &[
     "joint.create",
+    "joint.constrain",
     "joint.as_built",
     "joint.drive",
     "joint.edit",
@@ -96,6 +118,7 @@ pub enum Asm {
         activate: bool,
     },
     Joint(Box<JointForm>),
+    Constrain(Box<ConstrainForm>),
     JointOrigin {
         name: String,
         hover: Hover,
@@ -240,6 +263,7 @@ impl Asm {
             Asm::Joint(j) if j.editing.is_some() => "EDIT JOINT",
             Asm::Joint(j) if j.as_built => "AS-BUILT JOINT",
             Asm::Joint(_) => "JOINT",
+            Asm::Constrain(_) => "CONSTRAIN",
             Asm::JointOrigin { .. } => "JOINT ORIGIN",
             Asm::RigidGroup => "RIGID GROUP",
             Asm::Drive { .. } => "DRIVE JOINTS",
@@ -256,7 +280,7 @@ impl Asm {
     }
 
     pub fn previews(&self) -> bool {
-        matches!(self, Asm::Joint(_) | Asm::Drive { .. } | Asm::RigidGroup | Asm::Coupling(_) | Asm::Cam(_))
+        matches!(self, Asm::Joint(_) | Asm::Constrain(_) | Asm::Drive { .. } | Asm::RigidGroup | Asm::Coupling(_) | Asm::Cam(_))
     }
 }
 
@@ -272,6 +296,10 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             vec![SelInput::new("Components", BODIES, true), SelInput::new("Position", SNAPS, false)],
         ),
         "joint.origin" => (Asm::JointOrigin { name: String::new(), hover: None }, vec![SelInput::new("Snap", SNAPS, false)]),
+        "joint.constrain" => (
+            Asm::Constrain(Box::new(ConstrainForm { ty: 0, offset: "0 mm".into(), angle: "90 deg".into(), solution: 0 })),
+            vec![SelInput::new("Selection 1", SNAPS, false), SelInput::new("Selection 2", SNAPS, false)],
+        ),
         "joint.rigid_group" => (Asm::RigidGroup, vec![SelInput::new("Components", BODIES, true)]),
         "joint.drive" => {
             let joint = picked_joint(app, true);
@@ -718,6 +746,29 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Asm, inputs: &mut [Se
                 // Transfers take definition names, rather than the names of repeated placements.
                 input.items = app.session.model.state().bodies.iter().map(|body| Sel::Body { name: body.name.clone() }).collect();
                 *active = 0;
+            }
+        }
+        Asm::Constrain(f) => {
+            let was = f.ty;
+            choice_row(ui, "Type", "constrain_type", &mut f.ty, &CONSTRAINT_LABELS);
+            // A flush meets the same way; the others start opposed (a tangent outside).
+            if f.ty != was {
+                f.solution = usize::from(CONSTRAINTS.get(f.ty) == Some(&"flush"));
+            }
+            // The first pick taken, the second comes next.
+            if *active == 0 && inputs.first().is_some_and(|i| !i.items.is_empty()) && inputs.get(1).is_some_and(|i| i.items.is_empty()) {
+                *active = 1;
+            }
+            match CONSTRAINTS.get(f.ty).copied() {
+                Some("angle") => enter |= expr_row(ui, "Angle", &mut f.angle),
+                Some("tangent") => {
+                    enter |= expr_row(ui, "Offset", &mut f.offset);
+                    choice_row(ui, "Solution", "constrain_side", &mut f.solution, &SIDE_LABELS);
+                }
+                _ => {
+                    enter |= expr_row(ui, "Offset", &mut f.offset);
+                    choice_row(ui, "Solution", "constrain_facing", &mut f.solution, &FACING_LABELS);
+                }
             }
         }
         Asm::NewComponent { name, activate } => {
@@ -1345,6 +1396,36 @@ pub fn commands(app: &SolveApp, k: &Asm, inputs: &[SelInput]) -> Result<Vec<(Str
             } else {
                 cmd("component.from_bodies", json!({ "bodies": bodies }))
             }
+        }
+        Asm::Constrain(f) => {
+            let ty = CONSTRAINTS.get(f.ty).copied().unwrap_or("mate");
+            // A face as the point picked on it (planar or round: the command tells them apart);
+            // an edge or a vertex as its snap.
+            let side = |i: usize, what: &str| -> Result<Value, String> {
+                let x = sel_items(inputs, i).first().ok_or_else(|| format!("select {what} first"))?;
+                match x {
+                    Sel::Face { body, point, .. } => {
+                        let occ = occurrence_of_body(s, body).ok_or_else(|| format!("{what} is on no component"))?;
+                        Ok(json!({"occurrence": occ, "face": pt(*point)}))
+                    }
+                    _ => snap_of(s, x).map(|p| p.param).ok_or_else(|| format!("select {what} first")),
+                }
+            };
+            let (a, b) = (side(0, "the first face or edge")?, side(1, "the second face or edge")?);
+            if a.get("occurrence").is_some() && a.get("occurrence") == b.get("occurrence") {
+                return Err("pick the two on different components".into());
+            }
+            let mut p = json!({"type": ty, "a": a, "b": b});
+            if ty == "angle" {
+                p["angle"] = json!(f.angle);
+            } else {
+                p["offset"] = json!(if f.offset.trim().is_empty() { "0 mm" } else { f.offset.as_str() });
+                let options: &[&str] = if ty == "tangent" { &SIDES } else { &FACING };
+                if let Some(sol) = options.get(f.solution) {
+                    p["solution"] = json!(sol);
+                }
+            }
+            cmd("joint.constrain", p)
         }
         Asm::Joint(f) => {
             let kind = TYPES.get(f.kind).copied().unwrap_or("rigid");

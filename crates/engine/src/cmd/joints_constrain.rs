@@ -58,28 +58,41 @@ fn side(s: &Session, v: Option<&Value>, which: &str) -> Result<Side> {
         Some(o) => occurrence_id(s, Some(o), CMD)?,
         None => occurrence_at(s, at).ok_or_else(|| bad(CMD, format!("`{which}`: no part there")))?,
     };
-    let mut origin = json!({"occurrence": occurrence, key: [at.x, at.y, at.z]});
-    let pick = match key {
-        "circle" => Pick::Round { radius: None },
-        "edge" => Pick::Line,
-        "point" => Pick::Point,
-        _ => {
-            // A face: planar, or round (then its axis, through the cylinder's end nearer the pick).
-            let t = if occurrence == 0 { solidcraft_doc::IDENTITY } else { joints::occurrence_world(&s.doc, occurrence) };
-            let inv = solidcraft_doc::mat_inverse(&t).ok_or_else(|| bad(CMD, "occurrence transform"))?;
-            let local = solidcraft_doc::apply_point(&inv, at);
-            let component = component_of(s, occurrence);
-            match joints::surface_at(&s.doc, &s.model.state(), component, local) {
+    // The pick as joint.create takes a side (its z, corner, end and x kept), on its occurrence.
+    let mut origin = v.clone();
+    origin["occurrence"] = json!(occurrence);
+    // What the pick is: on a cylindrical face (then its radius), on a planar face, or neither.
+    let surface = || {
+        let t = if occurrence == 0 { solidcraft_doc::IDENTITY } else { joints::occurrence_world(&s.doc, occurrence) };
+        let inv = solidcraft_doc::mat_inverse(&t)?;
+        joints::surface_at(&s.doc, &s.model.state(), component_of(s, occurrence), solidcraft_doc::apply_point(&inv, at))
+    };
+    let pick = if v.get("corner").is_some() || key == "point" {
+        Pick::Point
+    } else {
+        match key {
+            "circle" => Pick::Round {
+                radius: match surface() {
+                    Some(PickedSurface::Cylinder { radius, .. }) => Some(radius),
+                    _ => None,
+                },
+            },
+            "edge" => Pick::Line,
+            _ => match surface() {
                 Some(PickedSurface::Plane { .. }) => Pick::Face,
                 Some(PickedSurface::Cylinder { radius, .. }) => {
-                    origin = json!({"occurrence": occurrence, "circle": [at.x, at.y, at.z]});
+                    // Its axis, through the cylinder's end nearer the pick.
+                    if let Some(m) = origin.as_object_mut() {
+                        m.remove("face");
+                        m.insert("circle".into(), json!([at.x, at.y, at.z]));
+                    }
                     Pick::Round { radius: Some(radius) }
                 }
                 Some(PickedSurface::Other) => {
                     return Err(bad(CMD, format!("`{which}`: pick a planar or a round face, a round edge, a straight edge or a vertex")));
                 }
                 None => return Err(bad(CMD, format!("`{which}`: no face there"))),
-            }
+            },
         }
     };
     Ok(Side { pick, origin })

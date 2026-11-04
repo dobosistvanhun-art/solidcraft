@@ -1,0 +1,74 @@
+{
+  "ar": {
+    "cmd.joint_constrain": "قيد",
+    "ui.constraint_flush": "محاذاة مستوية",
+    "ui.constraint_mate": "تطابق",
+    "ui.constraint_opposed": "متعاكس",
+    "ui.constraint_selection_1": "التحديد 1",
+    "ui.constraint_selection_2": "التحديد 2",
+    "ui.constraint_solution": "الحل"
+  },
+  "de": {
+    "cmd.joint_constrain": "Abhängigkeit",
+    "ui.constraint_flush": "Bündig",
+    "ui.constraint_mate": "Passend",
+    "ui.constraint_opposed": "Entgegengesetzt",
+    "ui.constraint_selection_1": "Auswahl 1",
+    "ui.constraint_selection_2": "Auswahl 2",
+    "ui.constraint_solution": "Lösung"
+  },
+  "en": {
+    "cmd.joint_constrain": "Constrain",
+    "ui.constraint_flush": "Flush",
+    "ui.constraint_mate": "Mate",
+    "ui.constraint_opposed": "Opposed",
+    "ui.constraint_selection_1": "Selection 1",
+    "ui.constraint_selection_2": "Selection 2",
+    "ui.constraint_solution": "Solution"
+  },
+  "he": {
+    "cmd.joint_constrain": "אילוץ",
+    "ui.constraint_flush": "בגובה אחד",
+    "ui.constraint_mate": "התאמה",
+    "ui.constraint_opposed": "מנוגד",
+    "ui.constraint_selection_1": "בחירה 1",
+    "ui.constraint_selection_2": "בחירה 2",
+    "ui.constraint_solution": "פתרון"
+  },
+  "hu": {
+    "cmd.joint_constrain": "Kényszer",
+    "ui.constraint_flush": "Egy síkba",
+    "ui.constraint_mate": "Illesztés",
+    "ui.constraint_opposed": "Szemben",
+    "ui.constraint_selection_1": "1. kijelölés",
+    "ui.constraint_selection_2": "2. kijelölés",
+    "ui.constraint_solution": "Megoldás"
+  },
+  "ja": {
+    "cmd.joint_constrain": "拘束",
+    "ui.constraint_flush": "同一平面",
+    "ui.constraint_mate": "メイト",
+    "ui.constraint_opposed": "反対向き",
+    "ui.constraint_selection_1": "選択 1",
+    "ui.constraint_selection_2": "選択 2",
+    "ui.constraint_solution": "解"
+  },
+  "vi": {
+    "cmd.joint_constrain": "Ràng buộc",
+    "ui.constraint_flush": "Đồng phẳng",
+    "ui.constraint_mate": "Khớp mặt",
+    "ui.constraint_opposed": "Ngược chiều",
+    "ui.constraint_selection_1": "Lựa chọn 1",
+    "ui.constraint_selection_2": "Lựa chọn 2",
+    "ui.constraint_solution": "Phương án"
+  },
+  "zh": {
+    "cmd.joint_constrain": "约束",
+    "ui.constraint_flush": "齐平",
+    "ui.constraint_mate": "配合",
+    "ui.constraint_opposed": "反向",
+    "ui.constraint_selection_1": "选择 1",
+    "ui.constraint_selection_2": "选择 2",
+    "ui.constraint_solution": "解"
+  }
+}

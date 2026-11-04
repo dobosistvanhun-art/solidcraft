@@ -182,3 +182,20 @@ fn impossible_constraints_are_refused() {
     }
     assert_eq!(s.doc.assembly.joints.len(), before);
 }
+
+/// The picks as the window sends them: a round face as `circle` at a point on its wall (a
+/// tangent reads its radius from it), a vertex as an edge's `corner`, a round edge's centre with
+/// its `z`.
+#[test]
+fn picks_as_the_window_sends_them_place_the_same_constraints() {
+    let mut s = parts();
+    let top = pick("Base", "face", [20.0, 20.0, 10.0]);
+    let r = run(&mut s, "joint.constrain", json!({"type": "tangent", "a": top, "b": pick("Pin", "circle", [305.0, 0.0, 15.0])}));
+    assert!(clean(&r), "{r}");
+    assert!((place(&s, "Pin", Vec3::new(300.0, 0.0, 0.0)).z - 15.0).abs() < 1e-6, "a radius above the face");
+    let corner = json!({"occurrence": "Block", "edge": [200, 100, 50], "corner": [200, 100, 50], "z": [0, 0, 1]});
+    let r = run(&mut s, "joint.constrain", json!({"type": "mate", "a": top, "b": corner}));
+    assert!(clean(&r), "{r}");
+    assert_eq!(r["kind"], "point_on_plane");
+    assert!((place(&s, "Block", Vec3::new(200.0, 100.0, 50.0)).z - 10.0).abs() < 1e-6, "the corner on the face");
+}

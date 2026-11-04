@@ -60,6 +60,45 @@ fn joint_from_two_snaps() {
     assert_eq!(app.session.doc.assembly.joints.len(), 1);
 }
 
+/// Constrain: two face picks and the type make `joint.constrain` (the faces as the points picked);
+/// the second pick is asked for after the first; Flush meets aligned; OK places B on A's top.
+#[test]
+fn constrain_from_two_face_picks() {
+    let mut app = two_boxes();
+    app.start("joint.constrain");
+    let mut d = app.dialog.clone().unwrap();
+    assert!(matches!(&d.kind, Kind::Assembly(a) if a.title() == "CONSTRAIN"));
+    let (fa, fb) = (face_sel(&app.session, Vec3::new(10.0, 10.0, 10.0)).unwrap(), face_sel(&app.session, Vec3::new(40.0, 10.0, 0.0)).unwrap());
+    assert!(apply_commands(&app, &d).is_err(), "no picks yet");
+    d.pick(&app.session, fa);
+    assert_eq!(d.active, 1, "the second pick is next");
+    d.pick(&app.session, fb);
+    let c = apply_commands(&app, &d).unwrap();
+    let (id, p) = &c[0];
+    assert_eq!(id, "joint.constrain");
+    assert_eq!((p["type"].as_str(), p["solution"].as_str()), (Some("mate"), Some("opposed")), "{p}");
+    assert_eq!(p["a"]["occurrence"], occ(&app, "A"));
+    assert_eq!(p["b"]["occurrence"], occ(&app, "B"));
+    assert!(p["a"]["face"].is_array() && p["b"]["face"].is_array(), "{p}");
+    if let Kind::Assembly(Asm::Constrain(f)) = &mut d.kind {
+        f.ty = 1;
+        f.solution = 1;
+    }
+    assert_eq!(apply_commands(&app, &d).unwrap()[0].1["solution"], "aligned", "flush meets aligned");
+    if let Kind::Assembly(Asm::Constrain(f)) = &mut d.kind {
+        f.ty = 0;
+        f.solution = 0;
+        f.offset = "2 mm".into();
+    }
+    for (id, p) in apply_commands(&app, &d).unwrap() {
+        app.run(&id, p).unwrap();
+    }
+    assert_eq!(app.session.doc.assembly.joints.len(), 1);
+    let w = solidcraft_engine::doc::joints::occurrence_world(&app.session.doc, occ(&app, "B"));
+    let bottom = solidcraft_engine::doc::apply_point(&w, Vec3::new(40.0, 10.0, 0.0));
+    assert!((bottom.z - 12.0).abs() < 1e-6, "B's bottom 2 mm above A's top: {bottom:?}");
+}
+
 /// A straight edge is the revolute axis, even when both adjacent faces are perpendicular to it.
 #[test]
 fn revolute_joint_uses_the_picked_straight_edges() {

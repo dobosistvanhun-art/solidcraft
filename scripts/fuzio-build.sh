@@ -68,8 +68,15 @@ rm -rf "$OUT/pkg"
 mkdir -p "$OUT/pkg/solidcraft"
 cp target/fuzio/solidcraft "$OUT/pkg/solidcraft/solidcraft"
 strip "$OUT/pkg/solidcraft/solidcraft" || true
-cp assets/icons/app/linux/exports/hicolor/256x256/apps/ai.storyteller.solidcraft.png "$OUT/pkg/solidcraft/solidcraft.png" 2>/dev/null \
-    || cp assets/icons/app/linux/exports/hicolor/512x512/apps/ai.storyteller.solidcraft.png "$OUT/pkg/solidcraft/solidcraft.png"
+# Az alkalmazásazonosító a főágban változhat (ai.storyteller → io.tangencylabs), ezért név szerint nem kötjük.
+ICON=""
+for size in 256x256 512x512 128x128; do
+    for f in assets/icons/app/linux/exports/hicolor/$size/apps/*solidcraft*.png; do
+        [ -f "$f" ] && { ICON="$f"; break 2; }
+    done
+done
+[ -n "$ICON" ] || { echo "Nincs alkalmazásikon az assets/icons/app/linux/exports/hicolor alatt" >&2; exit 1; }
+cp "$ICON" "$OUT/pkg/solidcraft/solidcraft.png"
 cat > "$OUT/pkg/solidcraft/solidcraft.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application

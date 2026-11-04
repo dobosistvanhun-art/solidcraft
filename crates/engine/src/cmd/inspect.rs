@@ -189,11 +189,8 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     b["volume_mm3"] = json!(nv);
                 }
-                let bores: f64 = sh
-                    .perforations
-                    .iter()
-                    .map(|p| sh.perforation_holes(p).map_or(0.0, |h| h.len() as f64) * p.hole_perimeter() * sh.t)
-                    .sum();
+                let bores: f64 =
+                    sh.perforations.iter().map(|p| sh.perforation_holes(p).map_or(0.0, |h| h.len() as f64) * p.hole_perimeter() * sh.t).sum();
                 b["area_mm2"] = json!(b["area_mm2"].as_f64().unwrap_or(0.0) - 2.0 * open + bores);
             }
         }

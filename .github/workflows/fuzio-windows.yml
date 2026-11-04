@@ -1,12 +1,12 @@
 # Fúzió fork: SolidCraft for Windows 10/11 (x64) from the `fuzio` branch — a portable zip, an MSI
 # installer and the bare .exe, as a downloadable artifact of the run (Actions → this run → Artifacts).
-# Runs by hand (Run workflow) or on every push to `fuzio`. Nothing is signed (SmartScreen warns once).
+# Runs by hand (Run workflow) or on every push to `fuzio` or `fuzio-upstream-2026-11`. Nothing is signed (SmartScreen warns once).
 name: Fuzio Windows build
 
 on:
   workflow_dispatch:
   push:
-    branches: [fuzio]
+    branches: [fuzio, fuzio-upstream-2026-11]
     paths-ignore: ["**/*.md", "docs/**", "tests/oracle/**"]
 
 permissions:

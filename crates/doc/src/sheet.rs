@@ -2829,6 +2829,73 @@ impl SheetBody {
         Ok(out)
     }
 
+    /// The perforation holes' outlines where they lie on the sheet now, for display: a closed ring
+    /// of world points per hole on each face (bottom and top), round holes as polygons of up to 24
+    /// sides, square and rectangular ones by their corners. At most `max_segments` segments in all:
+    /// round holes get fewer sides when there are many of them, and holes past the budget are left
+    /// out. On a lofted sheet's wall each point is lifted through the flat pattern's triangles onto
+    /// the wall, half the thickness either side of its neutral surface.
+    pub fn perforation_rings(&self, max_segments: usize) -> Vec<Vec<Vec3>> {
+        if self.perforations.is_empty() {
+            return Vec::new();
+        }
+        let wall = self.lofted.as_ref().filter(|_| !self.flat).map(|l| crate::sheet_loft::StripIndex::new(&l.strip));
+        let fields: Vec<(&SheetPerforation, Vec<Vec2>)> =
+            self.perforations.iter().filter_map(|p| self.perforation_holes(p).ok().map(|h| (p, h))).filter(|(_, h)| !h.is_empty()).collect();
+        let holes: usize = fields.iter().map(|(_, h)| h.len()).sum();
+        if holes == 0 || max_segments == 0 {
+            return Vec::new();
+        }
+        let sides = (max_segments / holes.saturating_mul(2)).clamp(6, 24);
+        // Where each panel lies: a hole goes with the panel its centre is on (never a bend zone).
+        let panels: Vec<(Region2, Mat)> = if self.flat {
+            vec![(self.base.clone(), self.world(None))]
+        } else {
+            self.panels().into_iter().map(|(pi, r)| (r, self.world(pi))).collect()
+        };
+        let mut out = Vec::new();
+        let mut left = max_segments;
+        for (p, centres) in &fields {
+            let ring: Vec<Vec2> = match p.hole_corners(Vec2::ZERO) {
+                Some(k) => k.to_vec(),
+                None => {
+                    let r = p.diameter / 2.0;
+                    (0..sides).map(|i| Vec2::from_angle(std::f64::consts::TAU * i as f64 / sides as f64) * r).collect()
+                }
+            };
+            for &c in centres {
+                if left < 2 * ring.len() {
+                    return out;
+                }
+                if let Some(index) = &wall {
+                    let lifted: Option<Vec<(Vec3, Vec3)>> = ring.iter().map(|&q| index.lift(c + q)).collect();
+                    let Some(lifted) = lifted else { continue };
+                    for side in [-0.5, 0.5] {
+                        let mut pts: Vec<Vec3> = lifted.iter().map(|&(p, n)| p + n * (side * self.t)).collect();
+                        if let Some(&first) = pts.first() {
+                            pts.push(first);
+                        }
+                        left -= ring.len();
+                        out.push(pts);
+                    }
+                    continue;
+                }
+                let Some((_, w)) = panels.iter().find(|(r, _)| r.contains(c)).or(if self.flat { panels.first() } else { None }) else {
+                    continue;
+                };
+                for z in [0.0, self.t] {
+                    let mut pts: Vec<Vec3> = ring.iter().map(|&q| apply_point(w, Vec3::new(c.x + q.x, c.y + q.y, z))).collect();
+                    if let Some(&first) = pts.first() {
+                        pts.push(first);
+                    }
+                    left -= ring.len();
+                    out.push(pts);
+                }
+            }
+        }
+        out
+    }
+
     /// Open area of all perforation fields (mm²): what they take out of the sheet's faces.
     pub fn perforated_area(&self) -> f64 {
         self.perforations.iter().map(|p| self.perforation_holes(p).map_or(0.0, |h| h.len() as f64) * p.hole_area()).sum()

@@ -139,3 +139,41 @@ fn a_cut_through_the_loft_makes_cutouts_in_its_flat_pattern() {
     run(&mut s, "sheet.refold", json!({}));
     assert!((volume(&mut s) - cut).abs() < 1e-3 * cut, "refolded with its holes");
 }
+
+/// A sheet metal loft takes a perforation field over its whole wall: the holes are in its flat pattern and its
+/// DXF, the measured volume drops by their open area, and the 3D view draws them on the wall's two faces (within
+/// the wall's bounds). An outline sketch on the loft is refused for now.
+#[test]
+fn a_sheet_metal_loft_takes_a_perforation_over_its_wall() {
+    let mut s = sections();
+    run(&mut s, "sheet.loft", json!({"sections": ["Square", "Round"]}));
+    let before = volume(&mut s);
+    run(&mut s, "sheet.perforate", json!({"diameter": "4", "pitch": "10", "margin": "3"}));
+    let flat = run(&mut s, "sheet.flat_pattern", json!({}));
+    let n = flat["perforations"][0]["count"].as_u64().unwrap_or(0);
+    assert!(n > 50, "{}", flat["perforations"]);
+    let t = flat["thickness"].as_f64().unwrap_or(0.0);
+    let open = n as f64 * std::f64::consts::PI * 4.0;
+    assert!((before - volume(&mut s) - open * t).abs() < 1e-6 * before, "the open area comes off the volume");
+    let dxf = run(&mut s, "sheet.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    assert!(dxf.contains("PERFORATION"), "the holes are in the DXF");
+    let st = s.model.state();
+    let sheet = st.sheets.last().expect("a sheet");
+    let rings = sheet.perforation_rings(1_000_000);
+    assert_eq!(rings.len() as u64, 2 * n, "every hole drawn on both faces");
+    let body = st.bodies.iter().find(|b| b.name == sheet.body).expect("the loft's body");
+    let mesh = body.mesh();
+    let (lo, hi) =
+        mesh.positions.iter().fold(
+            (solidcraft_geom::Vec3::new(f64::MAX, f64::MAX, f64::MAX), solidcraft_geom::Vec3::new(f64::MIN, f64::MIN, f64::MIN)),
+            |(a, b), p| (a.min(*p), b.max(*p)),
+        );
+    for p in rings.iter().flatten() {
+        assert!(p.x >= lo.x - 0.01 && p.y >= lo.y - 0.01 && p.z >= lo.z - 0.01, "{p:?} below {lo:?}");
+        assert!(p.x <= hi.x + 0.01 && p.y <= hi.y + 0.01 && p.z <= hi.z + 0.01, "{p:?} above {hi:?}");
+    }
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Field"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-10, -10], "p1": [10, 10]}));
+    run(&mut s, "sketch.finish", json!({}));
+    assert!(s.execute("sheet.perforate", &json!({"diameter": "2", "pitch": "6", "sketch": "Field"})).is_err());
+}

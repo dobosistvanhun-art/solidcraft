@@ -1479,6 +1479,8 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
     // the CPU.
     let mut instances = Instances::new(app, &shown, shaded);
     let mut thread_budget = solidcraft_engine::cosmetic_threads::Budget::default();
+    // Perforation outlines: line segments for the whole scene.
+    let mut perforation_budget: usize = solidcraft_engine::cosmetic_threads::MAX_SCENE_SEGMENTS;
     for (b, slots) in shown.into_iter().zip(slots) {
         let faded = body_faded(app, b, &active_bodies);
         let identity = match appearance.keys.get(&b.name).copied() {
@@ -1514,6 +1516,20 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
             let mesh = shown_mesh(app, b, &active_bodies);
             for (a, c) in solidcraft_engine::cosmetic_threads::segments_with_budget(b, &mesh, &st.threads, &mut thread_budget) {
                 sc.line(a.to_f32(), c.to_f32(), slots.edge, 0.85, false);
+            }
+        }
+        // A sheet's perforation field is not cut into the solid: its holes are drawn as outlines
+        // on both faces, where the sheet lies now (folded or flat).
+        if shaded && !faded && resolved.opacity >= 0.999 && perforation_budget > 0 {
+            if let Some(sheet) = st.sheets.iter().find(|sh| sh.body == b.name && !sh.perforations.is_empty()) {
+                for ring in sheet.perforation_rings(perforation_budget) {
+                    for pair in ring.windows(2) {
+                        if let [a, c] = pair {
+                            sc.line(a.to_f32(), c.to_f32(), slots.edge, 0.85, false);
+                            perforation_budget = perforation_budget.saturating_sub(1);
+                        }
+                    }
+                }
             }
         }
         let base = resolved.component.or(resolved.body).unwrap_or(tk.body);

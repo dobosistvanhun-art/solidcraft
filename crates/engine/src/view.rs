@@ -847,6 +847,7 @@ fn build_scene(
         .flatten()
         .collect();
     let mut thread_budget = crate::cosmetic_threads::Budget::default();
+    let mut perforation_budget: usize = crate::cosmetic_threads::MAX_SCENE_SEGMENTS;
     for body in st.bodies.iter().filter(|b| s.body_visible(&b.name)) {
         let selected = selected_occurrences.contains(&body.name) || s.selection.iter().any(|x| matches!(x, Sel::Body { name } if *name == body.name));
         let mesh = body.mesh();
@@ -876,6 +877,15 @@ fn build_scene(
         {
             for (a, b) in crate::cosmetic_threads::segments_with_budget(body, &mesh, &st.threads, &mut thread_budget) {
                 sc.lines.push(SceneLine { points: vec![a, b], color: p.edge, alpha: 1.0, width: 0.85, on_top: false });
+            }
+        }
+        // A sheet's perforation holes, drawn as outlines on both faces (they are not cut into the solid).
+        if s.doc.model_body_opacity(body) >= 0.999 && perforation_budget > 0 {
+            if let Some(sheet) = st.sheets.iter().find(|sh| sh.body == body.name && !sh.perforations.is_empty()) {
+                for ring in sheet.perforation_rings(perforation_budget) {
+                    perforation_budget = perforation_budget.saturating_sub(ring.len().saturating_sub(1));
+                    sc.lines.push(SceneLine { points: ring, color: p.edge, alpha: 1.0, width: 0.85, on_top: false });
+                }
             }
         }
         for (i, e) in mesh.edges.iter().enumerate() {

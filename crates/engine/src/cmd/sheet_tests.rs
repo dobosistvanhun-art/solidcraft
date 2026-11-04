@@ -5795,6 +5795,29 @@ fn perforation_shapes_refuse_impossible_values() {
     }
 }
 
+/// The 3D view draws each hole on both faces of the sheet: a 30 x 20 x 0.8 flat sheet with 40 square holes gives 80
+/// closed rings of 4 sides, every point on the bottom face (z 0) or the top one (z 0.8); a tight budget leaves the
+/// rest out rather than drawing more.
+#[test]
+fn perforation_holes_are_outlined_on_both_faces_for_the_3d_view() {
+    let mut s = Session::default();
+    outline_blank(&mut s, json!([[0, 0], [30, 0], [30, 20], [0, 20]]));
+    run(&mut s, "sheet.perforate", json!({"diameter": "2", "pitch": "4", "margin": "0", "pattern": "square", "shape": "square"}));
+    let st = s.model.state();
+    let sheet = st.sheets.last().expect("a sheet");
+    let rings = sheet.perforation_rings(100_000);
+    assert_eq!(rings.len(), 80);
+    for r in &rings {
+        assert_eq!(r.len(), 5, "4 corners and back to the first: {r:?}");
+        assert!(r.iter().all(|p| (p.z.abs() < 1e-9 || (p.z - 0.8).abs() < 1e-9) && (-1e-9..=30.0 + 1e-9).contains(&p.x)), "{r:?}");
+    }
+    assert!(sheet.perforation_rings(40).len() <= 10, "40 segments hold at most 10 square rings");
+    run(&mut s, "sheet.perforate", json!({"diameter": "1", "pitch": "3", "margin": "0.5"}));
+    let st = s.model.state();
+    let round = st.sheets.last().expect("a sheet").perforation_rings(1_000_000);
+    assert!(round.iter().any(|r| r.len() == 25), "round holes as 24-sided rings while the budget allows");
+}
+
 /// The hole centres `staggered_count` counts, over the box (x0, y0)..(x1, y1).
 fn staggered_centres(x0: f64, y0: f64, x1: f64, y1: f64, d: f64, pitch: f64, margin: f64) -> Vec<(f64, f64)> {
     let (clear, dy) = (d / 2.0 + margin, pitch * 3f64.sqrt() / 2.0);

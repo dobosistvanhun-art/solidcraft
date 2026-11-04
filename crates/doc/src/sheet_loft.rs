@@ -483,6 +483,84 @@ fn folded(ta: &[Vec3], tb: &[Vec3], steps: &[(usize, usize, bool)], t: f64, k: f
 /// Most grid nodes a cut-out search samples.
 const MAX_NODES: usize = 4_000_000;
 
+/// The strip's triangles bucketed on a grid over the flat pattern, so a flat point finds its place
+/// on the neutral surface by the few triangles near it (a perforation's thousands of holes).
+pub struct StripIndex<'a> {
+    strip: &'a [StripTri],
+    origin: Vec2,
+    cell: f64,
+    nx: usize,
+    ny: usize,
+    buckets: Vec<Vec<usize>>,
+}
+
+impl<'a> StripIndex<'a> {
+    pub fn new(strip: &'a [StripTri]) -> StripIndex<'a> {
+        let (mut lo, mut hi) = (Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN));
+        for (_, t2) in strip {
+            for p in t2 {
+                lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+                hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+            }
+        }
+        let empty = StripIndex { strip, origin: Vec2::ZERO, cell: 1.0, nx: 0, ny: 0, buckets: Vec::new() };
+        if strip.is_empty() || !(lo.x <= hi.x && lo.y <= hi.y) || !lo.is_finite() || !hi.is_finite() {
+            return empty;
+        }
+        // About one triangle per cell, at most a million cells.
+        let span = (hi.x - lo.x).max(hi.y - lo.y).max(1e-6);
+        let n = (strip.len() as f64).sqrt().ceil().clamp(1.0, 1000.0);
+        let cell = span / n;
+        let nx = (((hi.x - lo.x) / cell) as usize).saturating_add(1);
+        let ny = (((hi.y - lo.y) / cell) as usize).saturating_add(1);
+        let mut buckets = vec![Vec::new(); nx.saturating_mul(ny)];
+        for (k, (_, t2)) in strip.iter().enumerate() {
+            let (mn, mx) = t2.iter().fold((Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN)), |(a, b), p| {
+                (Vec2::new(a.x.min(p.x), a.y.min(p.y)), Vec2::new(b.x.max(p.x), b.y.max(p.y)))
+            });
+            let i0 = ((mn.x - lo.x) / cell).floor().clamp(0.0, (nx - 1) as f64) as usize;
+            let i1 = ((mx.x - lo.x) / cell).floor().clamp(0.0, (nx - 1) as f64) as usize;
+            let j0 = ((mn.y - lo.y) / cell).floor().clamp(0.0, (ny - 1) as f64) as usize;
+            let j1 = ((mx.y - lo.y) / cell).floor().clamp(0.0, (ny - 1) as f64) as usize;
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    if let Some(b) = buckets.get_mut(j * nx + i) {
+                        b.push(k);
+                    }
+                }
+            }
+        }
+        StripIndex { strip, origin: lo, cell, nx, ny, buckets }
+    }
+
+    /// Where the flat point `p` lies on the neutral surface, and that triangle's unit normal.
+    pub fn lift(&self, p: Vec2) -> Option<(Vec3, Vec3)> {
+        if self.nx == 0 || self.ny == 0 {
+            return None;
+        }
+        let i = ((p.x - self.origin.x) / self.cell).floor();
+        let j = ((p.y - self.origin.y) / self.cell).floor();
+        if !(i >= 0.0 && j >= 0.0 && (i as usize) < self.nx && (j as usize) < self.ny) {
+            return None;
+        }
+        let near = self.buckets.get(j as usize * self.nx + i as usize)?;
+        let tris: Vec<&StripTri> = near.iter().filter_map(|&k| self.strip.get(k)).collect();
+        let q = lift(&tris, p)?;
+        let tri = tris.iter().find(|(_, t2)| {
+            let (a, b, c) = (t2[0], t2[1], t2[2]);
+            let den = (b - a).cross(c - a);
+            den.abs() >= 1e-12 && {
+                let u = (p - a).cross(c - a) / den;
+                let v = (b - a).cross(p - a) / den;
+                u >= -1e-9 && v >= -1e-9 && u + v <= 1.0 + 1e-9
+            }
+        })?;
+        let n = (tri.0[1] - tri.0[0]).cross(tri.0[2] - tri.0[0]);
+        let len = n.len();
+        (len > 1e-12).then(|| (q, n * (1.0 / len)))
+    }
+}
+
 /// Where a flat point lies on the neutral surface (3D), by the strip triangle it falls in.
 fn lift(tris: &[&StripTri], p: Vec2) -> Option<Vec3> {
     for (t3, t2) in tris {

@@ -468,7 +468,7 @@ pub(super) fn rebuild_sheet(st: &mut ModelState, idx: usize) -> Result<()> {
 fn sheet_for(st: &ModelState, body: &Option<crate::BodyName>, pick: Option<Vec3>) -> Result<usize> {
     let i = any_sheet_for(st, body, pick)?;
     if st.sheets.get(i).is_some_and(|s| s.lofted.is_some()) {
-        return Err(DocError::Invalid("not supported yet: flanges, hems, folds and perforations on a sheet metal loft".into()));
+        return Err(DocError::Invalid("not supported yet: flanges, hems and folds on a sheet metal loft".into()));
     }
     Ok(i)
 }
@@ -711,8 +711,9 @@ pub(super) fn sheet_eval(
         }
         FeatureKind::SheetPerforate { diameter, pitch, shape, height, margin, pattern, body, sketch, profiles } => {
             // Without a body name the field goes on the newest sheet, as the command's own body lookup does.
+            // A sheet metal loft takes a field too: its holes are in its flat pattern and lifted onto its wall.
             let i = match body {
-                Some(_) => sheet_for(st, body, None)?,
+                Some(_) => any_sheet_for(st, body, None)?,
                 None => st.sheets.len().checked_sub(1).ok_or_else(|| DocError::Invalid("there is no sheet metal body".into()))?,
             };
             let d = val(vals, diameter, Kind::Length)?;
@@ -756,6 +757,11 @@ pub(super) fn sheet_eval(
             }
             // The outline sketch's profiles, where they lie on the sheet now.
             let outline = match sketch {
+                Some(_) if st.sheets.get(i).is_some_and(|sh| sh.lofted.is_some()) => {
+                    return Err(DocError::Invalid(
+                        "not supported yet: a perforation outline sketch on a sheet metal loft; perforate the whole wall".into(),
+                    ));
+                }
                 Some(sk) => {
                     let ss = st.sketch(sk.0).ok_or_else(|| DocError::Unknown(format!("sketch {sk}")))?;
                     let regions = select_profiles(ss, profiles.as_ref().unwrap_or(&ProfileSel::All))?;

@@ -1755,7 +1755,7 @@ impl SolveApp {
         dim_view::cancel();
         self.tool = None;
         self.home.open = false;
-        if dialogs_sheet::start_export(self, id) || toolbar::start_export(self, id) {
+        if dialogs_sheet::start_export(self, id) || toolbar::start_export(self, id) || toolbar::start_sketch_dxf(self, id) {
             return;
         }
         if id == "component.finish_edit" {

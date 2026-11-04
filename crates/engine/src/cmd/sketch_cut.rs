@@ -9,8 +9,8 @@ use solidcraft_geom::Loop2;
 use solidcraft_io::{DxfEntity, DxfLayer, DxfShape, loop_shapes, write_dxf_drawing};
 use solidcraft_sketch::{CurveKind, Sketch};
 
+use super::CommandSpec;
 use super::sketch_store;
-use super::{CommandSpec, in_sketch};
 use crate::params::{bad, str_};
 use crate::schema::sketch_cut::{CutDxf, CutDxfParams};
 use crate::schema::{TypedContract, output_schema_for};
@@ -25,12 +25,11 @@ pub const OPEN_LAYER: &str = "OPEN";
 
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("sketch.export_cut_dxf", "Save Cut DXF", crate::checked!("sketch.export_cut_dxf", cut_dxf_cmd))
     .icon("sketch_dxf")
-    .enabled(in_sketch)
     .noundo()
     .contract(&CUT_DXF_CONTRACT)
     .output(output_schema_for::<CutDxf>)
     .params(
-        "sketch?: id|name (default active); path?: file to write (else the DXF text is returned); allow_open?: bool (default false: open ends or curves in no closed contour are an error). Each closed contour once: part edges (inside an even number of other contours) on layer OUTER, holes on INNER, open curves on OPEN; construction curves are left out. Returns outer, inner, open_ends, open_curves",
+        "sketch?: id|name (default: the one being edited, else the newest); path?: file to write (else the DXF text is returned); allow_open?: bool (default false: open ends or curves in no closed contour are an error). Each closed contour once: part edges (inside an even number of other contours) on layer OUTER, holes on INNER, open curves on OPEN; construction curves are left out. Returns outer, inner, open_ends, open_curves",
     )];
 
 /// The contour's curve ids, sorted, so a loop that is one region's hole and another's outer
@@ -65,7 +64,7 @@ fn open_shapes(sk: &Sketch, ci: usize) -> Vec<DxfShape> {
 fn cut_dxf_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.export_cut_dxf";
     let allow_open = p.get("allow_open").and_then(Value::as_bool).unwrap_or(false);
-    let id = sketch_store::target(s, p, cmd)?;
+    let id = sketch_store::target_or_newest(s, p, cmd)?;
     let st = s.model.state();
     let ss = st.sketch(id).ok_or_else(|| EngineError::Other("the sketch has not been evaluated".into()))?;
     let sk = &ss.sketch;

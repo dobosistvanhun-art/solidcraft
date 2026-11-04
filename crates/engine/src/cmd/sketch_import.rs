@@ -28,7 +28,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("path | text: SVG or DXF (by `format`: \"svg\" | \"dxf\", default by the file name, else SVG); returns min, max, width and height in the file's own size"),
     CommandSpec::new("sketch.export_dxf", "Save As DXF", export_dxf).icon("sketch_dxf")
         .noundo()
-        .params("sketch?: id|name (default active); path?: file to write (else the DXF text is returned)"),
+        .params("sketch?: id|name (default: the one being edited, else the newest); path?: file to write (else the DXF text is returned)"),
 ];
 
 /// The sketch import command for a drawing file name, regardless of extension case.
@@ -291,7 +291,7 @@ fn insert_svg(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn export_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.export_dxf";
-    let id = sketch_store::target(s, p, cmd)?;
+    let id = sketch_store::target_or_newest(s, p, cmd)?;
     let st = s.model.state();
     let ss = st.sketch(id).ok_or_else(|| EngineError::Other("that sketch is not evaluated".into()))?;
     let sk = &ss.sketch;

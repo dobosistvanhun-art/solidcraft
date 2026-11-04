@@ -85,3 +85,17 @@ fn a_cut_dxf_reads_back_as_the_same_contours() {
     let geom = solidcraft_io::read_dxf(&dxf).unwrap_or_default();
     assert!(geom.len() >= 3, "{geom:?}");
 }
+
+/// After Finish Sketch nothing is being edited: the save takes the design's newest sketch, as the Cutting
+/// tab's button does; a design without a sketch is told so.
+#[test]
+fn a_finished_sketch_is_still_saved_as_the_newest_one() {
+    let mut s = Session::default();
+    assert!(s.execute("sketch.export_cut_dxf", &json!({})).is_err(), "no sketch at all");
+    plate(&mut s);
+    run(&mut s, "sketch.finish", json!({}));
+    let r = run(&mut s, "sketch.export_cut_dxf", json!({}));
+    assert_eq!((r["outer"].as_u64(), r["inner"].as_u64()), (Some(2), Some(1)), "{r}");
+    let plain = run(&mut s, "sketch.export_dxf", json!({}));
+    assert!(plain["dxf"].as_str().is_some_and(|d| d.contains("CIRCLE")), "Save As DXF takes it too: {plain}");
+}

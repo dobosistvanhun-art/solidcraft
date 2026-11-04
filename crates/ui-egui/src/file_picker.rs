@@ -287,6 +287,42 @@ mod tests {
         }
     }
 
+    /// The Cutting tab's DXF buttons ask where to save, also after Finish Sketch (the newest sketch is
+    /// saved); a cut DXF the command refuses (an open line) says why and asks for no file.
+    #[test]
+    fn sketch_dxf_buttons_ask_where_to_save_the_newest_sketch() {
+        for command in ["sketch.export_cut_dxf", "sketch.export_dxf"] {
+            let mut h = crate::scenario::Harness::new();
+            for (id, params) in [
+                ("sketch.create", json!({"plane": "XY", "name": "Plate"})),
+                ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 60]})),
+                ("sketch.circle.center", json!({"center": [30, 30], "radius": 10})),
+                ("sketch.finish", json!({})),
+            ] {
+                h.app.run(id, params).unwrap();
+            }
+            let answer = picker(&mut h.app, true);
+            h.app.start(command);
+            h.frames(2);
+            assert!(h.app.file_picker_busy(), "{command} must open the save picker");
+            let path = h.dir.join("plate.dxf");
+            finish(&mut h.app, &answer, Some(path.to_string_lossy().into_owned()));
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(text.contains("CIRCLE"), "{command} wrote the sketch: {text:.200}");
+            if command == "sketch.export_cut_dxf" {
+                assert!(text.contains("OUTER") && text.contains("INNER"), "the cut layers");
+            }
+        }
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
+        h.app.run("sketch.line", json!({"points": [[0, 0], [40, 10]], "infer": false})).unwrap();
+        let _answer = picker(&mut h.app, true);
+        h.app.start("sketch.export_cut_dxf");
+        h.frames(2);
+        assert!(!h.app.file_picker_busy(), "an open line is refused before any file is asked for");
+        assert!(h.app.status.as_ref().is_some_and(|(_, _, error)| *error), "and the refusal is shown");
+    }
+
     /// Saving the design says where it went, as an export does (#8693).
     #[test]
     fn saving_the_design_says_where_it_went() {

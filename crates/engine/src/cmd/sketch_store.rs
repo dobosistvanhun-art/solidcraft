@@ -33,6 +33,20 @@ pub(super) fn target(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
     s.active_sketch.ok_or_else(|| EngineError::Other("no sketch is being edited".into()))
 }
 
+/// The sketch a save acts on: as [`target`], or with none named or being edited the design's
+/// newest sketch, so a drawing finished with Finish Sketch can still be saved.
+pub(super) fn target_or_newest(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
+    if p.get("sketch").is_some_and(|v| !v.is_null()) || s.active_sketch.is_some() {
+        return target(s, p, cmd);
+    }
+    newest(&s.doc).ok_or_else(|| EngineError::Other("the design has no sketch to save".into()))
+}
+
+/// The design's newest sketch, if it has one.
+pub(super) fn newest(doc: &Document) -> Option<u64> {
+    doc.features.iter().rev().find(|f| matches!(f.kind, FeatureKind::Sketch { .. })).map(|f| f.id)
+}
+
 /// The sketch being edited, if any; each command keeps its own refusal when there is none.
 pub(super) fn active(s: &Session) -> Option<u64> {
     s.active_sketch

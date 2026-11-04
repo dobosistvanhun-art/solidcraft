@@ -866,6 +866,38 @@ pub(crate) fn start_export(app: &mut SolveApp, id: &str) -> bool {
     true
 }
 
+/// The sketch DXF saves (Save As DXF, Save Cut DXF), started from the ribbon or command search,
+/// ask where to save, for the sketch being edited or else the design's newest one. A drawing the
+/// command refuses (a cut DXF with open ends) reports why before any file is asked for.
+/// `false`: `id` is no such command.
+pub(crate) fn start_sketch_dxf(app: &mut SolveApp, id: &str) -> bool {
+    if !matches!(id, "sketch.export_dxf" | "sketch.export_cut_dxf") {
+        return false;
+    }
+    let sketch = app.session.active_sketch.or_else(|| {
+        app.session.doc.features.iter().rev().find(|f| matches!(f.kind, solidcraft_engine::doc::FeatureKind::Sketch { .. })).map(|f| f.id)
+    });
+    let Some(sketch) = sketch else {
+        // The command's own "no sketch" error, without a picker.
+        let _ = app.run(id, json!({}));
+        return true;
+    };
+    if app.session.execute(id, &json!({"sketch": sketch})).is_err() {
+        let _ = app.run(id, json!({"sketch": sketch}));
+        return true;
+    }
+    let sketch_name = app.session.doc.feature(sketch).map(|f| f.name.clone()).unwrap_or_else(|| "sketch".into());
+    let name = format!("{}-{sketch_name}.dxf", app.session.doc.name);
+    let command = id.to_string();
+    app.pick_save(&name, &["dxf"], move |app, path| {
+        let Some(path) = path else { return };
+        if app.run(&command, json!({"sketch": sketch, "path": path})).is_ok() {
+            app.set_status(format!("Exported {path}"), false);
+        }
+    });
+    true
+}
+
 /// Export to a file with extension `ext`, in `format` when the extension alone doesn't name it.
 fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
     let name = format!("{}.{ext}", app.session.doc.name);

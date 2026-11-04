@@ -487,6 +487,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("drawing.export_pdf", "Drawing PDF"),
     ("drawing.view.flat", "Flat Pattern"),
     ("drawing.view.projected", "Projected"),
+    ("nest.export_dxf", "Nest DXF"),
     ("inspect.accessibility", "Access"),
     ("inspect.center_of_mass", "Mass Center"),
     ("inspect.curvature_comb", "Curv. Comb"),

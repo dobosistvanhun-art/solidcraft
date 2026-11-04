@@ -25,6 +25,7 @@
     "ui.nest_tick_parts": "حدد الأجزاء المراد قطعها في اللوحة",
     "ui.nest_utilisation": "الاستغلال",
     "ui.nest_waste": "الهدر",
+    "ui.ribbon_nest_dxf": "DXF الرص",
     "ui.tab_nesting": "الرص"
   },
   "de": {
@@ -53,6 +54,7 @@
     "ui.nest_tick_parts": "Haken Sie die zu schneidenden Teile im Feld an",
     "ui.nest_utilisation": "Ausnutzung",
     "ui.nest_waste": "Verschnitt",
+    "ui.ribbon_nest_dxf": "Verschachtelungs-DXF",
     "ui.tab_nesting": "Verschachtelung"
   },
   "en": {
@@ -81,6 +83,7 @@
     "ui.nest_tick_parts": "Tick the parts to cut in the panel",
     "ui.nest_utilisation": "Utilisation",
     "ui.nest_waste": "Waste",
+    "ui.ribbon_nest_dxf": "Nest DXF",
     "ui.tab_nesting": "Nesting"
   },
   "he": {
@@ -109,6 +112,7 @@
     "ui.nest_tick_parts": "סמנו בחלונית את החלקים לחיתוך",
     "ui.nest_utilisation": "ניצולת",
     "ui.nest_waste": "פחת",
+    "ui.ribbon_nest_dxf": "DXF שיבוץ",
     "ui.tab_nesting": "שיבוץ"
   },
   "hu": {
@@ -137,6 +141,7 @@
     "ui.nest_tick_parts": "Jelölje be a panelen a vágandó alkatrészeket",
     "ui.nest_utilisation": "Anyagkihasználás",
     "ui.nest_waste": "Hulladék",
+    "ui.ribbon_nest_dxf": "Nesting DXF",
     "ui.tab_nesting": "Nesting"
   },
   "ja": {
@@ -165,6 +170,7 @@
     "ui.nest_tick_parts": "パネルで切断する部品にチェックを入れてください",
     "ui.nest_utilisation": "歩留まり",
     "ui.nest_waste": "端材",
+    "ui.ribbon_nest_dxf": "ネスト DXF",
     "ui.tab_nesting": "ネスティング"
   },
   "vi": {
@@ -193,6 +199,7 @@
     "ui.nest_tick_parts": "Đánh dấu các chi tiết cần cắt trong bảng",
     "ui.nest_utilisation": "Hiệu suất vật liệu",
     "ui.nest_waste": "Phế liệu",
+    "ui.ribbon_nest_dxf": "DXF xếp hình",
     "ui.tab_nesting": "Xếp hình"
   },
   "zh": {
@@ -221,6 +228,7 @@
     "ui.nest_tick_parts": "在面板中勾选要切割的零件",
     "ui.nest_utilisation": "材料利用率",
     "ui.nest_waste": "废料",
+    "ui.ribbon_nest_dxf": "排样 DXF",
     "ui.tab_nesting": "排样"
   }
 }

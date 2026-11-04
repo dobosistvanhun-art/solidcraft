@@ -41,7 +41,7 @@ pub static COMMANDS: &[CommandSpec] = &[
          kept with the joint and worked out again whenever the design changes, so the joint follows the parameters it names; a joint whose \
          expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
-    CommandSpec::new("joint.constrain", "Constrain", constrain::constrain)
+    CommandSpec::new("joint.constrain", "Constrain", crate::checked!("joint.constrain", constrain::constrain))
         .at("SOLID", "ASSEMBLE")
         .icon("joint")
         .contract(&CONSTRAIN_CONTRACT)

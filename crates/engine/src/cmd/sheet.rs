@@ -497,6 +497,14 @@ pub(crate) fn perforation_pattern(t: &str) -> std::result::Result<&str, &'static
     }
 }
 
+/// A perforation's `shape`.
+pub(crate) fn perforation_shape(t: &str) -> std::result::Result<&str, &'static str> {
+    match solidcraft_doc::sheet::HoleShape::parse(t) {
+        Some(_) => Ok(t),
+        None => Err("`shape` is \"round\" (default), \"square\" or \"rectangle\""),
+    }
+}
+
 fn perforate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sheet.perforate";
     let diameter = req_expr(cmd, p, "diameter")?;
@@ -508,15 +516,7 @@ fn perforate(s: &mut Session, p: &Value) -> Result<Value> {
         check_expr(s, m, Kind::Length, cmd, "margin")?;
     }
     let pattern = str_(p, "pattern").map(|t| perforation_pattern(t).map(str::to_string).map_err(|why| bad(cmd, why))).transpose()?;
-    let shape = match str_(p, "shape") {
-        None => None,
-        Some(t) => Some(
-            solidcraft_doc::sheet::HoleShape::parse(t)
-                .ok_or_else(|| bad(cmd, "`shape` is \"round\" (default), \"square\" or \"rectangle\""))?
-                .as_str()
-                .to_string(),
-        ),
-    };
+    let shape = str_(p, "shape").map(|t| perforation_shape(t).map(str::to_string).map_err(|why| bad(cmd, why))).transpose()?;
     let height = expr(p, "height");
     match (shape.as_deref(), &height) {
         (Some("rectangle"), None) => return Err(bad(cmd, "a rectangular hole needs `height`")),

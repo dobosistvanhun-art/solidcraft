@@ -314,13 +314,25 @@ fn blanks() -> String {
     format!("[{class}]*")
 }
 
-/// A perforation's `shape`: round, square or rectangle.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum PerforationShape {
-    Round,
-    Square,
-    Rectangle,
+/// A perforation's `shape` (read by `sheet::perforation_shape`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PerforationShape(pub String);
+
+impl<'de> Deserialize<'de> for PerforationShape {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        let t = v.as_str().unwrap_or_default();
+        crate::cmd::perforation_shape(t).map(|t| PerforationShape(t.to_string())).map_err(|why| D::Error::custom(whole(why)))
+    }
+}
+
+impl JsonSchema for PerforationShape {
+    fn schema_name() -> Cow<'static, str> {
+        "PerforationShape".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"description": "round, square (side = diameter) or rectangle (diameter wide, height high), lower case.", "enum": ["round", "square", "rectangle"]})
+    }
 }
 
 /// A perforation's `pattern` (read by `sheet::perforation_pattern`).

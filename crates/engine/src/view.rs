@@ -880,12 +880,13 @@ fn build_scene(
             }
         }
         // A sheet's perforation holes, drawn as outlines on both faces (they are not cut into the solid).
-        if s.doc.model_body_opacity(body) >= 0.999 && perforation_budget > 0 {
-            if let Some(sheet) = st.sheets.iter().find(|sh| sh.body == body.name && !sh.perforations.is_empty()) {
-                for ring in sheet.perforation_rings(perforation_budget) {
-                    perforation_budget = perforation_budget.saturating_sub(ring.len().saturating_sub(1));
-                    sc.lines.push(SceneLine { points: ring, color: p.edge, alpha: 1.0, width: 0.85, on_top: false });
-                }
+        if s.doc.model_body_opacity(body) >= 0.999
+            && perforation_budget > 0
+            && let Some(sheet) = st.sheets.iter().find(|sh| sh.body == body.name && !sh.perforations.is_empty())
+        {
+            for ring in sheet.perforation_rings(perforation_budget) {
+                perforation_budget = perforation_budget.saturating_sub(ring.len().saturating_sub(1));
+                sc.lines.push(SceneLine { points: ring, color: p.edge, alpha: 1.0, width: 0.85, on_top: false });
             }
         }
         for (i, e) in mesh.edges.iter().enumerate() {

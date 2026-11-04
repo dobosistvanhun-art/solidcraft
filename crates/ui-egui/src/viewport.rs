@@ -1520,14 +1520,17 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         }
         // A sheet's perforation field is not cut into the solid: its holes are drawn as outlines
         // on both faces, where the sheet lies now (folded or flat).
-        if shaded && !faded && resolved.opacity >= 0.999 && perforation_budget > 0 {
-            if let Some(sheet) = st.sheets.iter().find(|sh| sh.body == b.name && !sh.perforations.is_empty()) {
-                for ring in sheet.perforation_rings(perforation_budget) {
-                    for pair in ring.windows(2) {
-                        if let [a, c] = pair {
-                            sc.line(a.to_f32(), c.to_f32(), slots.edge, 0.85, false);
-                            perforation_budget = perforation_budget.saturating_sub(1);
-                        }
+        if shaded
+            && !faded
+            && resolved.opacity >= 0.999
+            && perforation_budget > 0
+            && let Some(sheet) = st.sheets.iter().find(|sh| sh.body == b.name && !sh.perforations.is_empty())
+        {
+            for ring in sheet.perforation_rings(perforation_budget) {
+                for pair in ring.windows(2) {
+                    if let [a, c] = pair {
+                        sc.line(a.to_f32(), c.to_f32(), slots.edge, 0.85, false);
+                        perforation_budget = perforation_budget.saturating_sub(1);
                     }
                 }
             }

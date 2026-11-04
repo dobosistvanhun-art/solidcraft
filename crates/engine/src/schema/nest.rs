@@ -81,6 +81,9 @@ pub struct NestRunParams {
     pub variant: Option<usize>,
     #[serde(default)]
     pub quality: Option<NestQualityParam>,
+    /// The `layouts` a run answered, kept as they are (the first in use) instead of running.
+    #[serde(default)]
+    pub apply: Option<Value>,
 }
 
 /// Move, turn, lock or remove one placed copy by hand. The reply says whether it now comes

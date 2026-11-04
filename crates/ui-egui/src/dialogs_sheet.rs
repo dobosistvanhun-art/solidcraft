@@ -1443,7 +1443,7 @@ impl FlatView {
 
 /// The Create Flat Pattern dialog is open, so the viewport shows its 2D view.
 pub(crate) fn flat_active(app: &SolveApp) -> bool {
-    matches!(app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Sheet(Sm::FlatPattern { .. }) | Kind::Drawing(_)))
+    matches!(app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Sheet(Sm::FlatPattern { .. }) | Kind::Drawing(_) | Kind::Nest(_)))
 }
 
 /// Camera input for the flat pattern: the shared navigation without orbit, driving the flat view

@@ -101,6 +101,7 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
             crate::dialogs_assembly::Asm::Interference { .. } => Some("inspect.interference"),
         },
         Kind::Drawing(_) => Some("drawing.create"),
+        Kind::Nest(_) => Some("nest.setup"),
         _ => kind.simple_metadata().map(|(command, _)| command),
     }
 }
@@ -975,6 +976,7 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         }
         Kind::Surface(k) => enter |= crate::dialogs_surface::rows(ui, k),
         Kind::Drawing(k) => enter |= crate::dialogs_drawing::rows(app, ui, k),
+        Kind::Nest(k) => enter |= crate::dialogs_nest::rows(app, ui, k),
         Kind::Sheet(k) => enter |= crate::dialogs_sheet::rows(app, ui, k, &mut d.inputs),
         Kind::Plastic(k) => enter |= crate::dialogs_plastic::rows(app, ui, k, &d.inputs),
         Kind::Frame(k) => enter |= crate::dialogs_frame::rows(app, ui, k, &d.inputs),

@@ -388,6 +388,8 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: CUT_TAB, panel: "DIMENSION", promoted: 1, ids: &["sketch.dimension"] },
     Section { tab: CUT_TAB, panel: "CHECK", promoted: 2, ids: &["sketch.loose_ends", "sketch.loose_ends.tie"] },
     Section { tab: CUT_TAB, panel: "DXF", promoted: 2, ids: &["sketch.insert_dxf", "sketch.export_cut_dxf", "sketch.export_dxf"] },
+    Section { tab: NEST_TAB, panel: "NESTING", promoted: 2, ids: &["nest.setup", "nest.run"] },
+    Section { tab: NEST_TAB, panel: "OUTPUT", promoted: 1, ids: &["nest.export_dxf"] },
 ];
 
 // Migration data only: Render commands remain registered, but have no live ribbon sections.
@@ -704,7 +706,11 @@ pub const SPECIALTY_TABS: &[SpecialtyTab] = &[
     SpecialtyTab { tab: "WELDMENTS", icon: "frame_member" },
     SpecialtyTab { tab: "DRAWING", icon: "dimension" },
     SpecialtyTab { tab: CUT_TAB, icon: "sketch_dxf" },
+    SpecialtyTab { tab: NEST_TAB, icon: "flat" },
 ];
+
+/// The nesting tab: parts laid out on material sheets for cutting.
+pub const NEST_TAB: &str = "NESTING";
 
 /// The flat cutting-drawing tab: it keeps the ribbon while its own sketch is open, so drawing,
 /// checking and saving the DXF stay on one tab.
@@ -1047,7 +1053,7 @@ mod tests {
     fn contextual_tabs_follow_the_active_body_and_allow_other_tabs() {
         let mut h = crate::scenario::Harness::new();
         let mut fresh = TABS.to_vec();
-        fresh.extend(["SHEET METAL", "WELDMENTS", "DRAWING", CUT_TAB]);
+        fresh.extend(["SHEET METAL", "WELDMENTS", "DRAWING", CUT_TAB, NEST_TAB]);
         assert_eq!(visible_tabs(&h.app), fresh, "SHEET METAL, WELDMENTS and DRAWING are reachable before any sheet body, member or drawing exists");
         h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
         assert_eq!(h.app.ui.tab, "SKETCH");
@@ -1198,7 +1204,7 @@ mod tests {
         let rows: Vec<_> = crate::toolbar_custom::toolbar_items(&h.app).into_iter().filter(|i| i.id == "ui.toolbarTab").collect();
         assert_eq!(
             rows.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
-            ["Model", "Surface", "Assemble", "Insert", "Inspect", "Manage", "View", "Sheet Metal", "Weldments", "Drawing", "Cutting"]
+            ["Model", "Surface", "Assemble", "Insert", "Inspect", "Manage", "View", "Sheet Metal", "Weldments", "Drawing", "Cutting", "Nesting"]
         );
         assert!(rows.iter().all(|i| i.shortcut == "current"), "all existing tabs stay on by default");
         h.step(&json!({"click":{"handle":"ribbon:add_tab"}})).unwrap();

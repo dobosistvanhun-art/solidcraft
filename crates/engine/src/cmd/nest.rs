@@ -47,7 +47,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("pattern_rect")
         .contract(&RUN)
         .output(output_schema_for::<NestReply>)
-        .params("variant?: index of the last run's layouts to use instead of running; quality?: fast|normal|precise. Lays the parts out (locked copies stay), keeping the three best layouts as variants"),
+        .params("variant?: index of the last run's layouts to use instead of running; quality?: fast|normal|precise; apply?: the `layouts` a run answered (kept as they are). Lays the parts out (locked copies stay), keeping the three best layouts as variants"),
     CommandSpec::new("nest.setup", "Nesting", crate::checked!("nest.setup", setup))
         .icon("flat")
         .contract(&SETUP)
@@ -194,6 +194,27 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut().nesting = Some(j);
         return info(s, &json!({"brief": true}));
     }
+    // Layouts a run on a copy of the design found (the window runs the layout off its thread):
+    // kept as they are, the first in use.
+    if let Some(found) = p.get("apply") {
+        let layouts: Vec<solidcraft_doc::nesting::NestLayout> =
+            serde_json::from_value(found.clone()).map_err(|e| bad(cmd, format!("`apply` must be the layouts a run gave: {e}")))?;
+        if layouts.is_empty() || layouts.len() > 10 {
+            return Err(bad(cmd, "`apply` takes 1…10 layouts"));
+        }
+        let parts = j.parts.len();
+        if layouts
+            .iter()
+            .flat_map(|l| &l.placements)
+            .any(|pl| pl.part >= parts || pl.sheet >= nest::MAX_SHEETS || !(pl.x.is_finite() && pl.y.is_finite() && pl.angle.is_finite()))
+        {
+            return Err(bad(cmd, "`apply` names a part or a sheet the job has not got"));
+        }
+        j.layout = layouts.first().cloned().unwrap_or_default();
+        j.variants = layouts;
+        s.doc_mut().nesting = Some(j);
+        return info(s, &json!({"brief": true}));
+    }
     if let Some(q) = quality(str_(p, "quality"), cmd)? {
         j.quality = q;
     }
@@ -202,10 +223,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let shapes = usable(s, &j).map_err(|e| bad(cmd, e))?;
     let found = nest::run(&j, &shapes).map_err(|e| bad(cmd, e))?;
+    let layouts = serde_json::to_value(&found.layouts).map_err(|e| bad(cmd, e.to_string()))?;
     j.layout = found.layouts.first().cloned().unwrap_or_default();
     j.variants = found.layouts;
     s.doc_mut().nesting = Some(j);
-    info(s, &json!({"brief": true}))
+    let mut out = info(s, &json!({"brief": true}))?;
+    out["layouts"] = layouts;
+    Ok(out)
 }
 
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {

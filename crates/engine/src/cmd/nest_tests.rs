@@ -38,7 +38,11 @@ fn clean(r: &Value) {
 fn twenty_copies_of_one_part_go_on_one_sheet() {
     let mut s = Session::default();
     rect(&mut s, "Plate", 100.0, 50.0);
-    run(&mut s, "nest.setup", json!({"parts": [{"sketch": "Plate", "count": 20}], "sheet": {"width": 1220, "height": 610, "margin": 10}, "gap": 4, "quality": "fast"}));
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"parts": [{"sketch": "Plate", "count": 20}], "sheet": {"width": 1220, "height": 610, "margin": 10}, "gap": 4, "quality": "fast"}),
+    );
     let r = run(&mut s, "nest.run", json!({}));
     clean(&r);
     assert_eq!(r["stats"]["placed"], 20);
@@ -55,7 +59,11 @@ fn mixed_parts_spread_over_several_sheets() {
     let mut s = Session::default();
     rect(&mut s, "Big", 500.0, 500.0);
     rect(&mut s, "Small", 60.0, 40.0);
-    run(&mut s, "nest.setup", json!({"parts": [{"sketch": "Big", "count": 10}, {"sketch": "Small", "count": 12}], "sheet": {"width": 1220, "height": 610, "margin": 5}, "gap": 5, "quality": "fast"}));
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"parts": [{"sketch": "Big", "count": 10}, {"sketch": "Small", "count": 12}], "sheet": {"width": 1220, "height": 610, "margin": 5}, "gap": 5, "quality": "fast"}),
+    );
     let r = run(&mut s, "nest.run", json!({}));
     clean(&r);
     assert_eq!(r["stats"]["sheets"], 5, "{}", r["stats"]);
@@ -69,7 +77,11 @@ fn a_part_goes_into_another_parts_notch() {
     let mut s = Session::default();
     ell(&mut s, "Ell");
     rect(&mut s, "Square", 50.0, 50.0);
-    run(&mut s, "nest.setup", json!({"parts": [{"sketch": "Ell", "fixed_angle": true}, {"sketch": "Square", "fixed_angle": true}], "sheet": {"width": 102, "height": 102, "margin": 0}, "gap": 2, "quality": "precise"}));
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"parts": [{"sketch": "Ell", "fixed_angle": true}, {"sketch": "Square", "fixed_angle": true}], "sheet": {"width": 102, "height": 102, "margin": 0}, "gap": 2, "quality": "precise"}),
+    );
     let r = run(&mut s, "nest.run", json!({}));
     clean(&r);
     assert_eq!(r["stats"]["sheets"], 1, "{}", r["stats"]);
@@ -80,7 +92,11 @@ fn a_part_goes_into_another_parts_notch() {
 fn a_part_is_turned_to_fit() {
     let mut s = Session::default();
     rect(&mut s, "Strip", 500.0, 20.0);
-    run(&mut s, "nest.setup", json!({"parts": [{"sketch": "Strip", "count": 3}], "sheet": {"width": 300, "height": 600, "margin": 5}, "gap": 3, "quality": "normal"}));
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"parts": [{"sketch": "Strip", "count": 3}], "sheet": {"width": 300, "height": 600, "margin": 5}, "gap": 3, "quality": "normal"}),
+    );
     let r = run(&mut s, "nest.run", json!({}));
     clean(&r);
     let angles: Vec<f64> = r["placements"].as_array().into_iter().flatten().filter_map(|p| p["angle"].as_f64()).collect();
@@ -101,13 +117,18 @@ fn holes_go_to_the_dxf_where_the_part_lies() {
     run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [80, 60]}));
     run(&mut s, "sketch.circle.center", json!({"center": [40, 30], "radius": 10}));
     run(&mut s, "sketch.finish", json!({}));
-    run(&mut s, "nest.setup", json!({"parts": [{"sketch": "Ring", "count": 2, "fixed_angle": true}], "sheet": {"width": 400, "height": 200, "margin": 10}, "gap": 5, "quality": "fast"}));
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"parts": [{"sketch": "Ring", "count": 2, "fixed_angle": true}], "sheet": {"width": 400, "height": 200, "margin": 10}, "gap": 5, "quality": "fast"}),
+    );
     let r = run(&mut s, "nest.run", json!({}));
     clean(&r);
     let dxf = run(&mut s, "nest.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
     assert!(dxf.contains("OUTER") && dxf.contains("INNER") && dxf.contains("$INSUNITS"), "layers and mm");
     let geom = solidcraft_io::read_dxf(&dxf).unwrap_or_default();
     assert!(geom.len() >= 4, "two outlines and two holes: {geom:?}");
+}
 
 /// Hand edits: a copy moved onto another is reported as colliding; locked, it stays where it
 /// was put when the layout runs again, and the others make room for it.
@@ -115,7 +136,11 @@ fn holes_go_to_the_dxf_where_the_part_lies() {
 fn a_moved_copy_is_checked_and_a_locked_one_stays() {
     let mut s = Session::default();
     rect(&mut s, "Plate", 100.0, 50.0);
-    run(&mut s, "nest.setup", json!({"parts": [{"sketch": "Plate", "count": 4}], "sheet": {"width": 600, "height": 300, "margin": 5}, "gap": 4, "quality": "fast"}));
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"parts": [{"sketch": "Plate", "count": 4}], "sheet": {"width": 600, "height": 300, "margin": 5}, "gap": 4, "quality": "fast"}),
+    );
     let r = run(&mut s, "nest.run", json!({}));
     clean(&r);
     let first = r["placements"][0].clone();

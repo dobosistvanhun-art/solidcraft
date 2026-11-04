@@ -61,7 +61,8 @@ pub fn shape(st: &ModelState, part: &NestPart) -> Result<Shape, String> {
         PartSource::Sketch(id) => {
             let ss = st.sketch(*id).ok_or_else(|| format!("sketch {id} is not in the design"))?;
             let holes: std::collections::HashSet<Vec<String>> = ss.profiles.iter().flat_map(|p| p.hole_curves.iter().map(|h| loop_key(h))).collect();
-            let regions: Vec<Region2> = ss.profiles.iter().filter(|p| !holes.contains(&loop_key(&p.outer_curves))).map(|p| p.region.clone()).collect();
+            let regions: Vec<Region2> =
+                ss.profiles.iter().filter(|p| !holes.contains(&loop_key(&p.outer_curves))).map(|p| p.region.clone()).collect();
             (regions, Vec::new())
         }
         PartSource::SheetBody(name) => {
@@ -92,11 +93,13 @@ pub fn shape(st: &ModelState, part: &NestPart) -> Result<Shape, String> {
         return Err("its contours have no area".into());
     }
     let c = (lo + hi) * 0.5;
-    let regions: Vec<Region2> = regions.iter().map(|r| Region2 { outer: shifted(&r.outer, -c), holes: r.holes.iter().map(|h| shifted(h, -c)).collect() }).collect();
+    let regions: Vec<Region2> =
+        regions.iter().map(|r| Region2 { outer: shifted(&r.outer, -c), holes: r.holes.iter().map(|h| shifted(h, -c)).collect() }).collect();
     let extra_holes: Vec<Loop2> = extra.iter().map(|h| shifted(h, -c)).collect();
     let outlines = outlines0.iter().map(|p| p.iter().map(|q| *q - c).collect()).collect();
     let length = |l: &Loop2| l.segs.iter().map(|s| s.length()).sum::<f64>();
-    let cut_length = regions.iter().map(|r| length(&r.outer) + r.holes.iter().map(length).sum::<f64>()).sum::<f64>() + extra_holes.iter().map(length).sum::<f64>();
+    let cut_length =
+        regions.iter().map(|r| length(&r.outer) + r.holes.iter().map(length).sum::<f64>()).sum::<f64>() + extra_holes.iter().map(length).sum::<f64>();
     let area = regions.iter().map(Region2::area).sum::<f64>() - extra_holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
     Ok(Shape { regions, extra_holes, outlines, area, cut_length, half: (hi - lo) * 0.5 })
 }

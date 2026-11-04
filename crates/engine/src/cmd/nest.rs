@@ -72,7 +72,8 @@ fn length(p: &Value, key: &str, cmd: &str, positive: bool) -> Result<Option<f64>
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(_) => {
-            let v = num(p, key).filter(|v| v.is_finite() && v.abs() <= 100_000.0).ok_or_else(|| bad(cmd, format!("`{key}` must be a number of mm")))?;
+            let v =
+                num(p, key).filter(|v| v.is_finite() && v.abs() <= 100_000.0).ok_or_else(|| bad(cmd, format!("`{key}` must be a number of mm")))?;
             if positive && !(v > 0.0) || !positive && v < 0.0 {
                 return Err(bad(cmd, format!("`{key}` must be {} (mm)", if positive { "more than 0" } else { "0 or more" })));
             }
@@ -151,7 +152,10 @@ fn setup(s: &mut Session, p: &Value) -> Result<Value> {
             };
             let count = match v.get("count") {
                 None => 1,
-                Some(c) => c.as_u64().filter(|c| (1..=nest::MAX_COPIES as u64).contains(c)).ok_or_else(|| bad(cmd, format!("part {i}: `count` is 1…{}", nest::MAX_COPIES)))? as u32,
+                Some(c) => c
+                    .as_u64()
+                    .filter(|c| (1..=nest::MAX_COPIES as u64).contains(c))
+                    .ok_or_else(|| bad(cmd, format!("part {i}: `count` is 1…{}", nest::MAX_COPIES)))? as u32,
             };
             parts.push(NestPart { source, count, grain: bool_(v, "grain").unwrap_or(false), fixed_angle: bool_(v, "fixed_angle").unwrap_or(false) });
         }
@@ -219,7 +223,9 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let coord = |key: &str| -> Result<Option<f64>> {
         match p.get(key) {
             None | Some(Value::Null) => Ok(None),
-            Some(_) => num(p, key).filter(|v| v.is_finite() && v.abs() <= 1_000_000.0).map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be a number"))),
+            Some(_) => {
+                num(p, key).filter(|v| v.is_finite() && v.abs() <= 1_000_000.0).map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be a number")))
+            }
         }
     };
     let (x, y, angle) = (coord("x")?, coord("y")?, coord("angle")?);
@@ -248,7 +254,18 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = info(s, &json!({"brief": true}))?;
     let shapes: Vec<Shape> = shapes(s, &j).into_iter().filter_map(std::result::Result::ok).collect();
     if shapes.len() == j.parts.len() {
-        let hits: Vec<usize> = nest::collisions(&j, &shapes, &j.layout).into_iter().filter_map(|(a, b)| if a == i { Some(b) } else if b == i { Some(a) } else { None }).collect();
+        let hits: Vec<usize> = nest::collisions(&j, &shapes, &j.layout)
+            .into_iter()
+            .filter_map(|(a, b)| {
+                if a == i {
+                    Some(b)
+                } else if b == i {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect();
         out["collides"] = json!(hits);
         out["outside"] = json!(nest::outside(&j, &shapes, &j.layout).contains(&i));
     }
@@ -336,7 +353,10 @@ fn sheet_entities(j: &NestJob, shapes: &[Shape], sheet: usize, outline: bool) ->
     }
     if outline {
         let (w, h) = (j.sheet.width, j.sheet.height);
-        out.push(DxfEntity { layer: SHEET_LAYER.into(), shape: DxfShape::Polyline { points: vec![Vec2::ZERO, Vec2::new(w, 0.0), Vec2::new(w, h), Vec2::new(0.0, h), Vec2::ZERO] } });
+        out.push(DxfEntity {
+            layer: SHEET_LAYER.into(),
+            shape: DxfShape::Polyline { points: vec![Vec2::ZERO, Vec2::new(w, 0.0), Vec2::new(w, h), Vec2::new(0.0, h), Vec2::ZERO] },
+        });
     }
     out
 }

@@ -310,7 +310,7 @@ pub fn surface_at(doc: &Document, st: &ModelState, component: u64, pick: Vec3) -
     let (b, f) = face_at(doc, st, component, pick, false)?;
     let offset = doc.model_body_offset(b).copied().unwrap_or(IDENTITY);
     Some(match solidcraft_kernel::face_surface(&b.body, f) {
-        Some(solidcraft_kernel::FaceSurface::Plane { normal, .. }) => PickedSurface::Plane { normal: apply_vector(&offset, normal) },
+        Some(solidcraft_kernel::FaceSurface::Plane { normal, .. }) => PickedSurface::Plane { normal: apply_vector(&offset, normal.into()) },
         Some(solidcraft_kernel::FaceSurface::Cylinder { .. }) => {
             let mesh = b.mesh();
             match solidcraft_kernel::cylinder_face(&b.body, &mesh, f) {

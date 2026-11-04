@@ -238,7 +238,7 @@ pub fn run(job: &NestJob, shapes: &[Shape]) -> Result<Found, String> {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
-            if seed % 3 == 0 {
+            if seed.is_multiple_of(3) {
                 v.swap(k - 1, k);
             }
         }
@@ -263,7 +263,7 @@ pub fn run(job: &NestJob, shapes: &[Shape]) -> Result<Found, String> {
             attempts.push(a);
         }
     }
-    attempts.sort_by(|a, b| a.score.cmp(&b.score));
+    attempts.sort_by_key(|a| a.score);
     attempts.truncate(3);
     if attempts.is_empty() {
         return Err("the nesting ran out of time; try Fast, or fewer copies".into());

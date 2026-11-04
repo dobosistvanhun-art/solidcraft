@@ -308,9 +308,11 @@ mod tests {
             let path = h.dir.join("plate.dxf");
             finish(&mut h.app, &answer, Some(path.to_string_lossy().into_owned()));
             let text = std::fs::read_to_string(&path).unwrap_or_default();
-            assert!(text.contains("CIRCLE"), "{command} wrote the sketch: {text:.200}");
+            assert!(text.contains("ENTITIES"), "{command} wrote a DXF: {text:.200}");
             if command == "sketch.export_cut_dxf" {
                 assert!(text.contains("OUTER") && text.contains("INNER"), "the cut layers");
+            } else {
+                assert!(text.contains("CIRCLE"), "the sketch's circle");
             }
         }
         let mut h = crate::scenario::Harness::new();

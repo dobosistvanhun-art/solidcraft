@@ -251,8 +251,10 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
     let v = info(app, k);
     ui_kit::section(ui, "nest_sheet", "Sheet", true, |ui| {
         let sheet = v.as_ref().map(|v| v["sheet"].clone()).unwrap_or_else(|| json!({"width": 1220.0, "height": 610.0, "margin": 5.0}));
-        let (mut w, mut h, mut m) = (sheet["width"].as_f64().unwrap_or(1220.0), sheet["height"].as_f64().unwrap_or(610.0), sheet["margin"].as_f64().unwrap_or(5.0));
-        let (mut gap, mut kerf) = (v.as_ref().and_then(|v| v["gap"].as_f64()).unwrap_or(3.0), v.as_ref().and_then(|v| v["kerf"].as_f64()).unwrap_or(0.0));
+        let (mut w, mut h, mut m) =
+            (sheet["width"].as_f64().unwrap_or(1220.0), sheet["height"].as_f64().unwrap_or(610.0), sheet["margin"].as_f64().unwrap_or(5.0));
+        let (mut gap, mut kerf) =
+            (v.as_ref().and_then(|v| v["gap"].as_f64()).unwrap_or(3.0), v.as_ref().and_then(|v| v["kerf"].as_f64()).unwrap_or(0.0));
         let mut send = false;
         send |= length_row(ui, "Width", &mut w);
         send |= length_row(ui, "Height", &mut h);
@@ -263,7 +265,8 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
         let mut quality = false;
         ui_kit::row(ui, "Quality", |ui| quality = ui_kit::dropdown_picked(ui, "nest_quality", &mut q, &QUALITY_LABELS));
         if send || gap_set || kerf_set || quality {
-            let mut p = json!({"sheet": {"width": w.max(1.0), "height": h.max(1.0), "margin": m.max(0.0)}, "gap": gap.max(0.0), "kerf": kerf.max(0.0)});
+            let mut p =
+                json!({"sheet": {"width": w.max(1.0), "height": h.max(1.0), "margin": m.max(0.0)}, "gap": gap.max(0.0), "kerf": kerf.max(0.0)});
             if let Some(q) = QUALITIES.get(q) {
                 p["quality"] = json!(q);
             }
@@ -306,7 +309,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
                 if ui_kit::checkbox(ui, "Lock", &mut locked).changed() {
                     run(app, k, "nest.edit", json!({"placement": i, "locked": locked}));
                 }
-                if ui_kit::button(ui, crate::i18n::tr_label("Remove"), ui_kit::Button::Small).clicked() && run(app, k, "nest.edit", json!({"placement": i, "remove": true})).is_some() {
+                if ui_kit::button(ui, crate::i18n::tr_label("Remove"), ui_kit::Button::Small).clicked()
+                    && run(app, k, "nest.edit", json!({"placement": i, "remove": true})).is_some()
+                {
                     k.selected = None;
                 }
             });
@@ -338,7 +343,13 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
         let variants = v["variants"].as_array().cloned().unwrap_or_default();
         if variants.len() > 1 {
             for (n, s) in variants.iter().enumerate() {
-                let text = format!("{} {}: {} × {:.1} %", crate::i18n::tr_label("Layout"), n + 1, s["sheets"].as_u64().unwrap_or(0), s["utilisation_percent"].as_f64().unwrap_or(0.0));
+                let text = format!(
+                    "{} {}: {} × {:.1} %",
+                    crate::i18n::tr_label("Layout"),
+                    n + 1,
+                    s["sheets"].as_u64().unwrap_or(0),
+                    s["utilisation_percent"].as_f64().unwrap_or(0.0)
+                );
                 if ui_kit::button(ui, text, ui_kit::Button::Small).clicked() {
                     run(app, k, "nest.run", json!({"variant": n}));
                 }
@@ -390,14 +401,27 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     let t = Tokens::get();
     painter.rect_filled(rect, 0.0, t.panel);
     let Some(v) = info(app, k) else {
-        painter.text(rect.center(), Align2::CENTER_CENTER, crate::i18n::tr_label("Tick the parts to cut in the panel"), FontId::proportional(t.font_body), t.text_dim);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            crate::i18n::tr_label("Tick the parts to cut in the panel"),
+            FontId::proportional(t.font_body),
+            t.text_dim,
+        );
         return true;
     };
-    let (w, h, margin) = (v["sheet"]["width"].as_f64().unwrap_or(1220.0), v["sheet"]["height"].as_f64().unwrap_or(610.0), v["sheet"]["margin"].as_f64().unwrap_or(0.0));
+    let (w, h, margin) = (
+        v["sheet"]["width"].as_f64().unwrap_or(1220.0),
+        v["sheet"]["height"].as_f64().unwrap_or(610.0),
+        v["sheet"]["margin"].as_f64().unwrap_or(0.0),
+    );
     let sheets = (v["stats"]["sheets"].as_u64().unwrap_or(0) as usize).max(1);
     let extent = pitch(w) * (sheets as f64 - 1.0) + w;
-    let panel_left =
-        painter.ctx().memory(|m| m.area_rect(egui::Id::new(("sc_dialog", "NESTING")))).map(|panel| panel.left()).unwrap_or(rect.right() - crate::frame::DIALOG_MAX_W);
+    let panel_left = painter
+        .ctx()
+        .memory(|m| m.area_rect(egui::Id::new(("sc_dialog", "NESTING"))))
+        .map(|panel| panel.left())
+        .unwrap_or(rect.right() - crate::frame::DIALOG_MAX_W);
     let area = Rect::from_min_max(rect.min + vec2(20.0, 20.0), pos2(panel_left.min(rect.right()) - 20.0, rect.bottom() - 20.0));
     if !app.flat_view.fitted && area.width() > 10.0 && area.height() > 10.0 {
         app.flat_view.fit(rect, area, (0.0, 0.0), (extent, h));
@@ -417,7 +441,12 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         painter.rect_filled(r, 0.0, wood);
         if margin > 0.0 {
             let m = Rect::from_two_pos(to([x0 + margin, margin]), to([x0 + w - margin, h - margin]));
-            for (a, b) in [(m.left_top(), m.right_top()), (m.right_top(), m.right_bottom()), (m.right_bottom(), m.left_bottom()), (m.left_bottom(), m.left_top())] {
+            for (a, b) in [
+                (m.left_top(), m.right_top()),
+                (m.right_top(), m.right_bottom()),
+                (m.right_bottom(), m.left_bottom()),
+                (m.left_bottom(), m.left_top()),
+            ] {
                 painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, Color32::from_rgb(160, 130, 90)), 6.0, 4.0));
             }
         }
@@ -504,7 +533,9 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     }
     if released && let Some(dg) = k.drag.take() {
         let moved = placements.get(dg.placement).is_some_and(|pl| {
-            pl["sheet"].as_u64() != Some(dg.sheet as u64) || (pl["x"].as_f64().unwrap_or(0.0) - dg.at[0]).abs() > 1e-6 || (pl["y"].as_f64().unwrap_or(0.0) - dg.at[1]).abs() > 1e-6
+            pl["sheet"].as_u64() != Some(dg.sheet as u64)
+                || (pl["x"].as_f64().unwrap_or(0.0) - dg.at[0]).abs() > 1e-6
+                || (pl["y"].as_f64().unwrap_or(0.0) - dg.at[1]).abs() > 1e-6
         });
         if moved {
             run(app, k, "nest.edit", json!({"placement": dg.placement, "x": dg.at[0], "y": dg.at[1], "sheet": dg.sheet}));
@@ -512,10 +543,11 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     }
     // Keys on the picked part.
     if let Some(i) = k.selected
-        && !ctx.wants_keyboard_input()
+        && !ctx.egui_wants_keyboard_input()
         && let Some(pl) = placements.get(i)
     {
-        let (r, shift, l, del) = ctx.input(|i| (i.key_pressed(egui::Key::R), i.modifiers.shift, i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::Delete)));
+        let (r, shift, l, del) =
+            ctx.input(|i| (i.key_pressed(egui::Key::R), i.modifiers.shift, i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::Delete)));
         let angle = pl["angle"].as_f64().unwrap_or(0.0);
         if r {
             run(app, k, "nest.edit", json!({"placement": i, "angle": angle + if shift { -TURN_STEP } else { TURN_STEP }}));
@@ -526,7 +558,13 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         }
     }
     if k.running.is_some() {
-        painter.text(rect.left_top() + vec2(24.0, 24.0), Align2::LEFT_TOP, crate::i18n::tr_label("Working…"), FontId::proportional(t.font_body), t.text);
+        painter.text(
+            rect.left_top() + vec2(24.0, 24.0),
+            Align2::LEFT_TOP,
+            crate::i18n::tr_label("Working…"),
+            FontId::proportional(t.font_body),
+            t.text,
+        );
     }
     true
 }

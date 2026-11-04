@@ -25,7 +25,9 @@ fn the_editor_lays_out_the_ticked_parts() {
     h.frames(2);
     assert!(matches!(h.app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Nest(_))));
     let sketch = h.app.session.doc.find_feature("Plate").map(|f| f.id).unwrap();
-    h.app.run("nest.setup", json!({"parts": [{"sketch": sketch, "count": 6}], "sheet": {"width": 600, "height": 300, "margin": 5}, "quality": "fast"})).unwrap();
+    h.app
+        .run("nest.setup", json!({"parts": [{"sketch": sketch, "count": 6}], "sheet": {"width": 600, "height": 300, "margin": 5}, "quality": "fast"}))
+        .unwrap();
     let mut k = NestUi::default();
     auto_nest(&mut h.app, &mut k);
     // Off the thread or not, the layout arrives.

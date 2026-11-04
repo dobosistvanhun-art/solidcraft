@@ -171,7 +171,10 @@ fn frame(job: &NestJob) -> Result<Frame, String> {
     let cell = cell_size(job);
     // Each part takes the cells within half the spacing of it (and of the arcs' polygons).
     let reach = job.spacing() / 2.0 + TOL;
-    let inset = (job.sheet.margin - reach).max(0.0);
+    // A part's cells reach half the spacing past it; the grid's edge is that far past the margin
+    // (beyond the sheet when the margin is smaller), so a part keeps the margin, not the spacing,
+    // from the sheet's edge.
+    let inset = job.sheet.margin - reach;
     let (gw, gh) = (((w - 2.0 * inset) / cell).floor(), ((h - 2.0 * inset) / cell).floor());
     if !(gw >= 1.0 && gh >= 1.0) {
         return Err("the margins leave no room on the sheet".into());

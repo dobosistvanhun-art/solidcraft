@@ -215,6 +215,24 @@ pub fn mask(polys: &[Vec<Vec2>], cell: f64, reach: f64, anchor: Vec2) -> Option<
             }
         }
     }
+    // Trimmed to the cells taken: the lattice's margin of empty cells would only keep the part
+    // off the sheet's edge.
+    let used = |i: usize, j: usize| on.get(j * w + i).copied().unwrap_or(false);
+    let (mut i0, mut i1, mut j0, mut j1) = (w, 0usize, h, 0usize);
+    for j in 0..h {
+        for i in 0..w {
+            if used(i, j) {
+                (i0, i1, j0, j1) = (i0.min(i), i1.max(i + 1), j0.min(j), j1.max(j + 1));
+            }
+        }
+    }
+    if i0 >= i1 || j0 >= j1 {
+        return None;
+    }
+    let (ow, oh) = (w, h);
+    let (w, h) = (i1 - i0, j1 - j0);
+    let origin = Vec2::new(origin.x + i0 as f64 * cell, origin.y + j0 as f64 * cell);
+    let on: Vec<bool> = (0..h).flat_map(|j| (0..w).map(move |i| (i + i0, j + j0))).map(|(i, j)| i < ow && j < oh && used(i, j)).collect();
     let rows = (0..h)
         .map(|j| {
             let mut spans = Vec::new();

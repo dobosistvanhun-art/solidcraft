@@ -160,6 +160,8 @@ fn same_geometry_inputs(a: &Document, b: &Document) -> bool {
         point_clouds,
         // Drawings only show the model; they never change its geometry.
         drawings: _,
+        // The nesting job only lays parts out on sheets; it never changes the model.
+        nesting: _,
     } = a;
     (Arc::ptr_eq(render, &b.render) || *render == b.render)
         && *format == b.format

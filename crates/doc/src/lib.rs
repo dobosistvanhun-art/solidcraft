@@ -50,6 +50,7 @@ pub mod motion;
 mod name_lookup;
 mod names;
 pub mod naming;
+pub mod nesting;
 mod params;
 pub mod persistent_name;
 pub mod physical_material;

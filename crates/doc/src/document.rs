@@ -3149,6 +3149,9 @@ pub struct Document {
     /// The design's drawings (sheets of views of the model).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drawings: Vec<crate::model_drawing::Drawing>,
+    /// The design's nesting job: the parts cut from material sheets and where they lie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nesting: Option<crate::nesting::NestJob>,
 }
 
 /// The browser's view of a design: items and folders hidden or shown, sketch profiles and
@@ -3437,6 +3440,7 @@ impl Document {
             named_views: Vec::new(),
             visibility: Visibility::default(),
             drawings: Vec::new(),
+            nesting: None,
         }
     }
 

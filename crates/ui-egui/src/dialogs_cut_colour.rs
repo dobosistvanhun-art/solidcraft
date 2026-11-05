@@ -75,11 +75,7 @@ pub fn apply(app: &mut SolveApp, k: &mut CutColourUi, inputs: &[SelInput], colou
     }
     let colour = colour.map_or(Value::Null, |c| json!(c));
     k.status = Some(match app.run("sketch.cut_colour", json!({"curves": curves, "colour": colour})) {
-        Ok(r) => format!(
-            "{}: {}",
-            crate::i18n::tr_label("Coloured curves"),
-            r["curves"].as_array().map_or(0, Vec::len)
-        ),
+        Ok(r) => format!("{}: {}", crate::i18n::tr_label("Coloured curves"), r["curves"].as_array().map_or(0, Vec::len)),
         Err(e) => e,
     });
 }
@@ -95,7 +91,8 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut CutColourUi, inputs: 
             for (c, (_, rgb)) in colours.iter().enumerate() {
                 let i = r * 6 + c;
                 let fill = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                let swatch = egui::Button::new("").fill(fill).stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)).min_size(size);
+                let swatch =
+                    egui::Button::new("").fill(fill).stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)).min_size(size);
                 if ui.add(swatch).on_hover_text(label(i)).clicked() {
                     chosen = Some(Some(i));
                 }

@@ -474,7 +474,8 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
     let complete = ok.len() == j.parts.len();
     // The holes are shown while they stay a sensible size to send (a fine perforation on many
     // copies would not).
-    let hole_points: usize = j.layout.placements.iter().filter_map(|pl| ok.get(pl.part)).map(|sh| sh.hole_outlines.iter().map(Vec::len).sum::<usize>()).sum();
+    let hole_points: usize =
+        j.layout.placements.iter().filter_map(|pl| ok.get(pl.part)).map(|sh| sh.hole_outlines.iter().map(Vec::len).sum::<usize>()).sum();
     let show_holes = hole_points <= MAX_SHOWN_HOLE_POINTS;
     let placements: Vec<Value> = j
         .layout

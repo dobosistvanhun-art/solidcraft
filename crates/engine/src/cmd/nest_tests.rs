@@ -274,8 +274,8 @@ fn the_holes_lie_on_every_placed_copy() {
     let dxf = run(&mut s, "sketch.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
     run(&mut s, "nest.setup", json!({"add": [{"sketch": "Flange", "count": 2}], "sheet": {"width": 400, "height": 200}, "quality": "fast"}));
     run(&mut s, "nest.import_dxf", json!({"text": dxf, "name": "Imported", "count": 2}));
-    let r = run(&mut s, "nest.run", json!({}));
-    clean(&r);
+    clean(&run(&mut s, "nest.run", json!({})));
+    let r = run(&mut s, "nest.info", json!({}));
     let placements = r["placements"].as_array().cloned().unwrap_or_default();
     assert_eq!(placements.len(), 4);
     for pl in &placements {

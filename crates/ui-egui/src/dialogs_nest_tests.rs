@@ -55,3 +55,20 @@ fn candidates_are_closed_sketches() {
     let names: Vec<String> = candidates(&h.app).into_iter().map(|c| c.name).collect();
     assert_eq!(names, ["Plate"]);
 }
+
+/// A click on a part's tick in the panel puts it in the job.
+#[test]
+fn ticking_a_part_in_the_panel_adds_it() {
+    let mut h = crate::scenario::Harness::new();
+    plates(&mut h);
+    h.app.start("nest.setup");
+    h.frames(4);
+    let at = h.widget("Plate");
+    assert!(at.is_some(), "the panel lists the sketch");
+    if let Some([x, y]) = at {
+        h.call("ui.click", json!({"x": x, "y": y}));
+    }
+    h.frames(3);
+    let parts = h.app.session.doc.nesting.as_ref().map(|j| j.parts.len());
+    assert_eq!(parts, Some(1), "the click adds the part");
+}

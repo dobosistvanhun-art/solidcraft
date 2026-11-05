@@ -1,5 +1,5 @@
-//! The nesting editor: opened from the NESTING tab, its parts ticked in the panel, Auto Nest laying
-//! them out, a part dragged by hand checked against the others.
+//! The nesting editor: opened from the NESTING tab, its parts added in the panel (sketches, sheet
+//! metal bodies, DXF files), Auto Nest laying them out, a part dragged by hand checked against the others.
 
 use serde_json::json;
 
@@ -44,31 +44,59 @@ fn the_editor_lays_out_the_ticked_parts() {
     h.frames(2);
 }
 
-/// The candidates are the sketches with a closed contour and the sheet metal bodies.
+/// Every sketch is offered (one without a closed contour shown but not choosable), and the
+/// sheet metal bodies.
 #[test]
-fn candidates_are_closed_sketches() {
+fn candidates_are_every_sketch_closed_or_not() {
     let mut h = crate::scenario::Harness::new();
     plates(&mut h);
     h.app.run("sketch.create", json!({"plane": "XY", "name": "Open"})).unwrap();
     h.app.run("sketch.line", json!({"points": [[0, 0], [10, 10]], "infer": false})).unwrap();
     h.app.run("sketch.finish", json!({})).unwrap();
-    let names: Vec<String> = candidates(&h.app).into_iter().map(|c| c.name).collect();
-    assert_eq!(names, ["Plate"]);
+    let got: Vec<(String, bool)> = candidates(&h.app).into_iter().map(|c| (c.name, c.closed)).collect();
+    assert_eq!(got, [("Plate".to_string(), true), ("Open".to_string(), false)]);
 }
 
-/// A click on a part's tick in the panel puts it in the job.
+/// Add part in the panel puts the chosen sketch in the job; its row then changes its count and
+/// its cross takes it out again.
 #[test]
-fn ticking_a_part_in_the_panel_adds_it() {
+fn add_part_puts_a_sketch_in_the_job_and_the_cross_takes_it_out() {
     let mut h = crate::scenario::Harness::new();
     plates(&mut h);
     h.app.start("nest.setup");
     h.frames(4);
+    let at = h.widget("Add part");
+    assert!(at.is_some(), "the panel has Add part");
+    if let Some([x, y]) = at {
+        h.call("ui.click", json!({"x": x, "y": y}));
+    }
+    h.frames(3);
     let at = h.widget("Plate");
-    assert!(at.is_some(), "the panel lists the sketch");
+    assert!(at.is_some(), "the menu lists the sketch");
     if let Some([x, y]) = at {
         h.call("ui.click", json!({"x": x, "y": y}));
     }
     h.frames(3);
     let parts = h.app.session.doc.nesting.as_ref().map(|j| j.parts.len());
     assert_eq!(parts, Some(1), "the click adds the part");
+    let at = h.widget("✕");
+    assert!(at.is_some(), "the part's row has its cross");
+    if let Some([x, y]) = at {
+        h.call("ui.click", json!({"x": x, "y": y}));
+    }
+    h.frames(3);
+    let parts = h.app.session.doc.nesting.as_ref().map(|j| j.parts.len());
+    assert_eq!(parts, Some(0), "the cross takes it out");
+}
+
+/// A DXF brought in lists its part in the panel like any other.
+#[test]
+fn an_imported_dxf_is_listed_in_the_panel() {
+    let mut h = crate::scenario::Harness::new();
+    plates(&mut h);
+    let dxf = h.app.run("sketch.export_dxf", json!({})).unwrap()["dxf"].as_str().unwrap_or_default().to_string();
+    h.app.run("nest.import_dxf", json!({"text": dxf, "name": "Bracket"})).unwrap();
+    h.app.start("nest.setup");
+    h.frames(4);
+    assert!(h.widget("Bracket").is_some(), "the imported part has its row");
 }

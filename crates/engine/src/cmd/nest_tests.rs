@@ -196,3 +196,68 @@ fn the_job_is_saved_with_the_design() {
     assert_eq!(reopened.nesting, s.doc.nesting);
     assert_eq!(reopened.nesting.map(|j| j.layout.placements.len()), Some(3));
 }
+
+/// A DXF of two plates (one with a Ø20 hole), as another program would hand it over.
+fn two_plates_dxf() -> String {
+    let mut other = Session::default();
+    run(&mut other, "sketch.create", json!({"plane": "XY", "name": "Drawing"}));
+    run(&mut other, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [80, 60]}));
+    run(&mut other, "sketch.circle.center", json!({"center": [40, 30], "radius": 10}));
+    run(&mut other, "sketch.rectangle.two_point", json!({"p0": [150, 0], "p1": [200, 30]}));
+    run(&mut other, "sketch.finish", json!({}));
+    run(&mut other, "sketch.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string()
+}
+
+/// A DXF's closed contours come in as parts kept with the job (one, or one per contour with
+/// `split`), holes and all, and nest like any part; the design gets no sketch from it.
+#[test]
+fn a_dxf_comes_in_as_parts_and_nests() {
+    let mut s = Session::default();
+    let dxf = two_plates_dxf();
+    let r = run(&mut s, "nest.import_dxf", json!({"text": dxf, "name": "Bracket", "count": 2}));
+    assert_eq!(r["added"], 1);
+    assert_eq!(r["parts"][0]["name"], "Bracket");
+    assert!((r["parts"][0]["area_mm2"].as_f64().unwrap_or(0.0) - (4800.0 - std::f64::consts::PI * 100.0 + 1500.0)).abs() < 1.0, "{}", r["parts"][0]);
+    let r = run(&mut s, "nest.import_dxf", json!({"text": dxf, "name": "Piece", "split": true}));
+    assert_eq!(r["added"], 2);
+    let names: Vec<&str> = r["parts"].as_array().into_iter().flatten().filter_map(|p| p["name"].as_str()).collect();
+    assert_eq!(names, ["Bracket", "Piece-1", "Piece-2"]);
+    assert!(s.doc.features.is_empty(), "the import leaves the design as it was");
+    run(&mut s, "nest.setup", json!({"sheet": {"width": 500, "height": 300, "margin": 5}, "quality": "fast"}));
+    let r = run(&mut s, "nest.run", json!({}));
+    clean(&r);
+    assert_eq!(r["stats"]["placed"], 4);
+    let out = run(&mut s, "nest.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    assert!(out.contains("INNER"), "the hole is cut");
+    let reopened = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap_or_default();
+    assert_eq!(reopened.nesting, s.doc.nesting, "kept with the design");
+    // An open line is no part.
+    let mut other = Session::default();
+    run(&mut other, "sketch.create", json!({"plane": "XY"}));
+    run(&mut other, "sketch.line", json!({"points": [[0, 0], [50, 0]], "infer": false}));
+    let open = run(&mut other, "sketch.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    assert!(s.execute("nest.import_dxf", &json!({"text": open})).is_err());
+}
+
+/// The part list: parts added one by one keep the layout of the others; a count, grain or
+/// fixed angle changes one part; a part taken out takes its copies out of the layout.
+#[test]
+fn parts_are_added_changed_and_removed_one_at_a_time() {
+    let mut s = Session::default();
+    rect(&mut s, "A", 60.0, 40.0);
+    rect(&mut s, "B", 30.0, 30.0);
+    run(&mut s, "nest.setup", json!({"add": [{"sketch": "A", "count": 2}], "sheet": {"width": 400, "height": 200}, "quality": "fast"}));
+    run(&mut s, "nest.run", json!({}));
+    let r = run(&mut s, "nest.setup", json!({"add": [{"sketch": "B", "count": 3}]}));
+    assert_eq!(r["placements"].as_array().map(Vec::len), Some(2), "A's copies stay laid out");
+    assert!(s.execute("nest.setup", &json!({"add": [{"sketch": "B"}]})).is_err(), "B is in already");
+    let r = run(&mut s, "nest.setup", json!({"edit": {"index": 1, "count": 5, "grain": true}}));
+    assert_eq!((r["parts"][1]["count"].as_u64(), r["parts"][1]["grain"].as_bool()), (Some(5), Some(true)));
+    let r = run(&mut s, "nest.run", json!({}));
+    assert_eq!(r["stats"]["placed"], 7);
+    let r = run(&mut s, "nest.setup", json!({"edit": {"index": 0, "remove": true}}));
+    assert_eq!(r["parts"].as_array().map(Vec::len), Some(1));
+    assert_eq!(r["placements"].as_array().map(Vec::len), Some(5), "A's two copies left with it");
+    assert!(r["placements"].as_array().into_iter().flatten().all(|p| p["part"] == 0), "B is part 0 now");
+    assert!(s.execute("nest.setup", &json!({"edit": {"index": 4}})).is_err());
+}

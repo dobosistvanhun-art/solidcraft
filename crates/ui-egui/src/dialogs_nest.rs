@@ -51,6 +51,8 @@ pub struct NestUi {
     info: Option<(Weak<Document>, Value)>,
     /// What the editor was opened for from the ribbon: run the layout or save it.
     pub start: Option<&'static str>,
+    /// Import DXF makes a part of each outer contour.
+    pub split: bool,
 }
 
 /// The editor for a NESTING tab command.
@@ -90,10 +92,12 @@ fn run(app: &mut SolveApp, k: &mut NestUi, cmd: &str, p: Value) -> Option<Value>
     }
 }
 
-/// A part the job can take: a sketch with a closed contour, or a sheet metal body.
+/// A part the job can take: a sketch (choosable once it has a closed contour) or a sheet metal
+/// body.
 struct Candidate {
     name: String,
     key: Value,
+    closed: bool,
 }
 
 fn candidates(app: &SolveApp) -> Vec<Candidate> {
@@ -104,29 +108,10 @@ fn candidates(app: &SolveApp) -> Vec<Candidate> {
         .features
         .iter()
         .filter(|f| matches!(f.kind, FeatureKind::Sketch { .. }))
-        .filter(|f| st.sketch(f.id).is_some_and(|ss| !ss.profiles.is_empty()))
-        .map(|f| Candidate { name: f.name.clone(), key: json!({"sketch": f.id}) })
+        .map(|f| Candidate { name: f.name.clone(), key: json!({"sketch": f.id}), closed: st.sketch(f.id).is_some_and(|ss| !ss.profiles.is_empty()) })
         .collect();
-    out.extend(st.sheets.iter().map(|sh| Candidate { name: sh.body.clone(), key: json!({"body": sh.body}) }));
+    out.extend(st.sheets.iter().map(|sh| Candidate { name: sh.body.clone(), key: json!({"body": sh.body}), closed: true }));
     out
-}
-
-/// The job's parts as `nest.setup` takes them.
-fn parts_param(v: &Value) -> Vec<Value> {
-    v["parts"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|p| {
-            let mut out = json!({"count": p["count"], "grain": p["grain"], "fixed_angle": p["fixed_angle"]});
-            if let Some(id) = p["sketch"].as_u64() {
-                out["sketch"] = json!(id);
-            } else if let Some(b) = p["body"].as_str() {
-                out["body"] = json!(b);
-            }
-            out
-        })
-        .collect()
 }
 
 fn same_part(a: &Value, b: &Value) -> bool {
@@ -196,56 +181,69 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
         Some("export") if v.as_ref().is_some_and(|v| v["stats"]["sheets"].as_u64().unwrap_or(0) > 0) => save(app, 0, true),
         _ => {}
     }
-    let job_parts = v.as_ref().map(parts_param).unwrap_or_default();
     ui_kit::section(ui, "nest_parts", "Parts", true, |ui| {
-        let all = candidates(app);
-        if all.is_empty() {
-            ui_kit::text(ui, crate::i18n::tr_label("Draw a part's closed contour in a sketch first"), ui_kit::Text::Hint("nest_no_parts"));
-        }
-        let mut parts = job_parts.clone();
-        let mut changed = false;
-        for c in &all {
-            let at = parts.iter().position(|p| same_part(p, &c.key));
-            let mut on = at.is_some();
-            if ui_kit::checkbox(ui, &c.name, &mut on).changed() {
-                changed = true;
-                match at {
-                    Some(i) => {
-                        parts.remove(i);
+        // The job's part list: one row a part, its count, grain and turn, and a cross to take it out.
+        let parts = v.as_ref().and_then(|v| v["parts"].as_array().cloned()).unwrap_or_default();
+        let mut edit: Option<Value> = None;
+        for (i, p) in parts.iter().enumerate() {
+            let name = p["name"].as_str().unwrap_or("").to_string();
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&name).strong());
+                if let Some(e) = p["error"].as_str() {
+                    ui.label(egui::RichText::new("⚠").color(Color32::from_rgb(210, 60, 40))).on_hover_text(e);
+                }
+                if ui_kit::button(ui, "✕", ui_kit::Button::Small).on_hover_text(crate::i18n::tr_label("Remove")).clicked() {
+                    edit = Some(json!({"index": i, "remove": true}));
+                }
+            });
+            ui.indent(("nest_part", i), |ui| {
+                let mut count = p["count"].as_u64().unwrap_or(1) as u32;
+                ui_kit::row(ui, "Count", |ui| {
+                    let r = ui_kit::number_field(ui, &mut count, 1..=5000, 0.2, "");
+                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                        edit = Some(json!({"index": i, "count": count}));
                     }
-                    None => {
+                });
+                let (mut grain, mut fixed) = (p["grain"].as_bool().unwrap_or(false), p["fixed_angle"].as_bool().unwrap_or(false));
+                ui.horizontal(|ui| {
+                    if ui_kit::checkbox(ui, "Grain", &mut grain).changed() {
+                        edit = Some(json!({"index": i, "grain": grain}));
+                    }
+                    if ui_kit::checkbox(ui, "Fixed angle", &mut fixed).changed() {
+                        edit = Some(json!({"index": i, "fixed_angle": fixed}));
+                    }
+                });
+            });
+        }
+        if let Some(e) = edit {
+            run(app, k, "nest.setup", json!({"edit": e}));
+        }
+        // More parts: the design's sketches and sheet metal bodies, or a DXF file.
+        let all = candidates(app);
+        let mut add: Option<Value> = None;
+        ui.horizontal(|ui| {
+            ui_kit::dropdown_menu(ui, "nest_add", crate::i18n::tr_label("Add part"), |ui| {
+                if all.is_empty() {
+                    ui.label(crate::i18n::tr_label("Draw a part's closed contour in a sketch first"));
+                }
+                for c in &all {
+                    let taken = parts.iter().any(|p| same_part(p, &c.key));
+                    if !c.closed {
+                        ui.add_enabled(false, egui::Button::new(format!("{} — {}", c.name, crate::i18n::tr_label("no closed contour"))));
+                    } else if !taken && ui_kit::button(ui, c.name.as_str(), ui_kit::Button::Small).clicked() {
                         let mut p = c.key.clone();
                         p["count"] = json!(1);
-                        parts.push(p);
+                        add = Some(p);
                     }
                 }
+            });
+            if ui_kit::button(ui, crate::i18n::tr_label("Import DXF…"), ui_kit::Button::Normal).clicked() {
+                app.pick_open_command("nest.import_dxf", json!({"split": k.split}), &["dxf"]);
             }
-            if let Some(p) = parts.iter_mut().find(|p| same_part(p, &c.key)) {
-                ui.indent(("nest_part", &c.name), |ui| {
-                    let mut count = p["count"].as_u64().unwrap_or(1) as u32;
-                    ui_kit::row(ui, "Count", |ui| {
-                        let r = ui_kit::number_field(ui, &mut count, 1..=5000, 0.2, "");
-                        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                            p["count"] = json!(count);
-                            changed = true;
-                        }
-                    });
-                    let (mut grain, mut fixed) = (p["grain"].as_bool().unwrap_or(false), p["fixed_angle"].as_bool().unwrap_or(false));
-                    ui.horizontal(|ui| {
-                        if ui_kit::checkbox(ui, "Grain", &mut grain).changed() {
-                            p["grain"] = json!(grain);
-                            changed = true;
-                        }
-                        if ui_kit::checkbox(ui, "Fixed angle", &mut fixed).changed() {
-                            p["fixed_angle"] = json!(fixed);
-                            changed = true;
-                        }
-                    });
-                });
-            }
-        }
-        if changed {
-            run(app, k, "nest.setup", json!({"parts": parts}));
+        });
+        ui_kit::checkbox(ui, "Each contour a part", &mut k.split);
+        if let Some(p) = add {
+            run(app, k, "nest.setup", json!({"add": [p]}));
         }
     });
     let v = info(app, k);
@@ -404,7 +402,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            crate::i18n::tr_label("Tick the parts to cut in the panel"),
+            crate::i18n::tr_label("Add the parts to cut in the panel"),
             FontId::proportional(t.font_body),
             t.text_dim,
         );

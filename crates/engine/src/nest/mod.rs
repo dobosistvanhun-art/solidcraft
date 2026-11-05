@@ -79,6 +79,7 @@ pub fn shape(st: &ModelState, part: &NestPart) -> Result<Shape, String> {
             }
             (regions, extra)
         }
+        PartSource::Imported { regions, .. } => (regions.clone(), Vec::new()),
     };
     if regions.is_empty() {
         return Err("it has no closed contour".into());

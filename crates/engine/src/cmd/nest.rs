@@ -12,7 +12,7 @@ use super::CommandSpec;
 use super::sketch_cut::{INNER_LAYER, OUTER_LAYER};
 use crate::nest::{self, Shape};
 use crate::params::{bad, bool_, num, str_};
-use crate::schema::nest::{NestEditParams, NestExportParams, NestInfoParams, NestReply, NestRunParams, NestSetupParams};
+use crate::schema::nest::{NestEditParams, NestExportParams, NestImportParams, NestInfoParams, NestReply, NestRunParams, NestSetupParams};
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
@@ -20,6 +20,7 @@ const SETUP: TypedContract<NestSetupParams> = TypedContract::new();
 const RUN: TypedContract<NestRunParams> = TypedContract::new();
 const EDIT: TypedContract<NestEditParams> = TypedContract::new();
 const INFO: TypedContract<NestInfoParams> = TypedContract::new();
+const IMPORT: TypedContract<NestImportParams> = TypedContract::new();
 const EXPORT: TypedContract<NestExportParams> = TypedContract::new();
 
 /// The layer of the sheet's outline in an exported DXF.
@@ -37,6 +38,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&EXPORT)
         .output(output_schema_for::<NestReply>)
         .params("sheet?: index (default 0); all?: bool (every sheet, path-1.dxf, path-2.dxf…); path?: file (else the DXF text); sheet_outline?: bool (layer SHEET, default false). Parts where they lie: outer contours on OUTER, holes on INNER, mm"),
+    CommandSpec::new("nest.import_dxf", "Import DXF Parts", crate::checked!("nest.import_dxf", import_dxf))
+        .icon("dxf")
+        .contract(&IMPORT)
+        .output(output_schema_for::<NestReply>)
+        .params("path | text: a DXF; name?; count?: copies (default 1); grain?, fixed_angle?: bool; split?: bool (each outer contour a part of its own, name-1, name-2…); tolerance?: mm within which ends join (default 0.01). Its closed contours join the job's parts, kept with the job"),
     CommandSpec::new("nest.info", "Nesting Info", crate::checked!("nest.info", info))
         .icon("list")
         .noundo()
@@ -54,6 +60,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .output(output_schema_for::<NestReply>)
         .params(
             "parts?: [{sketch: id|name | body: sheet metal body, count?: n (default 1), grain?: bool (half turns only), fixed_angle?: bool}] (replaces the list and drops the layout); \
+             add?: [the same] (appended, the layout kept); edit?: {index, count?, grain?, fixed_angle?, remove?: bool}; \
              sheet?: {width, height, margin?} mm; gap?: mm; kerf?: mm (cut width, kept apart from the gap); quality?: fast (15°) | normal (5°) | precise (1°); clear?: bool",
         ),
 ];
@@ -87,6 +94,71 @@ fn part_name(s: &Session, part: &NestPart) -> String {
     match &part.source {
         PartSource::Sketch(id) => s.doc.feature(*id).map_or_else(|| format!("sketch {id}"), |f| f.name.clone()),
         PartSource::SheetBody(name) => name.clone(),
+        PartSource::Imported { name, .. } => name.clone(),
+    }
+}
+
+/// A part as `nest.setup` takes one (`{sketch | body, count?, grain?, fixed_angle?}`).
+fn part_param(s: &Session, v: &Value, i: usize, cmd: &str) -> Result<NestPart> {
+    let source = match (v.get("sketch"), str_(v, "body")) {
+        (Some(sk), None) => {
+            let (key, found) = match sk {
+                Value::Number(n) => (n.to_string(), n.as_u64().and_then(|id| s.doc.feature(id))),
+                Value::String(t) => (t.clone(), s.doc.find_feature(t)),
+                _ => return Err(bad(cmd, format!("part {i}: `sketch` is an id or a name"))),
+            };
+            let f = found.ok_or_else(|| bad(cmd, format!("part {i}: no sketch `{key}`")))?;
+            if !matches!(f.kind, FeatureKind::Sketch { .. }) {
+                return Err(bad(cmd, format!("part {i}: `{key}` is not a sketch")));
+            }
+            PartSource::Sketch(f.id)
+        }
+        (None, Some(name)) => {
+            if !s.model.state().sheets.iter().any(|sh| sh.body == name) {
+                return Err(bad(cmd, format!("part {i}: no sheet metal body `{name}`")));
+            }
+            PartSource::SheetBody(name.to_string())
+        }
+        _ => return Err(bad(cmd, format!("part {i}: give `sketch` or `body`"))),
+    };
+    Ok(NestPart {
+        source,
+        count: count_param(v, i, cmd)?.unwrap_or(1),
+        grain: bool_(v, "grain").unwrap_or(false),
+        fixed_angle: bool_(v, "fixed_angle").unwrap_or(false),
+    })
+}
+
+fn count_param(v: &Value, i: usize, cmd: &str) -> Result<Option<u32>> {
+    match v.get("count") {
+        None | Some(Value::Null) => Ok(None),
+        Some(c) => Ok(Some(
+            c.as_u64()
+                .filter(|c| (1..=nest::MAX_COPIES as u64).contains(c))
+                .ok_or_else(|| bad(cmd, format!("part {i}: `count` is 1…{}", nest::MAX_COPIES)))? as u32,
+        )),
+    }
+}
+
+/// Takes part `i` out of the job: its copies leave the layouts, and the parts after it move up.
+fn remove_part(j: &mut NestJob, i: usize) {
+    if i >= j.parts.len() {
+        return;
+    }
+    j.parts.remove(i);
+    for l in std::iter::once(&mut j.layout).chain(j.variants.iter_mut()) {
+        l.placements.retain(|p| p.part != i);
+        for p in &mut l.placements {
+            if p.part > i {
+                p.part -= 1;
+            }
+        }
+        l.unplaced.retain(|p| *p != i);
+        for p in &mut l.unplaced {
+            if *p > i {
+                *p -= 1;
+            }
+        }
     }
 }
 
@@ -127,42 +199,47 @@ fn setup(s: &mut Session, p: &Value) -> Result<Value> {
         if list.len() > 1000 {
             return Err(bad(cmd, "at most 1000 parts"));
         }
-        let mut parts = Vec::new();
-        for (i, v) in list.iter().enumerate() {
-            let source = match (v.get("sketch"), str_(v, "body")) {
-                (Some(sk), None) => {
-                    let (key, found) = match sk {
-                        Value::Number(n) => (n.to_string(), n.as_u64().and_then(|id| s.doc.feature(id))),
-                        Value::String(t) => (t.clone(), s.doc.find_feature(t)),
-                        _ => return Err(bad(cmd, format!("part {i}: `sketch` is an id or a name"))),
-                    };
-                    let f = found.ok_or_else(|| bad(cmd, format!("part {i}: no sketch `{key}`")))?;
-                    if !matches!(f.kind, FeatureKind::Sketch { .. }) {
-                        return Err(bad(cmd, format!("part {i}: `{key}` is not a sketch")));
-                    }
-                    PartSource::Sketch(f.id)
-                }
-                (None, Some(name)) => {
-                    if !s.model.state().sheets.iter().any(|sh| sh.body == name) {
-                        return Err(bad(cmd, format!("part {i}: no sheet metal body `{name}`")));
-                    }
-                    PartSource::SheetBody(name.to_string())
-                }
-                _ => return Err(bad(cmd, format!("part {i}: give `sketch` or `body`"))),
-            };
-            let count = match v.get("count") {
-                None => 1,
-                Some(c) => c
-                    .as_u64()
-                    .filter(|c| (1..=nest::MAX_COPIES as u64).contains(c))
-                    .ok_or_else(|| bad(cmd, format!("part {i}: `count` is 1…{}", nest::MAX_COPIES)))? as u32,
-            };
-            parts.push(NestPart { source, count, grain: bool_(v, "grain").unwrap_or(false), fixed_angle: bool_(v, "fixed_angle").unwrap_or(false) });
-        }
+        let parts = list.iter().enumerate().map(|(i, v)| part_param(s, v, i, cmd)).collect::<Result<Vec<_>>>()?;
         if parts != j.parts {
             j.parts = parts;
             j.layout = Default::default();
             j.variants.clear();
+        }
+    }
+    // Parts added to the list (the layout keeps its copies of the others).
+    if let Some(list) = p.get("add") {
+        let list = list.as_array().ok_or_else(|| bad(cmd, "`add` must be a list"))?;
+        if j.parts.len().saturating_add(list.len()) > 1000 {
+            return Err(bad(cmd, "at most 1000 parts"));
+        }
+        for (i, v) in list.iter().enumerate() {
+            let part = part_param(s, v, i, cmd)?;
+            if j.parts.iter().any(|q| q.source == part.source) {
+                return Err(bad(cmd, format!("part {i} is in the job already")));
+            }
+            j.parts.push(part);
+        }
+    }
+    // One part of the list changed or taken out.
+    if let Some(e) = p.get("edit") {
+        let i = e
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|i| i as usize)
+            .filter(|i| *i < j.parts.len())
+            .ok_or_else(|| bad(cmd, format!("`edit.index` is a part of the job (it has {})", j.parts.len())))?;
+        if bool_(e, "remove").unwrap_or(false) {
+            remove_part(&mut j, i);
+        } else if let Some(part) = j.parts.get_mut(i) {
+            if let Some(c) = count_param(e, i, cmd)? {
+                part.count = c;
+            }
+            if let Some(g) = bool_(e, "grain") {
+                part.grain = g;
+            }
+            if let Some(f) = bool_(e, "fixed_angle") {
+                part.fixed_angle = f;
+            }
         }
     }
     if let Some(sh) = p.get("sheet") {
@@ -182,6 +259,69 @@ fn setup(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut().nesting = Some(j);
     info(s, &json!({"brief": true}))
+}
+
+/// Contours from a DXF as the job keeps them: read by the sketch's own DXF import (its contours
+/// joined within `tolerance`), each outer contour with its holes. One part, or one per contour
+/// with `split`.
+fn import_dxf(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "nest.import_dxf";
+    let path = str_(p, "path").filter(|x| !x.trim().is_empty());
+    let text = str_(p, "text");
+    if path.is_some() == text.is_some() {
+        return Err(bad(cmd, "give `path` (a DXF file) or `text` (the DXF itself)"));
+    }
+    let tolerance = match p.get("tolerance") {
+        None | Some(Value::Null) => 0.01,
+        Some(_) => num(p, "tolerance").filter(|t| *t > 0.0 && *t <= 5.0).ok_or_else(|| bad(cmd, "`tolerance` is 0…5 mm"))?,
+    };
+    // A design of its own, so the import leaves nothing in this one.
+    let mut scratch = Session::default();
+    let mut q = json!({"tolerance": tolerance, "plane": "XY"});
+    match (path, text) {
+        (Some(path), _) => q["path"] = json!(path),
+        (_, Some(t)) => q["text"] = json!(t),
+        _ => {}
+    }
+    scratch.execute("sketch.insert_dxf", &q).map_err(|e| bad(cmd, e.to_string()))?;
+    let id = scratch.active_sketch.ok_or_else(|| bad(cmd, "the DXF gave no sketch"))?;
+    let st = scratch.model.state();
+    let ss = st.sketch(id).ok_or_else(|| bad(cmd, "the DXF's sketch did not evaluate"))?;
+    let key = |ids: &[String]| {
+        let mut k = ids.to_vec();
+        k.sort();
+        k
+    };
+    let holes: std::collections::HashSet<Vec<String>> = ss.profiles.iter().flat_map(|pr| pr.hole_curves.iter().map(|h| key(h))).collect();
+    let regions: Vec<solidcraft_geom::Region2> =
+        ss.profiles.iter().filter(|pr| !holes.contains(&key(&pr.outer_curves))).map(|pr| pr.region.clone()).collect();
+    let open = ss.ends.open.len();
+    if regions.is_empty() {
+        return Err(bad(cmd, format!("the DXF has no closed contour ({open} open ends); close it, or give a larger `tolerance`")));
+    }
+    let base = str_(p, "name").filter(|n| !n.trim().is_empty()).map(str::to_string).unwrap_or_else(|| {
+        path.and_then(|x| std::path::Path::new(x).file_stem().and_then(|f| f.to_str()).map(str::to_string)).unwrap_or_else(|| "DXF".into())
+    });
+    let count = count_param(p, 0, cmd)?.unwrap_or(1);
+    let (grain, fixed_angle) = (bool_(p, "grain").unwrap_or(false), bool_(p, "fixed_angle").unwrap_or(false));
+    let groups: Vec<(String, Vec<solidcraft_geom::Region2>)> = if bool_(p, "split").unwrap_or(false) && regions.len() > 1 {
+        regions.into_iter().enumerate().map(|(k, r)| (format!("{base}-{}", k + 1), vec![r])).collect()
+    } else {
+        vec![(base, regions)]
+    };
+    let mut j = s.doc.nesting.clone().unwrap_or_default();
+    if j.parts.len().saturating_add(groups.len()) > 1000 {
+        return Err(bad(cmd, "at most 1000 parts"));
+    }
+    let added = groups.len();
+    for (name, regions) in groups {
+        j.parts.push(NestPart { source: PartSource::Imported { name, regions }, count, grain, fixed_angle });
+    }
+    s.doc_mut().nesting = Some(j);
+    let mut out = info(s, &json!({"brief": true}))?;
+    out["added"] = json!(added);
+    out["open_ends"] = json!(open);
+    Ok(out)
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
@@ -314,6 +454,7 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
             match &part.source {
                 PartSource::Sketch(id) => v["sketch"] = json!(id),
                 PartSource::SheetBody(b) => v["body"] = json!(b),
+                PartSource::Imported { .. } => v["imported"] = json!(true),
             }
             match shape {
                 Ok(x) => {

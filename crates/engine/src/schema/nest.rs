@@ -28,6 +28,50 @@ pub struct NestPartParam {
     pub fixed_angle: Option<bool>,
 }
 
+/// A change to one part of the job's list.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NestPartEdit {
+    /// The part's index, as `nest.info` lists the parts.
+    pub index: usize,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub grain: Option<bool>,
+    #[serde(default)]
+    pub fixed_angle: Option<bool>,
+    /// Take it out of the job (its copies leave the layout).
+    #[serde(default)]
+    pub remove: Option<bool>,
+}
+
+/// Bring a DXF's closed contours into the job as parts, kept with it.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NestImportParams {
+    /// The DXF file.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The DXF itself, instead of a file.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// The part's name (default: the file's).
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub grain: Option<bool>,
+    #[serde(default)]
+    pub fixed_angle: Option<bool>,
+    /// Each outer contour a part of its own.
+    #[serde(default)]
+    pub split: Option<bool>,
+    /// How near two ends must be to join (mm, default 0.01).
+    #[serde(default)]
+    pub tolerance: Option<f64>,
+}
+
 /// The material sheet (mm).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -56,6 +100,12 @@ pub struct NestSetupParams {
     /// The parts, replacing the job's list.
     #[serde(default)]
     pub parts: Option<Vec<NestPartParam>>,
+    /// Parts added to the job's list (its layout kept).
+    #[serde(default)]
+    pub add: Option<Vec<NestPartParam>>,
+    /// One part of the list changed, or taken out.
+    #[serde(default)]
+    pub edit: Option<NestPartEdit>,
     #[serde(default)]
     pub sheet: Option<NestSheetParam>,
     /// The least distance between parts (mm).

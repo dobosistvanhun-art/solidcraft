@@ -12,6 +12,9 @@ pub enum PartSource {
     Sketch(u64),
     /// The flat pattern of a sheet metal body, by the body's name.
     SheetBody(String),
+    /// Contours brought in from a file (a DXF), kept with the job: its name and its material
+    /// (outer contours with their holes, mm).
+    Imported { name: String, regions: Vec<solidcraft_geom::Region2> },
 }
 
 /// A part to cut and how many of it.

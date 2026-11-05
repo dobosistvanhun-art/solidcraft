@@ -24,6 +24,8 @@ const TOL: f64 = 0.02;
 pub const MAX_COPIES: usize = 5_000;
 /// The most sheets a layout uses.
 pub const MAX_SHEETS: usize = 500;
+/// How near a hole's polygon, only shown, keeps to its arcs (mm).
+const SHOW_TOL: f64 = 0.05;
 /// The most cells a sheet's grid has.
 const MAX_GRID_CELLS: f64 = 3_000_000.0;
 
@@ -35,6 +37,9 @@ pub struct Shape {
     /// Holes that are no loops of a region (a sheet's perforations), cut as inner contours.
     pub extra_holes: Vec<Loop2>,
     pub outlines: Vec<Vec<Vec2>>,
+    /// Its holes (inner contours and perforations) as polygons, to show; the nesting keeps parts
+    /// out of them.
+    pub hole_outlines: Vec<Vec<Vec2>>,
     pub area: f64,
     pub cut_length: f64,
     /// Half its bounds' size (mm).
@@ -98,11 +103,18 @@ pub fn shape(st: &ModelState, part: &NestPart) -> Result<Shape, String> {
         regions.iter().map(|r| Region2 { outer: shifted(&r.outer, -c), holes: r.holes.iter().map(|h| shifted(h, -c)).collect() }).collect();
     let extra_holes: Vec<Loop2> = extra.iter().map(|h| shifted(h, -c)).collect();
     let outlines = outlines0.iter().map(|p| p.iter().map(|q| *q - c).collect()).collect();
+    let hole_outlines: Vec<Vec<Vec2>> = regions
+        .iter()
+        .flat_map(|r| r.holes.iter())
+        .chain(extra_holes.iter())
+        .map(|h| h.polyline(SHOW_TOL).into_vec())
+        .filter(|p| p.len() >= 3)
+        .collect();
     let length = |l: &Loop2| l.segs.iter().map(|s| s.length()).sum::<f64>();
     let cut_length =
         regions.iter().map(|r| length(&r.outer) + r.holes.iter().map(length).sum::<f64>()).sum::<f64>() + extra_holes.iter().map(length).sum::<f64>();
     let area = regions.iter().map(Region2::area).sum::<f64>() - extra_holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
-    Ok(Shape { regions, extra_holes, outlines, area, cut_length, half: (hi - lo) * 0.5 })
+    Ok(Shape { regions, extra_holes, outlines, hole_outlines, area, cut_length, half: (hi - lo) * 0.5 })
 }
 
 fn rotate(p: Vec2, deg: f64) -> Vec2 {
@@ -113,6 +125,12 @@ fn rotate(p: Vec2, deg: f64) -> Vec2 {
 /// A shape's outlines turned by `deg` (about its centre).
 fn turned(shape: &Shape, deg: f64) -> Vec<Vec<Vec2>> {
     shape.outlines.iter().map(|p| p.iter().map(|q| rotate(*q, deg)).collect()).collect()
+}
+
+/// A placed copy's holes on its sheet.
+pub fn placed_holes(shape: &Shape, p: &Placement) -> Vec<Vec<Vec2>> {
+    let at = Vec2::new(p.x, p.y);
+    shape.hole_outlines.iter().map(|poly| poly.iter().map(|q| rotate(*q, p.angle) + at).collect()).collect()
 }
 
 /// A placed copy's outlines on its sheet.

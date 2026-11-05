@@ -261,3 +261,34 @@ fn parts_are_added_changed_and_removed_one_at_a_time() {
     assert!(r["placements"].as_array().into_iter().flatten().all(|p| p["part"] == 0), "B is part 0 now");
     assert!(s.execute("nest.setup", &json!({"edit": {"index": 4}})).is_err());
 }
+
+/// A part's inner contours, a sketch's or a DXF's, lie on every placed copy: `nest.info` sends
+/// them turned and moved with the copy, and the cutting DXF cuts them on INNER.
+#[test]
+fn the_holes_lie_on_every_placed_copy() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Flange"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [80, 60]}));
+    run(&mut s, "sketch.circle.center", json!({"center": [40, 30], "radius": 10}));
+    run(&mut s, "sketch.finish", json!({}));
+    let dxf = run(&mut s, "sketch.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    run(&mut s, "nest.setup", json!({"add": [{"sketch": "Flange", "count": 2}], "sheet": {"width": 400, "height": 200}, "quality": "fast"}));
+    run(&mut s, "nest.import_dxf", json!({"text": dxf, "name": "Imported", "count": 2}));
+    let r = run(&mut s, "nest.run", json!({}));
+    clean(&r);
+    let placements = r["placements"].as_array().cloned().unwrap_or_default();
+    assert_eq!(placements.len(), 4);
+    for pl in &placements {
+        let holes = pl["holes"].as_array().cloned().unwrap_or_default();
+        assert_eq!(holes.len(), 1, "one hole on each copy: {pl}");
+        // The hole is the Ø20 circle about the copy's centre, wherever and however it lies.
+        let (cx, cy) = (pl["x"].as_f64().unwrap_or(0.0), pl["y"].as_f64().unwrap_or(0.0));
+        for q in holes[0].as_array().into_iter().flatten() {
+            let d = ((q[0].as_f64().unwrap_or(0.0) - cx).powi(2) + (q[1].as_f64().unwrap_or(0.0) - cy).powi(2)).sqrt();
+            assert!((d - 10.0).abs() < 0.1, "{d}");
+        }
+    }
+    let out = run(&mut s, "nest.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    let entities = out.split("ENTITIES").nth(1).unwrap_or_default();
+    assert!(entities.matches("INNER").count() >= 4, "every copy's hole is cut");
+}

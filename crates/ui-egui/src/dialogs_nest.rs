@@ -465,13 +465,17 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     let (pressed, released, down) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.primary_down()));
     let placements = v["placements"].as_array().cloned().unwrap_or_default();
     // Each part's outlines on the screen's layout (its sheet's offset added).
-    let shown = |pl: &Value| -> Vec<Vec<[f64; 2]>> {
+    let polys_of = |pl: &Value, key: &str| -> Vec<Vec<[f64; 2]>> {
         let dx = pitch(w) * pl["sheet"].as_u64().unwrap_or(0) as f64;
-        pl["outlines"].as_array().into_iter().flatten().map(|o| points(o).into_iter().map(|p| [p[0] + dx, p[1]]).collect()).collect()
+        pl[key].as_array().into_iter().flatten().map(|o| points(o).into_iter().map(|p| [p[0] + dx, p[1]]).collect()).collect()
     };
+    let shown = |pl: &Value| polys_of(pl, "outlines");
     for (i, pl) in placements.iter().enumerate() {
         let moving = k.drag.as_ref().filter(|dg| dg.placement == i);
         let mut polys = shown(pl);
+        // Its holes (inner contours), drawn thinner, go with it.
+        let outer = polys.len();
+        polys.extend(polys_of(pl, "holes"));
         if let Some(dg) = moving {
             let (cx, cy) = (pl["x"].as_f64().unwrap_or(0.0) + pitch(w) * pl["sheet"].as_u64().unwrap_or(0) as f64, pl["y"].as_f64().unwrap_or(0.0));
             let to_x = dg.at[0] + pitch(w) * dg.sheet as f64;
@@ -492,10 +496,11 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
             Color32::from_rgb(40, 60, 110)
         };
         let width = if k.selected == Some(i) { 2.2 } else { 1.4 };
-        for poly in &polys {
+        for (n, poly) in polys.iter().enumerate() {
             let pts: Vec<Pos2> = poly.iter().map(|p| to(*p)).collect();
             if pts.len() >= 3 {
-                painter.add(egui::Shape::closed_line(pts, Stroke::new(width, colour)));
+                let line = if n < outer { width } else { width * 0.7 };
+                painter.add(egui::Shape::closed_line(pts, Stroke::new(line, colour)));
             }
         }
         if pl["locked"].as_bool().unwrap_or(false) {

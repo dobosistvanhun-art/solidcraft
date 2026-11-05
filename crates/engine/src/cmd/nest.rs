@@ -23,6 +23,9 @@ const INFO: TypedContract<NestInfoParams> = TypedContract::new();
 const IMPORT: TypedContract<NestImportParams> = TypedContract::new();
 const EXPORT: TypedContract<NestExportParams> = TypedContract::new();
 
+/// The most hole points `nest.info` sends for the editor to show.
+const MAX_SHOWN_HOLE_POINTS: usize = 400_000;
+
 /// The layer of the sheet's outline in an exported DXF.
 pub const SHEET_LAYER: &str = "SHEET";
 
@@ -48,7 +51,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .noundo()
         .contract(&INFO)
         .output(output_schema_for::<NestReply>)
-        .params("brief?: bool (no outlines). The job: sheet, gap, kerf, quality, parts (name, count, area, cut length, error), placements (sheet, x, y, angle, locked, outlines), stats, collisions, outside, variants"),
+        .params("brief?: bool (no outlines). The job: sheet, gap, kerf, quality, parts (name, count, area, cut length, error), placements (sheet, x, y, angle, locked, outlines, holes), stats, collisions, outside, variants"),
     CommandSpec::new("nest.run", "Auto Nest", crate::checked!("nest.run", run))
         .icon("pattern_rect")
         .contract(&RUN)
@@ -469,6 +472,10 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let ok: Vec<Shape> = read.into_iter().filter_map(std::result::Result::ok).collect();
     let complete = ok.len() == j.parts.len();
+    // The holes are shown while they stay a sensible size to send (a fine perforation on many
+    // copies would not).
+    let hole_points: usize = j.layout.placements.iter().filter_map(|pl| ok.get(pl.part)).map(|sh| sh.hole_outlines.iter().map(Vec::len).sum::<usize>()).sum();
+    let show_holes = hole_points <= MAX_SHOWN_HOLE_POINTS;
     let placements: Vec<Value> = j
         .layout
         .placements
@@ -478,6 +485,9 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
             let mut v = json!({"index": i, "part": pl.part, "sheet": pl.sheet, "x": round(pl.x), "y": round(pl.y), "angle": round(pl.angle), "locked": pl.locked});
             if !brief && complete && let Some(sh) = ok.get(pl.part) {
                 v["outlines"] = json!(nest::placed_outlines(sh, pl).iter().map(|poly| poly.iter().map(|q| [round(q.x), round(q.y)]).collect::<Vec<_>>()).collect::<Vec<_>>());
+                if show_holes {
+                    v["holes"] = json!(nest::placed_holes(sh, pl).iter().map(|poly| poly.iter().map(|q| [round(q.x), round(q.y)]).collect::<Vec<_>>()).collect::<Vec<_>>());
+                }
             }
             v
         })
@@ -491,6 +501,9 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
         "placements": placements,
         "unplaced": j.layout.unplaced,
     });
+    if !brief && complete && !show_holes {
+        out["holes_hidden"] = json!(true);
+    }
     if complete {
         out["stats"] = nest::stats(&j, &ok, &j.layout);
         out["collisions"] = json!(nest::collisions(&j, &ok, &j.layout).into_iter().map(|(a, b)| [a, b]).collect::<Vec<_>>());

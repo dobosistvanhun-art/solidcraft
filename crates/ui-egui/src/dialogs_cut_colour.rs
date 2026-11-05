@@ -15,7 +15,7 @@ use crate::selection::{CURVES, SelInput};
 use crate::ui_kit;
 
 /// The palette's named colours as the dialog names them (the others go by their number).
-pub const NAMES: [&str; 17] = [
+pub const NAMES: &[&str] = &[
     "Black",
     "Blue",
     "Red",

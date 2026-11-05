@@ -4,7 +4,7 @@
 
 /// The palette: its colours in LightBurn's layer order, by an English name (the first seventeen)
 /// or their number.
-pub const PALETTE: [(&str, [u8; 3]); 30] = [
+pub const PALETTE: &[(&str, [u8; 3])] = &[
     ("black", [0, 0, 0]),
     ("blue", [0, 0, 255]),
     ("red", [255, 0, 0]),
@@ -135,6 +135,7 @@ mod tests {
 
     #[test]
     fn names_and_numbers_read_back() {
+        assert_eq!(PALETTE.len(), 30, "LightBurn has 30 layer colours");
         for i in 0..30u8 {
             assert_eq!(parse(name(i).unwrap_or_default()), Some(i));
             assert_eq!(parse(&format!("{i:02}")), Some(i));

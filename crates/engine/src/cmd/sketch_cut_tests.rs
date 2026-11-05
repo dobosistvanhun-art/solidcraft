@@ -49,7 +49,7 @@ fn a_plate_with_a_hole_and_an_island_sorts_its_contours_by_nesting() {
     assert_eq!(r["open_ends"], 0);
     assert_eq!(r["open_curves"], 0);
     let dxf = r["dxf"].as_str().unwrap_or_default();
-    assert!(dxf.contains("AC1015") && dxf.contains("$INSUNITS"), "a DXF in millimetres");
+    assert!(dxf.contains("AC1018") && dxf.contains("$INSUNITS"), "an AutoCAD 2004 DXF (exact colours) in millimetres");
     let layers = entity_layers(dxf);
     assert!(layers.iter().any(|l| l == OUTER_LAYER) && layers.iter().any(|l| l == INNER_LAYER), "{layers:?}");
     assert!(!layers.iter().any(|l| l == OPEN_LAYER), "{layers:?}");
@@ -98,4 +98,69 @@ fn a_finished_sketch_is_still_saved_as_the_newest_one() {
     assert_eq!((r["outer"].as_u64(), r["inner"].as_u64()), (Some(2), Some(1)), "{r}");
     let plain = run(&mut s, "sketch.export_dxf", json!({}));
     assert!(plain["dxf"].as_str().is_some_and(|d| d.contains("CIRCLE")), "Save As DXF takes it too: {plain}");
+}
+
+/// The (code 62, code 420) colour of each entity in the ENTITIES section, by its layer.
+fn entity_colours(dxf: &str) -> Vec<(String, String, String)> {
+    let lines: Vec<&str> = dxf.lines().map(str::trim).collect();
+    let start = lines.iter().position(|l| *l == "ENTITIES").map_or(lines.len(), |i| i + 1);
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    let mut i = start;
+    while i + 1 < lines.len() {
+        match lines[i] {
+            "0" if lines[i + 1] == "ENDSEC" => break,
+            "0" => out.push(Default::default()),
+            "8" => {
+                if let Some(e) = out.last_mut() {
+                    e.0 = lines[i + 1].to_string();
+                }
+            }
+            "62" => {
+                if let Some(e) = out.last_mut() {
+                    e.1 = lines[i + 1].to_string();
+                }
+            }
+            "420" => {
+                if let Some(e) = out.last_mut() {
+                    e.2 = lines[i + 1].to_string();
+                }
+            }
+            _ => {}
+        }
+        i += 2;
+    }
+    out
+}
+
+/// A contour given a colour lies on a layer of that colour and every entity of it carries the
+/// colour exactly (LightBurn's orange, 255 128 0) and as its AutoCAD index; the others keep red
+/// part edges and blue holes. One curve of a contour colours the whole contour.
+#[test]
+fn a_contour_s_colour_goes_with_it_into_the_dxf() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    let rect = run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 60]}));
+    let edge = rect["curves"][0].as_str().unwrap_or_default().to_string();
+    let hole = run(&mut s, "sketch.circle.center", json!({"center": [30, 30], "radius": 10}))["created"]["curves"][0]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    run(&mut s, "sketch.circle.center", json!({"center": [30, 30], "radius": 4}));
+    let r = run(&mut s, "sketch.cut_colour", json!({"curves": [hole], "colour": "orange"}));
+    assert_eq!(r["colour"], "orange");
+    let r = run(&mut s, "sketch.cut_colour", json!({"curves": [edge], "colour": 3}));
+    assert_eq!(r["curves"].as_array().map(Vec::len), Some(4), "one edge colours the rectangle's four: {r}");
+    assert!(s.execute("sketch.cut_colour", &json!({"curves": [edge], "colour": "pink"})).is_err());
+    let dxf = run(&mut s, "sketch.export_cut_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    let ents = entity_colours(&dxf);
+    let orange = solidcraft_sketch::cut_colour::aci(5).to_string();
+    assert!(ents.iter().any(|e| (e.0.as_str(), e.1.as_str(), e.2.as_str()) == ("INNER_ORANGE", orange.as_str(), "16744448")), "{ents:?}");
+    let green = solidcraft_sketch::cut_colour::aci(3).to_string();
+    assert_eq!(ents.iter().filter(|e| e.0 == "OUTER_GREEN" && e.1 == green && e.2 == "57344").count(), 4, "{ents:?}");
+    // The Ø8 island keeps red.
+    assert!(ents.iter().any(|e| e.0 == "OUTER" && e.2 == "16711680"), "{ents:?}");
+    // Colour taken off again: the plain layers.
+    run(&mut s, "sketch.cut_colour", json!({"curves": [edge], "colour": null}));
+    let dxf = run(&mut s, "sketch.export_cut_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    assert!(!entity_layers(&dxf).iter().any(|l| l == "OUTER_GREEN"));
 }

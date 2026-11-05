@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::sketch_cut::CutColour;
 use super::types::IdOrName;
 
 /// A part of the job: a sketch (its closed contours) or a sheet metal body (its flat pattern).
@@ -26,6 +27,12 @@ pub struct NestPartParam {
     /// It may not turn at all.
     #[serde(default)]
     pub fixed_angle: Option<bool>,
+    /// The cutting colour of its outer contours (LightBurn layer), over the contours' own.
+    #[serde(default)]
+    pub outer_colour: Option<CutColour>,
+    /// The cutting colour of its holes.
+    #[serde(default)]
+    pub inner_colour: Option<CutColour>,
 }
 
 /// A change to one part of the job's list.
@@ -40,6 +47,12 @@ pub struct NestPartEdit {
     pub grain: Option<bool>,
     #[serde(default)]
     pub fixed_angle: Option<bool>,
+    /// The cutting colour of its outer contours (LightBurn layer), over the contours' own.
+    #[serde(default)]
+    pub outer_colour: Option<CutColour>,
+    /// The cutting colour of its holes.
+    #[serde(default)]
+    pub inner_colour: Option<CutColour>,
     /// Take it out of the job (its copies leave the layout).
     #[serde(default)]
     pub remove: Option<bool>,
@@ -64,6 +77,12 @@ pub struct NestImportParams {
     pub grain: Option<bool>,
     #[serde(default)]
     pub fixed_angle: Option<bool>,
+    /// The cutting colour of its outer contours (LightBurn layer), over the contours' own.
+    #[serde(default)]
+    pub outer_colour: Option<CutColour>,
+    /// The cutting colour of its holes.
+    #[serde(default)]
+    pub inner_colour: Option<CutColour>,
     /// Each outer contour a part of its own.
     #[serde(default)]
     pub split: Option<bool>,

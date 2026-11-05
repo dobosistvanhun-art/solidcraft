@@ -18,6 +18,7 @@
 
 mod construct;
 mod curves;
+pub mod cut_colour;
 mod decompose;
 mod dims;
 mod ends;

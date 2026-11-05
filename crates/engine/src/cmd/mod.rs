@@ -56,6 +56,7 @@ pub use sketch_construction::{
     construction_segment,
 };
 pub use sketch_create::{tangent_arc_preview, tangent_arc_starts_at};
+pub(crate) use sketch_cut::{CutLayers, contour_colour};
 pub use sketch_import::drawing_import_command;
 pub use sketch_modify::{extend_arc_preview, extend_preview, trim_piece};
 pub use view_dxf::sketch::exportable as view_dxf_exportable;

@@ -203,6 +203,7 @@ pub const DOCUMENTED: &[&str] = &[
     "sketch.copy",
     "sketch.create",
     "sketch.cut",
+    "sketch.cut_colour",
     "sketch.delete",
     "sketch.dimension",
     "sketch.edit",

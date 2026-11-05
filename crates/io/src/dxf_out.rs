@@ -1,5 +1,5 @@
 //! The flat pattern's DXF drawing, as AutoCAD 2000 (`AC1015`), the oldest release that has the
-//! ELLIPSE and SPLINE entities.
+//! ELLIPSE and SPLINE entities; as AutoCAD 2004 (`AC1018`) when a layer has an exact colour.
 //!
 //! Curves stay exact: a circle is a CIRCLE, a circular arc an ARC, a whole ellipse one ELLIPSE
 //! and a conic arc of weight below 1 an elliptical ELLIPSE arc; Béziers (TrueType glyph
@@ -48,12 +48,20 @@ pub struct DxfLayer {
     pub name: String,
     pub color: i16,
     pub linetype: DxfLinetype,
+    /// An exact colour (0xRRGGBB) besides the index: the layer and each of its entities carry it
+    /// (group 420), which makes the file AutoCAD 2004 (`AC1018`), the first release with it.
+    pub true_colour: Option<u32>,
 }
 
 impl DxfLayer {
     /// A continuous layer.
     pub fn new(name: impl Into<String>, color: i16) -> DxfLayer {
-        DxfLayer { name: name.into(), color, linetype: DxfLinetype::Continuous }
+        DxfLayer { name: name.into(), color, linetype: DxfLinetype::Continuous, true_colour: None }
+    }
+
+    /// The same layer with an exact colour too (0xRRGGBB).
+    pub fn with_true_colour(self, rgb: u32) -> DxfLayer {
+        DxfLayer { true_colour: Some(rgb & 0xFF_FFFF), ..self }
     }
 
     /// The same layer with a dashed line.
@@ -450,6 +458,9 @@ pub fn write_dxf_drawing(layers: &[DxfLayer], entities: &[DxfEntity]) -> Result<
         o.code(2, &l.name);
         o.code(70, 0);
         o.code(62, l.color);
+        if let Some(rgb) = l.true_colour {
+            o.code(420, rgb);
+        }
         o.code(6, l.linetype.name());
     }
     o.code(0, "ENDTAB");
@@ -525,6 +536,12 @@ pub fn write_dxf_drawing(layers: &[DxfLayer], entities: &[DxfEntity]) -> Result<
         o.code(330, &model);
         o.code(100, "AcDbEntity");
         o.code(8, if e.layer.trim().is_empty() { "0" } else { e.layer.as_str() });
+        // On a layer of an exact colour the entity carries it itself as well: a reader that
+        // takes the colour from the entity (a laser's software) gets the same one.
+        if let Some((index, rgb)) = layers.iter().find(|l| l.name == e.layer).and_then(|l| l.true_colour.map(|c| (l.color, c))) {
+            o.code(62, index);
+            o.code(420, rgb);
+        }
         match &e.shape {
             DxfShape::Polyline { points } => {
                 o.code(100, "AcDbPolyline");
@@ -629,7 +646,7 @@ pub fn write_dxf_drawing(layers: &[DxfLayer], entities: &[DxfEntity]) -> Result<
     head.code(0, "SECTION");
     head.code(2, "HEADER");
     head.code(9, "$ACADVER");
-    head.code(1, "AC1015");
+    head.code(1, if layers.iter().any(|l| l.true_colour.is_some()) { "AC1018" } else { "AC1015" });
     // Every character in the file is ASCII (other letters are `\U+XXXX`), which this code page
     // reads as itself.
     head.code(9, "$DWGCODEPAGE");
@@ -962,6 +979,25 @@ mod tests {
             layers.iter().map(|r| (field(r, 2), field(r, 62), field(r, 6))).collect::<Vec<_>>(),
             [("0", "7", "Continuous"), ("BEND", "1", "DASHED"), ("CUT", "4", "Continuous")]
         );
+    }
+
+    /// A layer of an exact colour: the layer and each of its entities carry the index and the
+    /// true colour, the file is AutoCAD 2004; a drawing without one stays AutoCAD 2000.
+    #[test]
+    fn an_exact_colour_is_on_the_layer_and_its_entities() {
+        let line = |layer: &str| DxfEntity { layer: layer.to_string(), shape: DxfShape::Line(Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)) };
+        let layers = [DxfLayer::new("C03", 3).with_true_colour(0x00E000), DxfLayer::new("PLAIN", 1)];
+        let dxf = write_dxf_drawing(&layers, &[line("C03"), line("PLAIN")]).unwrap();
+        let p = pairs(&dxf);
+        assert!(p.contains(&(1, "AC1018".to_string())));
+        let rec = table_records(&p, "LAYER");
+        let c03 = rec.iter().find(|r| field(r, 2) == "C03").unwrap();
+        assert_eq!((field(c03, 62), field(c03, 420)), ("3", "57344"));
+        let ents = entities(&dxf);
+        assert_eq!((values(&ents[0], 62), values(&ents[0], 420)), (vec![3.0], vec![57344.0]));
+        assert!(values(&ents[1], 62).is_empty() && values(&ents[1], 420).is_empty(), "a plain layer's entity takes its colour from the layer");
+        let plain = write_dxf_drawing(&[DxfLayer::new("PLAIN", 1)], &[line("PLAIN")]).unwrap();
+        assert!(plain.contains("AC1015"));
     }
 
     #[test]

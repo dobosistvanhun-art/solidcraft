@@ -28,6 +28,12 @@ pub struct NestPart {
     /// The part may not turn at all.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fixed_angle: bool,
+    /// The cutting colour of its outer contours and of its holes (LightBurn layer palette index),
+    /// over the contours' own; none: theirs, else red edges and blue holes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outer_colour: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_colour: Option<u8>,
 }
 
 /// The material sheet (mm): every sheet of the job is this size.

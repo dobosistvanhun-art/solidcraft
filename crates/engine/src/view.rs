@@ -558,6 +558,9 @@ fn sketch_lines_in(
             p.sketch_centerline
         } else if c.construction {
             p.sketch_construction
+        } else if let Some([r, g, b]) = c.cut_colour.filter(|i| *i != 0).and_then(solidcraft_sketch::cut_colour::rgb) {
+            // A contour's cutting colour (black stays the sketch's own, seen on any background).
+            Rgb(r, g, b)
         } else if !active {
             p.sketch_done
         } else if determined.get(i).copied().unwrap_or(false) {

@@ -40,6 +40,7 @@ pub mod dialogs;
 pub mod dialogs_appearance;
 pub mod dialogs_assembly;
 pub mod dialogs_coupling;
+pub mod dialogs_cut_colour;
 pub mod dialogs_drawing;
 pub mod dialogs_frame;
 mod dialogs_hole;

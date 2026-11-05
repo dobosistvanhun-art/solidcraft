@@ -292,3 +292,39 @@ fn the_holes_lie_on_every_placed_copy() {
     let entities = out.split("ENTITIES").nth(1).unwrap_or_default();
     assert!(entities.matches("INNER").count() >= 4, "every copy's hole is cut");
 }
+
+/// The nest DXF gives each contour its cutting colour: a sketch contour's own, a part's colour
+/// over it, else red edges and blue holes; LightBurn reads the exact colour on every entity.
+#[test]
+fn the_nest_dxf_carries_the_cutting_colours() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Flange"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [80, 60]}));
+    let hole = run(&mut s, "sketch.circle.center", json!({"center": [40, 30], "radius": 10}))["created"]["curves"][0]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    run(&mut s, "sketch.cut_colour", json!({"curves": [hole], "colour": "orange"}));
+    run(&mut s, "sketch.finish", json!({}));
+    rect(&mut s, "Tab", 30.0, 20.0);
+    run(
+        &mut s,
+        "nest.setup",
+        json!({"add": [{"sketch": "Flange"}, {"sketch": "Tab", "outer_colour": "green"}], "sheet": {"width": 400, "height": 200}, "quality": "fast"}),
+    );
+    let info = run(&mut s, "nest.info", json!({"brief": true}));
+    assert_eq!(info["parts"][1]["outer_colour"], "green");
+    clean(&run(&mut s, "nest.run", json!({})));
+    let dxf = run(&mut s, "nest.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    let entities = dxf.split("ENTITIES").nth(1).unwrap_or_default();
+    // The hole on its orange layer with its exact colour, the Tab green, the Flange's edge red.
+    assert!(entities.contains("INNER_ORANGE") && entities.contains("16744448"), "{entities}");
+    assert!(entities.contains("OUTER_GREEN") && entities.contains("57344"));
+    assert!(entities.contains("\nOUTER\n") && entities.contains("16711680"));
+    assert!(dxf.contains("AC1018"));
+    // A part's colour taken off: the Tab is red again.
+    run(&mut s, "nest.setup", json!({"edit": {"index": 1, "outer_colour": null}}));
+    let dxf = run(&mut s, "nest.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+    assert!(!dxf.contains("OUTER_GREEN"));
+    assert!(s.execute("nest.setup", &json!({"edit": {"index": 1, "outer_colour": "pink"}})).is_err());
+}

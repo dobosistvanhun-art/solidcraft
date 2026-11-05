@@ -746,6 +746,7 @@ impl Sketch {
                 centerline: false,
                 fixed: false,
                 infinite: false,
+                cut_colour: None,
             });
         }
         for li in &lay.lone {

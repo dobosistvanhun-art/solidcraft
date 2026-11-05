@@ -406,6 +406,8 @@ crate::dialog_descriptor::dialog_descriptors! {
             Drawing(Box<crate::dialogs_drawing::DrawUi>),
             /// The nesting editor: the material sheets in the viewport, the job in the panel.
             Nest(Box<crate::dialogs_nest::NestUi>),
+            /// Cut Colour: the picked contours take a LightBurn layer colour.
+            CutColour(Box<crate::dialogs_cut_colour::CutColourUi>),
             SketchIntersect {
                 bodies: bool,
                 projection_link: bool,
@@ -1148,6 +1150,7 @@ impl Dialog {
                     .or_else(|| crate::dialogs_sheet::start(app, id))
                     .or_else(|| crate::dialogs_drawing::start(app, id))
                     .or_else(|| crate::dialogs_nest::start(app, id))
+                    .or_else(|| crate::dialogs_cut_colour::start(app, id))
                     .or_else(|| crate::dialogs_surface::start(app, id))
                     .or_else(|| crate::dialogs_save_mesh::start(app, id))
                     .or_else(|| crate::dialogs_view_dxf::start(app, id))
@@ -2447,6 +2450,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::Sheet(k) => k.title(),
         Kind::Drawing(_) => "DRAWING",
         Kind::Nest(_) => "NESTING",
+        Kind::CutColour(_) => "CUT COLOUR",
         Kind::Surface(k) => k.title(),
         Kind::SaveMesh(_) => "SAVE AS MESH",
         Kind::ViewDxf { .. } => "Export Current View as DXF",
@@ -5293,7 +5297,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         Kind::Sketch | Kind::Measure { .. } => return Ok(Vec::new()),
         Kind::Assembly(k) => return crate::dialogs_assembly::commands(app, k, &d.inputs),
         Kind::Sheet(k) => return crate::dialogs_sheet::commands(app, k, &d.inputs, &d.extra),
-        Kind::Drawing(_) | Kind::Nest(_) => return Ok(Vec::new()),
+        Kind::Drawing(_) | Kind::Nest(_) | Kind::CutColour(_) => return Ok(Vec::new()),
         Kind::Surface(k) => return crate::dialogs_surface::commands(app, k, &d.inputs, &d.extra),
         Kind::SketchModify(k) => return crate::sketch_modify_ui::commands(app, k, &d.inputs, &d.extra),
         Kind::SaveMesh(k) => return crate::dialogs_save_mesh::commands(k, &d.inputs),

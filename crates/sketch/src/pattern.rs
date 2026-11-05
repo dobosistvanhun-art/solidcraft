@@ -564,6 +564,7 @@ fn copy_through(sk: &mut Sketch, cs: &[usize], ps: &[usize], f: &dyn Fn(Vec2) ->
             centerline: false,
             fixed: false,
             infinite,
+            cut_colour: cu.cut_colour,
         });
         made.push(sk.curves.len() - 1);
     }

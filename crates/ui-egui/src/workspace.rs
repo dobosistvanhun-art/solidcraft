@@ -387,6 +387,7 @@ pub const SECTIONS: &[Section] = &[
     },
     Section { tab: CUT_TAB, panel: "DIMENSION", promoted: 1, ids: &["sketch.dimension"] },
     Section { tab: CUT_TAB, panel: "CHECK", promoted: 2, ids: &["sketch.loose_ends", "sketch.loose_ends.tie"] },
+    Section { tab: CUT_TAB, panel: "COLOUR", promoted: 1, ids: &["sketch.cut_colour"] },
     Section { tab: CUT_TAB, panel: "DXF", promoted: 2, ids: &["sketch.insert_dxf", "sketch.export_cut_dxf", "sketch.export_dxf"] },
     Section { tab: NEST_TAB, panel: "NESTING", promoted: 2, ids: &["nest.setup", "nest.run"] },
     Section { tab: NEST_TAB, panel: "OUTPUT", promoted: 1, ids: &["nest.export_dxf"] },

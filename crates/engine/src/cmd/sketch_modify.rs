@@ -236,6 +236,8 @@ fn split_at(sk: &mut Sketch, ci: usize, ts: &[f64]) -> Result<(Vec<usize>, Vec<u
     let sh = sk.shape(ci).ok_or_else(|| bad("split", "curve"))?;
     let kind = sk.curves.get(ci).map(|c| c.kind.clone()).ok_or_else(|| bad("split", "curve"))?;
     let construction = sk.curves.get(ci).is_some_and(|c| c.construction);
+    // The pieces keep the curve's cutting colour.
+    let cut_colour = sk.curves.get(ci).and_then(|c| c.cut_colour);
     let mut pts = Vec::new();
     for t in ts {
         pts.push(sk.add_point(sh.point(*t), None)?);
@@ -243,7 +245,7 @@ fn split_at(sk: &mut Sketch, ci: usize, ts: &[f64]) -> Result<(Vec<usize>, Vec<u
     let mut pieces = vec![ci];
     let mut push = |sk: &mut Sketch, kind: CurveKind, prefix: &str| -> Result<()> {
         let id = sk.fresh(prefix)?;
-        sk.curves.push(Curve { id, kind, construction, reversed: false, link: None, centerline: false, fixed: false, infinite: false });
+        sk.curves.push(Curve { id, kind, construction, reversed: false, link: None, centerline: false, fixed: false, infinite: false, cut_colour });
         pieces.push(sk.curves.len() - 1);
         Ok(())
     };
@@ -3262,6 +3264,7 @@ fn copy_through(
             centerline: false,
             fixed: false,
             infinite,
+            cut_colour: cu.cut_colour,
         });
         made.push(sk.curves.len() - 1);
     }

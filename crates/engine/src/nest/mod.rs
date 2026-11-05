@@ -40,6 +40,9 @@ pub struct Shape {
     /// Its holes (inner contours and perforations) as polygons, to show; the nesting keeps parts
     /// out of them.
     pub hole_outlines: Vec<Vec<Vec2>>,
+    /// The cutting colour of each region's outer contour and of each of its holes (the
+    /// contours' own, none for a DXF or a flat pattern), as `regions` holds them.
+    pub colours: Vec<(Option<u8>, Vec<Option<u8>>)>,
     pub area: f64,
     pub cut_length: f64,
     /// Half its bounds' size (mm).
@@ -62,13 +65,15 @@ fn shifted(l: &Loop2, by: Vec2) -> Loop2 {
 /// The part's material: a sketch's regions (each outer contour with its holes; the pieces a hole
 /// cuts out left out), or a sheet's flat pattern with its perforations.
 pub fn shape(st: &ModelState, part: &NestPart) -> Result<Shape, String> {
+    let mut colours: Vec<(Option<u8>, Vec<Option<u8>>)> = Vec::new();
     let (regions, extra): (Vec<Region2>, Vec<Loop2>) = match &part.source {
         PartSource::Sketch(id) => {
             let ss = st.sketch(*id).ok_or_else(|| format!("sketch {id} is not in the design"))?;
             let holes: std::collections::HashSet<Vec<String>> = ss.profiles.iter().flat_map(|p| p.hole_curves.iter().map(|h| loop_key(h))).collect();
-            let regions: Vec<Region2> =
-                ss.profiles.iter().filter(|p| !holes.contains(&loop_key(&p.outer_curves))).map(|p| p.region.clone()).collect();
-            (regions, Vec::new())
+            let kept: Vec<_> = ss.profiles.iter().filter(|p| !holes.contains(&loop_key(&p.outer_curves))).collect();
+            let colour = |ids: &[String]| crate::cmd::contour_colour(&ss.sketch, ids);
+            colours = kept.iter().map(|p| (colour(&p.outer_curves), p.hole_curves.iter().map(|h| colour(h)).collect())).collect();
+            (kept.iter().map(|p| p.region.clone()).collect(), Vec::new())
         }
         PartSource::SheetBody(name) => {
             let sh = st.sheets.iter().find(|s| &s.body == name).ok_or_else(|| format!("no sheet metal body `{name}`"))?;
@@ -114,7 +119,7 @@ pub fn shape(st: &ModelState, part: &NestPart) -> Result<Shape, String> {
     let cut_length =
         regions.iter().map(|r| length(&r.outer) + r.holes.iter().map(length).sum::<f64>()).sum::<f64>() + extra_holes.iter().map(length).sum::<f64>();
     let area = regions.iter().map(Region2::area).sum::<f64>() - extra_holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
-    Ok(Shape { regions, extra_holes, outlines, hole_outlines, area, cut_length, half: (hi - lo) * 0.5 })
+    Ok(Shape { regions, extra_holes, outlines, hole_outlines, colours, area, cut_length, half: (hi - lo) * 0.5 })
 }
 
 fn rotate(p: Vec2, deg: f64) -> Vec2 {

@@ -213,6 +213,16 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
                         edit = Some(json!({"index": i, "fixed_angle": fixed}));
                     }
                 });
+                // Its cutting colours, over its contours' own (LightBurn layers).
+                for (key, row, salt) in [("outer_colour", "Edge colour", "nest_outer"), ("inner_colour", "Hole colour", "nest_inner")] {
+                    ui_kit::row(ui, row, |ui| {
+                        if let Some(c) = crate::dialogs_cut_colour::menu(ui, (salt, i), p[key].as_str()) {
+                            let mut e = json!({"index": i});
+                            e[key] = c.map_or(Value::Null, |c| json!(c));
+                            edit = Some(e);
+                        }
+                    });
+                }
             });
         }
         if let Some(e) = edit {

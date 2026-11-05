@@ -9,10 +9,12 @@ use solidcraft_geom::{Loop2, Vec2};
 use solidcraft_io::{DxfEntity, DxfLayer, DxfShape, loop_shapes, write_dxf_drawing};
 
 use super::CommandSpec;
+use super::CutLayers;
 use super::sketch_cut::{INNER_LAYER, OUTER_LAYER};
 use crate::nest::{self, Shape};
 use crate::params::{bad, bool_, num, str_};
 use crate::schema::nest::{NestEditParams, NestExportParams, NestImportParams, NestInfoParams, NestReply, NestRunParams, NestSetupParams};
+use crate::schema::sketch_cut::CutColour;
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
@@ -63,7 +65,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         .output(output_schema_for::<NestReply>)
         .params(
             "parts?: [{sketch: id|name | body: sheet metal body, count?: n (default 1), grain?: bool (half turns only), fixed_angle?: bool}] (replaces the list and drops the layout); \
-             add?: [the same] (appended, the layout kept); edit?: {index, count?, grain?, fixed_angle?, remove?: bool}; \
+             add?: [the same] (appended, the layout kept); edit?: {index, count?, grain?, fixed_angle?, outer_colour?, inner_colour?, remove?: bool}; \
+             outer_colour?, inner_colour?: a part's cutting colour (LightBurn layer: a name, 0..29 or none) over its contours' own; \
              sheet?: {width, height, margin?} mm; gap?: mm; kerf?: mm (cut width, kept apart from the gap); quality?: fast (15°) | normal (5°) | precise (1°); clear?: bool",
         ),
 ];
@@ -129,7 +132,17 @@ fn part_param(s: &Session, v: &Value, i: usize, cmd: &str) -> Result<NestPart> {
         count: count_param(v, i, cmd)?.unwrap_or(1),
         grain: bool_(v, "grain").unwrap_or(false),
         fixed_angle: bool_(v, "fixed_angle").unwrap_or(false),
+        outer_colour: colour_param(v, "outer_colour", cmd)?.flatten(),
+        inner_colour: colour_param(v, "inner_colour", cmd)?.flatten(),
     })
+}
+
+/// A cutting colour a part sets: absent (None), or a colour or none (null, "none").
+fn colour_param(v: &Value, key: &str, cmd: &str) -> Result<Option<Option<u8>>> {
+    match v.get(key) {
+        None => Ok(None),
+        Some(c) => CutColour::read(c).map(|c| Some(c.0)).map_err(|e| bad(cmd, format!("`{key}` {e}"))),
+    }
 }
 
 fn count_param(v: &Value, i: usize, cmd: &str) -> Result<Option<u32>> {
@@ -243,6 +256,12 @@ fn setup(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(f) = bool_(e, "fixed_angle") {
                 part.fixed_angle = f;
             }
+            if let Some(c) = colour_param(e, "outer_colour", cmd)? {
+                part.outer_colour = c;
+            }
+            if let Some(c) = colour_param(e, "inner_colour", cmd)? {
+                part.inner_colour = c;
+            }
         }
     }
     if let Some(sh) = p.get("sheet") {
@@ -307,6 +326,7 @@ fn import_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     });
     let count = count_param(p, 0, cmd)?.unwrap_or(1);
     let (grain, fixed_angle) = (bool_(p, "grain").unwrap_or(false), bool_(p, "fixed_angle").unwrap_or(false));
+    let (outer_colour, inner_colour) = (colour_param(p, "outer_colour", cmd)?.flatten(), colour_param(p, "inner_colour", cmd)?.flatten());
     let groups: Vec<(String, Vec<solidcraft_geom::Region2>)> = if bool_(p, "split").unwrap_or(false) && regions.len() > 1 {
         regions.into_iter().enumerate().map(|(k, r)| (format!("{base}-{}", k + 1), vec![r])).collect()
     } else {
@@ -318,7 +338,7 @@ fn import_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let added = groups.len();
     for (name, regions) in groups {
-        j.parts.push(NestPart { source: PartSource::Imported { name, regions }, count, grain, fixed_angle });
+        j.parts.push(NestPart { source: PartSource::Imported { name, regions }, count, grain, fixed_angle, outer_colour, inner_colour });
     }
     s.doc_mut().nesting = Some(j);
     let mut out = info(s, &json!({"brief": true}))?;
@@ -454,6 +474,11 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
         .zip(&read)
         .map(|(part, shape)| {
             let mut v = json!({"name": part_name(s, part), "count": part.count, "grain": part.grain, "fixed_angle": part.fixed_angle});
+            for (key, c) in [("outer_colour", part.outer_colour), ("inner_colour", part.inner_colour)] {
+                if let Some(name) = c.and_then(solidcraft_sketch::cut_colour::name) {
+                    v[key] = json!(name);
+                }
+            }
             match &part.source {
                 PartSource::Sketch(id) => v["sketch"] = json!(id),
                 PartSource::SheetBody(b) => v["body"] = json!(b),
@@ -514,22 +539,32 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// One sheet of the layout as DXF entities: every copy's loops where it lies.
-fn sheet_entities(j: &NestJob, shapes: &[Shape], sheet: usize, outline: bool) -> Vec<DxfEntity> {
+/// One sheet of the layout as DXF entities and their layers: every copy's loops where it lies,
+/// each in its cutting colour (the part's, else the contour's own, else red edges and blue holes).
+fn sheet_entities(j: &NestJob, shapes: &[Shape], sheet: usize, outline: bool) -> (Vec<DxfEntity>, Vec<DxfLayer>) {
     let mut out = Vec::new();
+    let mut cut = CutLayers::default();
     for pl in j.layout.placements.iter().filter(|p| p.sheet == sheet) {
         let (Some(shape), Some(m)) = (shapes.get(pl.part), nest::placement_transform(pl)) else { continue };
+        let part = j.parts.get(pl.part);
+        let (outer_over, inner_over) = (part.and_then(|p| p.outer_colour), part.and_then(|p| p.inner_colour));
         let moved = |l: &Loop2| Loop2 { segs: l.segs.iter().map(|s| s.similar(&m)).collect() };
-        for r in &shape.regions {
-            out.extend(loop_shapes(&moved(&r.outer)).into_iter().map(|shape| DxfEntity { layer: OUTER_LAYER.to_string(), shape }));
-            for h in &r.holes {
-                out.extend(loop_shapes(&moved(h)).into_iter().map(|shape| DxfEntity { layer: INNER_LAYER.to_string(), shape }));
+        for (k, r) in shape.regions.iter().enumerate() {
+            let own = shape.colours.get(k);
+            let layer = cut.layer(OUTER_LAYER, outer_over.or(own.and_then(|c| c.0)));
+            out.extend(loop_shapes(&moved(&r.outer)).into_iter().map(|shape| DxfEntity { layer: layer.clone(), shape }));
+            for (n, h) in r.holes.iter().enumerate() {
+                let layer = cut.layer(INNER_LAYER, inner_over.or(own.and_then(|c| c.1.get(n).copied().flatten())));
+                out.extend(loop_shapes(&moved(h)).into_iter().map(|shape| DxfEntity { layer: layer.clone(), shape }));
             }
         }
+        let layer = cut.layer(INNER_LAYER, inner_over);
         for h in &shape.extra_holes {
-            out.extend(loop_shapes(&moved(h)).into_iter().map(|shape| DxfEntity { layer: INNER_LAYER.to_string(), shape }));
+            out.extend(loop_shapes(&moved(h)).into_iter().map(|shape| DxfEntity { layer: layer.clone(), shape }));
         }
     }
+    let mut layers = cut.into_layers();
+    layers.push(DxfLayer::new(SHEET_LAYER, 8));
     if outline {
         let (w, h) = (j.sheet.width, j.sheet.height);
         out.push(DxfEntity {
@@ -537,7 +572,7 @@ fn sheet_entities(j: &NestJob, shapes: &[Shape], sheet: usize, outline: bool) ->
             shape: DxfShape::Polyline { points: vec![Vec2::ZERO, Vec2::new(w, 0.0), Vec2::new(w, h), Vec2::new(0.0, h), Vec2::ZERO] },
         });
     }
-    out
+    (out, layers)
 }
 
 fn export(s: &mut Session, p: &Value) -> Result<Value> {
@@ -549,7 +584,6 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "nothing is laid out yet (nest.run)"));
     }
     let outline = bool_(p, "sheet_outline").unwrap_or(false);
-    let layers = [DxfLayer::new(OUTER_LAYER, 1), DxfLayer::new(INNER_LAYER, 5), DxfLayer::new(SHEET_LAYER, 8)];
     let mut warnings = Vec::new();
     let hits = nest::collisions(&j, &shapes, &j.layout);
     if !hits.is_empty() {
@@ -559,7 +593,10 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     if !off.is_empty() {
         warnings.push(format!("{} parts reach past the sheet's margin", off.len()));
     }
-    let text = |sheet: usize| write_dxf_drawing(&layers, &sheet_entities(&j, &shapes, sheet, outline)).map_err(|e| bad(cmd, e.to_string()));
+    let text = |sheet: usize| {
+        let (entities, layers) = sheet_entities(&j, &shapes, sheet, outline);
+        write_dxf_drawing(&layers, &entities).map_err(|e| bad(cmd, e.to_string()))
+    };
     let path = str_(p, "path").filter(|x| !x.trim().is_empty());
     if bool_(p, "all").unwrap_or(false) {
         let path = path.ok_or_else(|| bad(cmd, "`all` writes a file per sheet: give `path`"))?;

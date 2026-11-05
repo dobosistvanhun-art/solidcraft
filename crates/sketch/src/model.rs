@@ -207,6 +207,10 @@ pub struct Curve {
     /// a profile (it is construction too).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub infinite: bool,
+    /// The colour a cutting drawing gives the contour this curve is in ([`crate::cut_colour`]
+    /// palette index; none: red part edges, blue holes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_colour: Option<u8>,
 }
 
 /// How two circles lie, for a [`ConstraintKind::CircleCircleDistance`]: which gap between their
@@ -900,6 +904,7 @@ impl Sketch {
             centerline: false,
             fixed: false,
             infinite: false,
+            cut_colour: None,
         });
         Ok(self.curves.len() - 1)
     }
@@ -938,6 +943,7 @@ impl Sketch {
             centerline: false,
             fixed: false,
             infinite: false,
+            cut_colour: None,
         });
         Ok(self.curves.len() - 1)
     }
@@ -973,6 +979,7 @@ impl Sketch {
             centerline: false,
             fixed: false,
             infinite: false,
+            cut_colour: None,
         });
         Ok(self.curves.len() - 1)
     }
@@ -1634,7 +1641,17 @@ impl Sketch {
             }
         };
         let id = self.curve_id(id, prefix)?;
-        self.curves.push(Curve { id, kind, construction: false, reversed: false, link: None, centerline: false, fixed: false, infinite: false });
+        self.curves.push(Curve {
+            id,
+            kind,
+            construction: false,
+            reversed: false,
+            link: None,
+            centerline: false,
+            fixed: false,
+            infinite: false,
+            cut_colour: None,
+        });
         Ok(self.curves.len() - 1)
     }
 

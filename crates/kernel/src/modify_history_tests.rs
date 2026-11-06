@@ -289,6 +289,27 @@ fn draft_tilts_faces() {
     assert_eq!(with(h, &[face(face_at(&l, wall))]).len(), 1);
 }
 
+/// A face already askew to the pull (a cube's side tilted by an earlier draft) drafts further:
+/// it turns by the angle more about its line on the neutral plane.
+#[test]
+fn a_face_askew_to_the_pull_drafts_further() {
+    let b = cube();
+    let side = Vec3::new(40.0, 15.0, 10.0);
+    let once = crate::draft(&b, &[side], &Plane::XY, Vec3::Z, 5f64.to_radians()).unwrap();
+    // The tilted face, halfway up: its normal is 5° off X toward Z, so a point on it at z = 10.
+    let x10 = 40.0 - 10.0 * 5f64.to_radians().tan();
+    let twice = crate::draft(&once, &[Vec3::new(x10, 15.0, 10.0)], &Plane::XY, Vec3::Z, 5f64.to_radians()).unwrap();
+    let mesh = twice.tessellate(0.01).unwrap();
+    // At the top (z = 20) the side is now 10° in: x = 40 − 20·tan 10°; at the neutral plane still 40.
+    let top_x = mesh.positions.iter().filter(|p| (p.z - 20.0).abs() < 1e-6).map(|p| p.x).fold(f64::MIN, f64::max);
+    assert!((top_x - (40.0 - 20.0 * 10f64.to_radians().tan())).abs() < 1e-6, "{top_x}");
+    let foot_x = mesh.positions.iter().filter(|p| p.z.abs() < 1e-6).map(|p| p.x).fold(f64::MIN, f64::max);
+    assert!((foot_x - 40.0).abs() < 1e-6, "{foot_x}");
+    // A cap parallel to the neutral plane says why it can't be drafted.
+    let e = crate::draft(&b, &[Vec3::new(20.0, 15.0, 20.0)], &Plane::XY, Vec3::Z, 5f64.to_radians()).unwrap_err().to_string();
+    assert!(e.contains("neutral plane"), "{e}");
+}
+
 #[test]
 fn offset_moves_a_face() {
     let b = ell();

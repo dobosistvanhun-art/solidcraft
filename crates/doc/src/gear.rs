@@ -85,6 +85,79 @@ pub fn chain(name: &str) -> Option<Chain> {
     CHAINS.iter().copied().find(|c| c.name == n)
 }
 
+/// Which kind of chain a name is: what tells an ordinary user which chain it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainFamily {
+    /// ISO 606 A series (`08A`): the American sizes in metric; the same as ANSI.
+    IsoA,
+    /// ISO 606 B series (`08B`): the European (British) standard.
+    IsoB,
+    /// ANSI roller chain (`40`): its number is the pitch in eighths of an inch, then 0 (1: light, 5: rollerless).
+    Ansi,
+    /// Motorcycle chain (`520`): the pitch in eighths of an inch, then the inner width in eightieths.
+    Motorcycle,
+    /// Bicycle and moped chain (`081`, `083`): 1/2" pitch.
+    Bicycle,
+    /// Pitch x roller x width given by hand.
+    Custom,
+}
+
+impl ChainFamily {
+    pub fn of(c: &Chain) -> ChainFamily {
+        let n = c.name;
+        if n == "custom" {
+            ChainFamily::Custom
+        } else if n.ends_with('A') {
+            ChainFamily::IsoA
+        } else if n.ends_with('B') {
+            ChainFamily::IsoB
+        } else if n.starts_with('0') {
+            ChainFamily::Bicycle
+        } else if n.len() == 3 {
+            ChainFamily::Motorcycle
+        } else {
+            ChainFamily::Ansi
+        }
+    }
+}
+
+/// The pitch in inches when it is a whole number of sixteenths (`5/8"`, `1"`, `1 1/4"`), else None
+/// (the metric 04B and 05B).
+pub fn inch_pitch(pitch: f64) -> Option<String> {
+    let sixteenths = pitch / 25.4 * 16.0;
+    let n = sixteenths.round();
+    if !(1.0..=640.0).contains(&n) || (sixteenths - n).abs() > 0.01 {
+        return None;
+    }
+    let n = n as u32;
+    let (whole, rest) = (n / 16, n % 16);
+    let fraction = if rest == 0 {
+        String::new()
+    } else {
+        let g = gcd(rest, 16);
+        format!("{}/{}", rest / g, 16 / g)
+    };
+    Some(match (whole, fraction.is_empty()) {
+        (0, _) => format!("{fraction}\""),
+        (w, true) => format!("{w}\""),
+        (w, false) => format!("{w} {fraction}\""),
+    })
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// The other catalogue chains of the same size (pitch, roller and width to a hundredth of a mm):
+/// `10A` and `50` are one chain.
+pub fn same_size(c: &Chain) -> Vec<&'static str> {
+    CHAINS
+        .iter()
+        .filter(|x| x.name != c.name && (x.pitch - c.pitch).abs() < 0.01 && (x.roller - c.roller).abs() < 0.01 && (x.inner_width - c.inner_width).abs() < 0.01)
+        .map(|x| x.name)
+        .collect()
+}
+
 /// The chain names, for messages.
 pub fn chain_names() -> String {
     CHAINS.iter().map(|c| c.name).collect::<Vec<_>>().join(", ")
@@ -446,6 +519,26 @@ pub fn with_bore(outer: Loop2, bore: f64, root: f64) -> Result<Region2> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_chain_says_what_it_is() {
+        use super::{ChainFamily, chain, inch_pitch, same_size};
+        let c = |n: &str| chain(n).unwrap_or_else(|| panic!("{n}"));
+        assert_eq!(ChainFamily::of(&c("10A")), ChainFamily::IsoA);
+        assert_eq!(ChainFamily::of(&c("08B")), ChainFamily::IsoB);
+        assert_eq!(ChainFamily::of(&c("50")), ChainFamily::Ansi);
+        assert_eq!(ChainFamily::of(&c("520")), ChainFamily::Motorcycle);
+        assert_eq!(ChainFamily::of(&c("081")), ChainFamily::Bicycle);
+        assert_eq!(ChainFamily::of(&c("12.7x8.51x7.75")), ChainFamily::Custom);
+        assert_eq!(inch_pitch(15.875).as_deref(), Some("5/8\""));
+        assert_eq!(inch_pitch(25.4).as_deref(), Some("1\""));
+        assert_eq!(inch_pitch(31.75).as_deref(), Some("1 1/4\""));
+        assert_eq!(inch_pitch(9.525).as_deref(), Some("3/8\""));
+        assert_eq!(inch_pitch(6.0), None);
+        assert_eq!(same_size(&c("10A")), vec!["50"]);
+        assert_eq!(same_size(&c("40")), vec!["08A"]);
+        assert!(same_size(&c("520")).is_empty());
+    }
+
     use super::*;
 
     #[test]

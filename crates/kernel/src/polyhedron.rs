@@ -264,13 +264,17 @@ pub fn draft(b: &Body, faces: &[Vec3], neutral: &Plane, pull: Vec3, angle: f64) 
             out.push(*h);
             continue;
         }
-        if h.n.dot(pull).abs() > 1e-6 {
-            return Err(KernelError::Failed("not supported yet: drafting faces that aren't parallel to the pull direction".into()));
-        }
-        // Hinge: the face's line on the neutral plane; rotate the normal toward the pull.
-        let n2 = (h.n * angle.cos() + pull * angle.sin()).normalized().ok_or_else(|| KernelError::Failed("draft".into()))?;
-        let hinge_pt =
-            neutral.intersect_ray(*c, pull).ok_or_else(|| KernelError::Failed("the neutral plane is parallel to the pull direction".into()))?;
+        let (n2, hinge_pt) = if h.n.dot(pull).abs() <= 1e-6 {
+            // A wall along the pull. Hinge: its line on the neutral plane; the normal turns toward the pull.
+            let n2 = (h.n * angle.cos() + pull * angle.sin()).normalized().ok_or_else(|| KernelError::Failed("draft".into()))?;
+            let hinge_pt =
+                neutral.intersect_ray(*c, pull).ok_or_else(|| KernelError::Failed("the neutral plane is parallel to the pull direction".into()))?;
+            (n2, hinge_pt)
+        } else {
+            // A face already askew to the pull: it turns by the angle more, about its line on the
+            // neutral plane, leaning in further going along the pull.
+            tilted(h.n, *c, neutral, pull, angle)?
+        };
         out.push(HalfSpace { n: n2, d: n2.dot(hinge_pt) });
         moved += 1;
     }
@@ -282,6 +286,33 @@ pub fn draft(b: &Body, faces: &[Vec3], neutral: &Plane, pull: Vec3, angle: f64) 
     let groups: Vec<Vec<usize>> = hs.into_iter().map(|(.., under)| under).collect();
     let h = planes_history(&r, &on, &groups, b);
     Ok(r.with_checked_history(h, &record::counts(&[b])))
+}
+
+/// A face (normal `n`, through `c`) askew to `pull`, turned by `angle` about its line on the
+/// neutral plane so that it leans in further going along `pull`: its new normal and a point on the
+/// hinge.
+fn tilted(n: Vec3, c: Vec3, neutral: &Plane, pull: Vec3, angle: f64) -> Result<(Vec3, Vec3)> {
+    let nn = neutral.normal();
+    // The hinge's direction: along both the face and the neutral plane.
+    let hinge = nn
+        .cross(n)
+        .normalized()
+        .ok_or_else(|| KernelError::Invalid("a face parallel to the neutral plane can't be drafted: pick the side faces, or a neutral plane across them".into()))?;
+    // Turning about the hinge, the normal goes toward hinge × n or away from it: toward the pull.
+    let toward = hinge.cross(n);
+    let toward = if toward.dot(pull) < 0.0 { toward * -1.0 } else { toward };
+    let n2 = (n * angle.cos() + toward * angle.sin()).normalized().ok_or_else(|| KernelError::Failed("draft".into()))?;
+    if n2.dot(pull).abs() > 1.0 - 1e-6 {
+        return Err(KernelError::Invalid("the draft would turn the face square to the pull direction: use a smaller angle".into()));
+    }
+    // A point on the hinge: from the face's centre, along the face toward the neutral plane.
+    let across = nn - n * n.dot(nn);
+    let den = across.dot(nn);
+    if den.abs() < 1e-12 {
+        return Err(KernelError::Invalid("a face parallel to the neutral plane can't be drafted".into()));
+    }
+    let t = (neutral.origin - c).dot(nn) / den;
+    Ok((n2, c + across * t))
 }
 
 /// Draft of a non-convex body: walls (planes, cylinders) next to caps square to `pull`.

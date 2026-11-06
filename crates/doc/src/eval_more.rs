@@ -1631,19 +1631,48 @@ fn sheet_prism_cut(
         // is exact, and a cut that machines nothing there is checked against the solid after it.
         // (That boolean cost each label hundreds of milliseconds, and against a sheet already
         // carrying a label's cut-outs it came out empty: the next cut was dropped.)
-        for bends in sh.unmodeled_solids(plane)? {
+        // The bends and the panels askew to the cut it meets: a through cut takes them out square
+        // to the sheet (a normal cut, `SheetBody::normal_cut`), worked out before the panels
+        // parallel to the plane change the sheet.
+        let mut crossed = Vec::new();
+        for (bi, bends) in sh.unmodeled_solids(plane)?.into_iter().enumerate() {
             let bends_box = body_box(&bends);
             for (tool, tool_box) in tools.iter().zip(&tool_boxes) {
                 if boxes_apart(&bends_box, tool_box) {
                     continue;
                 }
                 if kernel::boolean(&bends, tool, kernel::BoolOp::Intersect)?.is_some() {
-                    return Err(DocError::Invalid(
-                        "this machining intersects a folded bend or a nonparallel panel; unfold the sheet before machining that material".into(),
-                    ));
+                    if operation != Operation::Cut {
+                        return Err(DocError::Invalid(
+                            "this machining intersects a folded bend or a nonparallel panel; unfold the sheet before machining that material".into(),
+                        ));
+                    }
+                    crossed.push(bi);
+                    break;
                 }
             }
         }
+        let across = if crossed.is_empty() {
+            Vec::new()
+        } else {
+            let shapes: Vec<(Plane, &Region2)> = if footprints_bound && current_footprints.len() == tools.len() {
+                current_footprints.iter().map(|(p, r)| (*p, r)).collect()
+            } else {
+                regions.iter().map(|r| (*plane, r)).collect()
+            };
+            let inside = |q: Vec3| {
+                let h = (q - plane.origin).dot(n);
+                h >= span.0 && h <= span.1 && shapes.iter().any(|(p, r)| r.contains(p.to_local(q)))
+            };
+            let cut = sh.normal_cut(plane, &crossed, &inside, &mut work)?;
+            if cut.is_empty() {
+                return Err(DocError::Invalid(
+                    "this machining meets a folded bend or a nonparallel panel only in part of the sheet's thickness; cut through the sheet there, or unfold it first"
+                        .into(),
+                ));
+            }
+            cut
+        };
         let candidates = if sh.flat {
             if sh.frame.normal().cross(n).len() > 1e-6 { Vec::new() } else { sh.flat_regions()?.into_iter().map(|r| (None, r)).collect() }
         } else {
@@ -1739,7 +1768,18 @@ fn sheet_prism_cut(
                             "sheet machining depth is below the supported 0.000001 mm extrusion resolution; increase the layer depth".into(),
                         ));
                     }
-                    if !clipped.is_empty() && z0 <= 1e-7 && z1 >= sh.t - 1e-7 {
+                    if !clipped.is_empty() && !across.is_empty() {
+                        // A cut across a bend: in the flat the tool's region runs on past this panel
+                        // over the bend and the flanges, which it doesn't meet there; this panel's
+                        // part only, through the sheet as in the bend.
+                        if z0 > 1e-7 || z1 < sh.t - 1e-7 {
+                            return Err(DocError::Invalid(
+                                "a cut across a folded bend goes through the whole sheet; make it through all, or unfold the sheet first".into(),
+                            ));
+                        }
+                        sh.holes.extend(clipped);
+                        modeled = true;
+                    } else if !clipped.is_empty() && z0 <= 1e-7 && z1 >= sh.t - 1e-7 {
                         // Keep a single original tool boundary across structural seams.
                         // Re-clipping notch polygons creates coincident seam endpoints.
                         if !sh.holes.contains(&flat) {
@@ -1754,6 +1794,10 @@ fn sheet_prism_cut(
                     }
                 }
             }
+        }
+        if !across.is_empty() {
+            sh.holes.extend(across);
+            modeled = true;
         }
         if modeled {
             for flat in labels {

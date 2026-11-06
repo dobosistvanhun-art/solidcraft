@@ -914,7 +914,13 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                     // its own (pitch x roller x width).
                     use solidcraft_engine::doc::gear::{CHAINS, chain};
                     let mut labels: Vec<String> =
-                        CHAINS.iter().map(|c| format!("{}  (p {} · roller {} · width {})", c.name, c.pitch, c.roller, c.inner_width)).collect();
+                        CHAINS
+                        .iter()
+                        .map(|c| match solidcraft_engine::doc::gear::inch_pitch(c.pitch) {
+                            Some(i) => format!("{}  ({i} · p {} · roller {} · width {})", c.name, c.pitch, c.roller, c.inner_width),
+                            None => format!("{}  (p {} · roller {} · width {})", c.name, c.pitch, c.roller, c.inner_width),
+                        })
+                        .collect();
                     labels.push("Custom: pitch x roller x width".into());
                     let names: Vec<&str> = labels.iter().map(String::as_str).collect();
                     let current = CHAINS.iter().position(|c| chain(v).is_some_and(|x| x.name == c.name));
@@ -926,6 +932,9 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                     }
                     if sel == CHAINS.len() {
                         enter |= expr_row(ui, "Custom chain", v);
+                    }
+                    if let Some(c) = chain(v) {
+                        crate::chain_help::rows(ui, &c);
                     }
                     continue;
                 }

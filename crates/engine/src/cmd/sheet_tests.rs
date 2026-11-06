@@ -3602,10 +3602,15 @@ fn hole_beside_two_adjacent_edge_flanges_cuts_and_bends_stay_guarded() {
     }
     let after = volume(&mut s);
     assert!((before - after - 9.0 * PI * 2.5).abs() < 0.05, "{before} -> {after}");
+    // A hole through the bend is a cut-out of the bend too (a normal cut).
     let mut bend = Session::default();
     build(&mut bend);
-    let error = hole(&mut bend, "Bend", [78.5, 20.0]).unwrap_err().to_string();
-    assert!(error.contains("bend"), "{error}");
+    let v = volume(&mut bend);
+    if let Err(e) = hole(&mut bend, "Bend", [78.5, 20.0]) {
+        panic!("hole through the bend: {e}");
+    }
+    let cut = v - volume(&mut bend);
+    assert!(cut > 1.0, "{v} -> {cut}");
 }
 
 /// The guard of #296 sews every bend on its own. A bend that carries a folded round cut-out
@@ -3637,10 +3642,15 @@ fn hole_beside_a_bend_with_a_round_cut_out_cuts_and_the_bend_stays_guarded() {
     }
     let after = volume(&mut s);
     assert!((before - after - 9.0 * PI * 2.5).abs() < 0.05, "{before} -> {after}");
+    // A hole through the bend is a cut-out of the bend too (a normal cut).
     let mut bend = Session::default();
     build(&mut bend);
-    let error = hole(&mut bend, "Bend", [25.0, 1.5]).unwrap_err().to_string();
-    assert!(error.contains("bend"), "{error}");
+    let v = volume(&mut bend);
+    if let Err(e) = hole(&mut bend, "Bend", [25.0, 1.5]) {
+        panic!("hole through the bend: {e}");
+    }
+    let cut = v - volume(&mut bend);
+    assert!(cut > 1.0, "{v} -> {cut}");
 }
 
 /// Whether the flat pattern has a cut-out whose points all lie on the circle of radius `r` about `c`.
@@ -4994,14 +5004,14 @@ fn a_box_cut_straight_through_a_flat_sheet_is_a_cutout_like_the_extrude_cut() {
     let f = flat(&mut s);
     assert_eq!(f["pockets"].as_array().map(Vec::len), Some(1));
     assert_eq!(f["pockets"][0]["depth_mm"], 1.0);
-    // A box across a folded bend, or a cylinder lying in the sheet, is still 3D machining
-    // and still refused atomically.
+    // A box that only dents a folded bend is still refused atomically, and so is a cylinder
+    // lying in the sheet (a cut across a bend through the sheet: `a_cut_across_a_bend_…`).
     let mut tilted = Session::default();
     base(&mut tilted, 100.0, 60.0);
     run(&mut tilted, "sheet.flange", json!({"edges": [[50, 0, 2.5]], "height": 20}));
     let before = tilted.doc.to_json();
     let error = tilted
-        .execute("solid.box", &json!({"corner": [40, -10, -5], "length": 20, "width": 20, "height": 40, "operation": "cut"}))
+        .execute("solid.box", &json!({"corner": [40, -10, -10], "length": 20, "width": 11.8, "height": 11.8, "operation": "cut"}))
         .unwrap_err()
         .to_string();
     assert!(error.contains("bend") || error.contains("preserv"), "{error}");
@@ -5011,6 +5021,54 @@ fn a_box_cut_straight_through_a_flat_sheet_is_a_cutout_like_the_extrude_cut() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("preserv"), "{error}");
+}
+
+/// A cut straight through a folded bend takes the sheet out square to it (a normal cut): the
+/// folded part loses what the tool covers, the flat pattern loses the same strip unrolled, and
+/// unfolding, refolding and the DXF all carry it.
+#[test]
+fn a_cut_across_a_bend_goes_through_the_bend_and_the_flange() {
+    for tool in ["box", "extrude"] {
+        let mut s = Session::default();
+        base(&mut s, 100.0, 60.0);
+        run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2.5]], "height": 20}));
+        let (v0, f0) = (volume(&mut s), flat(&mut s));
+        // The flat pattern's area: its outline less its cut-outs.
+        let area = |f: &Value| {
+            let ring = |l: &Value| {
+                let p: Vec<(f64, f64)> =
+                    l.as_array().map(|a| a.iter().map(|q| (q[0].as_f64().unwrap_or(0.0), q[1].as_f64().unwrap_or(0.0))).collect()).unwrap_or_default();
+                (0..p.len()).map(|i| p[i].0 * p[(i + 1) % p.len()].1 - p[(i + 1) % p.len()].0 * p[i].1).sum::<f64>().abs() / 2.0
+            };
+            let sum = |k: &str| f[k].as_array().map(|a| a.iter().map(ring).sum::<f64>()).unwrap_or(0.0);
+            sum("outline") - sum("cutouts")
+        };
+        let area0 = area(&f0);
+        let length = f0["flat_size_mm"][1].as_f64().unwrap_or(0.0);
+        // x 40..60, from y = 10 on the base over the bend and the whole flange.
+        if tool == "box" {
+            run(&mut s, "solid.box", json!({"corner": [40, -10, -5], "length": 20, "width": 20, "height": 40, "operation": "cut"}));
+        } else {
+            rectangle_tool(&mut s, "Notch", [40.0, -10.0], [60.0, 10.0]);
+            run(&mut s, "solid.extrude", json!({"sketch": "Notch", "through_all": true, "direction": "symmetric", "operation": "cut"}));
+        }
+        // The part is the same section all along x: the cut takes 20 mm of everything below y = 10.
+        let t = 2.5;
+        let want = v0 - 20.0 * (v0 / 100.0 - 50.0 * t);
+        let v1 = volume(&mut s);
+        assert!((v1 - want).abs() < 0.05, "{tool}: volume {v1}, want {want} (before {v0})");
+        // In the flat, a 20 mm wide notch from y = 10 (on the base) to the flange's far edge.
+        let f1 = flat(&mut s);
+        let a1 = area(&f1);
+        let want = area0 - 20.0 * (length - 50.0);
+        assert!((a1 - want).abs() < 0.05, "{tool}: flat area {a1}, want {want} (before {area0}): {}", f1["outline"]);
+        assert_eq!(f1["cutouts"].as_array().map(Vec::len), Some(0), "{tool}: a notch from the edge, not a cut-out");
+        let dxf = run(&mut s, "sheet.export_dxf", json!({}))["dxf"].as_str().unwrap_or_default().to_string();
+        assert!(dxf.contains("LINE") || dxf.contains("LWPOLYLINE"), "{tool}: the DXF has the outline");
+        run(&mut s, "sheet.unfold", json!({}));
+        run(&mut s, "sheet.refold", json!({}));
+        assert!((volume(&mut s) - v1).abs() < 0.05, "{tool}: unfold and refold keep the cut");
+    }
 }
 
 #[test]

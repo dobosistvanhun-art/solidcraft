@@ -535,3 +535,40 @@ fn a_free_projected_view_goes_anywhere() {
         "a base view has no parent to line up with"
     );
 }
+
+/// A section is dimensioned on what it shows: the corners of its cut faces (the hole's walls in
+/// the cut) are points to measure to, and a dimension measures them, not the hole's edges on the
+/// part's faces that happen to lie near them.
+#[test]
+fn a_section_is_dimensioned_on_its_cut() {
+    let mut s = plate();
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [120, 200]}))["view"].as_u64().unwrap();
+    let sec = run(&mut s, "drawing.view.section", json!({"drawing": "D", "parent": top, "line": [[60, 200], [180, 200]], "at": [120, 120]}))["view"]
+        .as_u64()
+        .unwrap();
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    let (x0, y0, x1, y1) = view_frame(&r, sec);
+    let v = r["views"].as_array().and_then(|vs| vs.iter().find(|v| v["id"] == sec).cloned()).unwrap_or_default();
+    let ends: Vec<[f64; 2]> = v["points"]
+        .as_array()
+        .map(|a| a.iter().filter(|p| p["kind"] == "end").map(|p| [p["at"][0].as_f64().unwrap_or(0.0), p["at"][1].as_f64().unwrap_or(0.0)]).collect())
+        .unwrap_or_default();
+    // The hole (x 40..60 of the plate) cut through: the corners of its walls can be picked.
+    for c in [[x0 + 40.0, y0], [x0 + 40.0, y1], [x0 + 60.0, y0], [x0 + 60.0, y1]] {
+        assert!(ends.iter().any(|e| (e[0] - c[0]).abs() < 1e-6 && (e[1] - c[1]).abs() < 1e-6), "no point at {c:?}: {ends:?}");
+    }
+    for (kind, pts) in [
+        ("vertical", json!([[x0, y0], [x0, y1]])),
+        ("horizontal", json!([[x0 + 40.0, y1], [x0 + 60.0, y1]])),
+        ("horizontal", json!([[x0, y1], [x0 + 40.0, y1]])),
+        ("horizontal", json!([[x0, y0], [x1, y0]])),
+    ] {
+        run(&mut s, "drawing.dimension", json!({"drawing": "D", "view": sec, "kind": kind, "points": pts}));
+    }
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(0), "{}", r["errors"]);
+    let t = texts(&r);
+    let measured: Vec<&String> = t.iter().rev().take(4).collect();
+    assert_eq!(measured, ["100", "40", "20", "20"], "thickness 20, the hole 20, the wall 40, overall 100: {t:?}");
+}

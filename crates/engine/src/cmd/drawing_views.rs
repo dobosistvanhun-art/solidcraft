@@ -620,6 +620,9 @@ pub(crate) struct ViewGeom {
     /// What a pointer may pick (view coordinates).
     points: Vec<PickPoint>,
     edges: Vec<PickEdge>,
+    /// A section's own bodies: the pieces it keeps, cut faces and all (`<body>#<piece>`). Its
+    /// picking points and its dimensions' points are theirs, not the whole part's.
+    section: Option<Arc<Model>>,
 }
 
 /// At most this many line segments in a flat pattern view.
@@ -763,7 +766,7 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
             break;
         }
     }
-    Ok(ViewGeom { basis, lines, snaps, marks, notes, points, edges })
+    Ok(ViewGeom { basis, lines, snaps, marks, notes, points, edges, section: None })
 }
 
 fn circles_of(body: &solidcraft_kernel::Body, mesh: &Arc<Mesh>) -> Arc<Vec<Option<EdgeCircle>>> {
@@ -1336,6 +1339,8 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
         order.extend(ready);
         left = rest;
     }
+    // The sections' own bodies, by view: their dimensions are measured on them.
+    let mut sections: BTreeMap<u64, Arc<Model>> = BTreeMap::new();
     for v in order {
         let scale = d.view_scale(v);
         let at = Vec2::new(v.at[0], v.at[1]);
@@ -1349,20 +1354,20 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
         // the model's extent and (for hatching) its scale.
         let key = format!("{:?}|{:?}|{:?}|{:?}|{}", v.kind, parent_basis, center, radius, scale);
         let make = || -> Result<ViewGeom, String> {
-            let result: Result<(Basis, Vec<(Vec2, Vec2, Style)>), String> = (|| {
+            let result: Result<(Basis, Vec<(Vec2, Vec2, Style)>, Option<Model>), String> = (|| {
                 match &v.kind {
                     ViewKind::Flat { .. } => Err("a flat pattern is not projected".to_string()),
                     ViewKind::Base { orientation: o } => {
                         let (r, u) = orientation(o).ok_or_else(|| format!("unknown orientation `{o}`"))?;
                         let basis = with_back(r, u, center);
                         let ls = lines(m.bodies.iter().map(|(.., me)| me.clone()).collect(), &basis, radius)?;
-                        Ok((basis, ls.into_iter().map(|(a, b, hid)| (a, b, if hid { Style::Hidden } else { Style::Visible })).collect()))
+                        Ok((basis, ls.into_iter().map(|(a, b, hid)| (a, b, if hid { Style::Hidden } else { Style::Visible })).collect(), None))
                     }
                     ViewKind::Projected { parent: p, side } => {
                         let pb = parent(*p).ok_or("its parent view is missing")?;
                         let basis = projected(&pb, side, d.projection).ok_or_else(|| format!("unknown side `{side}`"))?;
                         let ls = lines(m.bodies.iter().map(|(.., me)| me.clone()).collect(), &basis, radius)?;
-                        Ok((basis, ls.into_iter().map(|(a, b, hid)| (a, b, if hid { Style::Hidden } else { Style::Visible })).collect()))
+                        Ok((basis, ls.into_iter().map(|(a, b, hid)| (a, b, if hid { Style::Hidden } else { Style::Visible })).collect(), None))
                     }
                     ViewKind::Section { parent: p, a, b, flip } => {
                         let pb = parent(*p).ok_or("its parent view is missing")?;
@@ -1372,14 +1377,22 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                         let plane = solidcraft_geom::Plane { origin: p0, x: plane_x, y: pb.b };
                         let mut kept = Vec::new();
                         let mut cut = Vec::new();
-                        for (_, body, mesh) in &m.bodies {
+                        // The pieces kept, as bodies of their own: what the view's points are measured on.
+                        let mut own = Model { bodies: Vec::new(), circles: Vec::new(), bounds: Aabb3::EMPTY };
+                        for (name, body, mesh) in &m.bodies {
                             let pieces = solidcraft_kernel::split_by_plane(body, &plane).map_err(|e| e.to_string())?;
-                            for piece in pieces {
+                            for (k, piece) in pieces.into_iter().enumerate() {
                                 let pm = piece.display_mesh(radius * 2e-4).map_err(|e| e.to_string())?;
                                 let n = pm.positions.len().max(1) as f64;
                                 let c = pm.positions.iter().fold(Vec3::ZERO, |acc, p| acc + *p) * (1.0 / n);
                                 if (c - p0).dot(arrow) > 0.0 {
-                                    kept.push(Arc::new(pm));
+                                    let pm = Arc::new(pm);
+                                    for p in &pm.positions {
+                                        own.bounds = own.bounds.union(&Aabb3 { min: *p, max: *p });
+                                    }
+                                    own.circles.push(Arc::new(solidcraft_kernel::edge_circles(&piece)));
+                                    own.bodies.push((format!("{name}#{k}"), piece, pm.clone()));
+                                    kept.push(pm);
                                 }
                             }
                             cut.extend(slice(mesh, p0, arrow));
@@ -1391,7 +1404,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                         };
                         let segs: Vec<(Vec2, Vec2)> = cut.iter().map(|(a, b)| (basis.project(*a), basis.project(*b))).collect();
                         ls.extend(hatch(&segs, 3.0 / scale).into_iter().map(|(a, b)| (a, b, Style::Thin)));
-                        Ok((basis, ls))
+                        Ok((basis, ls, (!own.bodies.is_empty()).then_some(own)))
                     }
                     ViewKind::Detail { parent: p, center: c, radius: r } => {
                         let pb = parent(*p).ok_or("its parent view is missing")?;
@@ -1409,12 +1422,14 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                             ls.push((Vec2::new(t0.cos(), t0.sin()) * *r, Vec2::new(t1.cos(), t1.sin()) * *r, Style::Thin));
                         }
                         let basis = Basis { center: pb.center + pb.r * c[0] + pb.u * c[1], ..pb };
-                        Ok((basis, ls))
+                        Ok((basis, ls, None))
                     }
                 }
             })();
-            let (basis, lines) = result?;
-            let mut snaps = snaps(&m, &basis, &|p| p);
+            let (basis, lines, section) = result?;
+            // A section measures on what it keeps (its cut faces' corners too), not on the whole part.
+            let own = section.as_ref().unwrap_or(&m);
+            let mut snaps = snaps(own, &basis, &|p| p);
             // Centre marks on the circles seen face on (holes, bosses).
             let mut marks: Vec<(Vec2, f64)> = Vec::new();
             if !matches!(v.kind, ViewKind::Detail { .. }) {
@@ -1431,8 +1446,8 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     }
                 }
             }
-            let (points, edges) = pickables(&m, &basis, &lines, &mut snaps, radius);
-            Ok(ViewGeom { basis, lines, snaps, marks, notes: Vec::new(), points, edges })
+            let (points, edges) = pickables(own, &basis, &lines, &mut snaps, radius);
+            Ok(ViewGeom { basis, lines, snaps, marks, notes: Vec::new(), points, edges, section: section.map(Arc::new) })
         };
         // A flat pattern is drawn from the sheet metal body each time (cheap: no projection).
         let geom = match &v.kind {
@@ -1441,6 +1456,9 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
         };
         match geom {
             Ok(g) => {
+                if let Some(sec) = &g.section {
+                    sections.insert(v.id, sec.clone());
+                }
                 let basis = g.basis;
                 let mut min = Vec2::new(f64::INFINITY, f64::INFINITY);
                 let mut max = Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -1551,18 +1569,19 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
             continue;
         };
         let at = d.view(pv.id).map(|x| Vec2::new(x.at[0], x.at[1])).unwrap_or(Vec2::ZERO);
+        let vm: &Model = sections.get(&pv.id).map_or(&m, |x| x.as_ref());
         let pts: Vec<(Vec2, Option<f64>, Vec3)> = dim
             .refs
             .iter()
             .map(|r| {
-                let (p, radius) = resolve(&m, r, &pv.basis);
+                let (p, radius) = resolve(vm, r, &pv.basis);
                 (at + pv.basis.project(p) * pv.scale, radius, p)
             })
             .collect();
         // A virtual sharp: thin lines carry the edges on from the round to the corner, and a dot marks it.
         for r in dim.refs.iter().filter(|r| r.at == "sharp") {
             let Some((s0, s1, x)) =
-                m.bodies.iter().zip(&m.circles).find(|((n, ..), _)| *n == r.body).and_then(|((_, _, me), c)| virtual_sharp(c, me, r.edge?))
+                vm.bodies.iter().zip(&vm.circles).find(|((n, ..), _)| *n == r.body).and_then(|((_, _, me), c)| virtual_sharp(c, me, r.edge?))
             else {
                 continue;
             };

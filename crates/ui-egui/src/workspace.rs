@@ -254,12 +254,13 @@ pub const SECTIONS: &[Section] = &[
     Section {
         tab: "SKETCH",
         panel: "CREATE",
-        promoted: 5,
+        promoted: 6,
         ids: &[
             "sketch.line",
             "sketch.rectangle.two_point",
             "sketch.circle.center",
             "sketch.arc.three_point",
+            "sketch.point",
             "sketch.construction_line",
             "sketch.infinite",
         ],
@@ -290,9 +291,10 @@ pub const SECTIONS: &[Section] = &[
     Section {
         tab: "SKETCH",
         panel: "REFERENCE",
-        promoted: 1,
+        promoted: 2,
         ids: &[
             "sketch.project",
+            "sketch.slice",
             "sketch.intersect",
             "sketch.include_3d",
             "sketch.project_to_surface",
@@ -316,7 +318,7 @@ pub const SECTIONS: &[Section] = &[
         tab: "SHEET METAL",
         panel: "CREATE",
         promoted: 4,
-        ids: &["sheet.flange", "sheet.path_flange", "sheet.hem", "sheet.fold", "sheet.loft", "sheet.perforate", "sheet.convert"],
+        ids: &["sheet.flange", "sheet.path_flange", "sheet.hem", "sheet.fold", "sheet.loft", "sheet.perforate", "solid.hole", "sheet.convert"],
     },
     Section { tab: "SHEET METAL", panel: "FLAT", promoted: 3, ids: &["sheet.unfold", "sheet.refold", "sheet.flat_pattern"] },
     Section { tab: "SHEET METAL", panel: "OUTPUT", promoted: 2, ids: &["sheet.export_dxf", "sheet.export_bend_table"] },

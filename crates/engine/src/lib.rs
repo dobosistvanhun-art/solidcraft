@@ -541,6 +541,9 @@ pub struct Session {
     pub section: Option<(Vec3, Vec3)>,
     /// Whether the section's cut faces are hatched (`inspect.section`'s `hatch`; on by default).
     pub section_hatch: bool,
+    /// The sketch whose plane cuts the view (Slice Graphics, `sketch.slice`): the section is its,
+    /// and goes when the sketch is left.
+    pub slice: Option<u64>,
     /// Component identification colours are enabled when present; view state only.
     pub colored_components: Option<()>,
     /// Surface analysis shading the model (zebra, draft, curvature map).
@@ -747,6 +750,7 @@ impl Session {
             foreign_copy: None,
             section: None,
             section_hatch: true,
+            slice: None,
             colored_components: None,
             analysis: None,
             continuity: Vec::new(),
@@ -1595,6 +1599,9 @@ impl Session {
                 Err(e)
             }
         };
+        if outermost && self.slice.is_some() {
+            cmd::end_slice(self, false);
+        }
         if let Some((before, changed, failed)) = crash_outcome {
             // Refresh and body-name pinning can copy the shared document. Remember the final
             // document, so the next command does not mistake that work for an outside edit
@@ -1753,6 +1760,7 @@ impl Session {
             foreign_copy: self.foreign_copy.clone(),
             section: None,
             section_hatch: true,
+            slice: None,
             colored_components: None,
             analysis: None,
             continuity: Vec::new(),

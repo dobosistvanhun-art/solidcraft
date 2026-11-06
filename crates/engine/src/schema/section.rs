@@ -35,6 +35,19 @@ pub struct Section {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<f64>,
 }
+/// Slice Graphics (F7): the sketch being edited cuts the view; again, the cut goes.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SliceParams {
+    /// true: slice, false: stop slicing; omitted: the other of the two.
+    pub on: Option<bool>,
+}
+#[derive(Serialize, JsonSchema)]
+pub struct SliceResult {
+    /// Whether the view is now sliced at the sketch.
+    pub sliced: bool,
+    pub section: Option<Section>,
+}
 #[derive(Serialize, JsonSchema)]
 pub struct SectionResult {
     pub section: Option<Section>,

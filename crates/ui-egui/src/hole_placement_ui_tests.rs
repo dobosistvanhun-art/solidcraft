@@ -1102,3 +1102,31 @@ fn hole_presets_dirty_invalid_active_scalars_refuse_overwrite() {
         assert!(preset_dirty_save_enabled(&h));
     }
 }
+
+/// Hole right after a sketch of points opens at those points, one hole each (as Inventor's From
+/// Sketch): the points drawn, and a circle's centre, not a line's ends; OK drills them all.
+#[test]
+fn hole_after_a_sketch_of_points_opens_at_its_points() {
+    let mut h = Harness::new();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("sketch.create", json!({"plane": {"face": [20, 15, 20]}})).unwrap();
+    h.app.run("sketch.point", json!({"point": [10, 10]})).unwrap();
+    h.app.run("sketch.point", json!({"point": [30, 20]})).unwrap();
+    h.app.run("sketch.line", json!({"p0": [5, 25], "p1": [35, 25]})).unwrap();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    h.app.start("solid.hole");
+    h.frames(2);
+    let Some(d) = h.app.dialog.as_ref() else { panic!("the Hole dialog opened") };
+    let Kind::Hole { opts, .. } = &d.kind else { panic!("a Hole dialog") };
+    assert!(opts.multiple, "placed at the sketch's points");
+    assert_eq!(d.inputs.first().map(|i| i.items.len()), Some(2), "the two points, not the line's ends");
+    h.step(&json!({"widget": "OK"})).unwrap();
+    for _ in 0..200 {
+        if h.app.dialog.is_none() {
+            break;
+        }
+        h.frames(1);
+    }
+    let last = h.app.session.doc.features.last().map(|f| matches!(f.kind, FeatureKind::Hole { .. }));
+    assert_eq!(last, Some(true), "a Hole feature at the points");
+}

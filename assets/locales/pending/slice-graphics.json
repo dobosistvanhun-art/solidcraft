@@ -1,0 +1,38 @@
+{
+  "ar": {
+    "cmd.sketch_slice": "تقطيع العرض",
+    "help.sketch.slice": "يقطع العرض عند مستوى الرسم أثناء تحريره: يُخفى النموذج الذي أمامه ويظهر المقطع مهشّرًا لترسم عليه (التقاطع يأخذ حدوده إلى الرسم). الضغط على F7 مرة أخرى أو مغادرة الرسم ينهيه."
+  },
+  "de": {
+    "cmd.sketch_slice": "Grafik aufschneiden",
+    "help.sketch.slice": "Schneidet die Ansicht beim Bearbeiten an der Skizzenebene: das Modell davor wird ausgeblendet und der Schnitt schraffiert gezeigt, damit Sie darauf zeichnen können (Schneiden übernimmt seinen Umriss in die Skizze). Erneut F7 oder das Verlassen der Skizze beendet es."
+  },
+  "en": {
+    "cmd.sketch_slice": "Slice Graphics",
+    "help.sketch.slice": "Cuts the view at the sketch's plane while you edit it: the model in front is hidden and the cut is shown hatched, so you can draw on it (Intersect takes its outline into the sketch). F7 again, or leaving the sketch, ends it."
+  },
+  "he": {
+    "cmd.sketch_slice": "חיתוך תצוגה",
+    "help.sketch.slice": "חותך את התצוגה במישור הסקיצה בזמן העריכה: המודל שלפניו מוסתר והחתך מוצג מקווקו, כך שאפשר לצייר עליו (חיתוך מביא את קווי המתאר שלו לסקיצה). F7 שוב או יציאה מהסקיצה מסיימים זאת."
+  },
+  "hu": {
+    "cmd.sketch_slice": "Metszet nézet",
+    "help.sketch.slice": "Szerkesztés közben a sketch síkjánál elmetszi a nézetet: az előtte lévő rész eltűnik, a metszet sraffozva látszik, így rárajzolhatsz (a Metszés a körvonalát behozza a sketchbe). Az F7 újra vagy a sketch elhagyása megszünteti."
+  },
+  "ja": {
+    "cmd.sketch_slice": "グラフィックスをスライス",
+    "help.sketch.slice": "スケッチ編集中にスケッチ平面でビューを切断します。手前のモデルは非表示になり、断面がハッチングで表示されるので、その上に描けます (交差で輪郭をスケッチに取り込めます)。もう一度 F7 を押すか、スケッチを終了すると解除されます。"
+  },
+  "ko": {
+    "cmd.sketch_slice": "그래픽 슬라이스",
+    "help.sketch.slice": "스케치를 편집하는 동안 스케치 평면에서 뷰를 자릅니다. 앞쪽 모델은 숨겨지고 단면은 해칭으로 표시되어 그 위에 그릴 수 있습니다 (교차로 윤곽을 스케치에 가져옵니다). F7을 다시 누르거나 스케치를 나가면 끝납니다."
+  },
+  "vi": {
+    "cmd.sketch_slice": "Cắt hiển thị",
+    "help.sketch.slice": "Cắt khung nhìn tại mặt phẳng phác thảo khi bạn chỉnh sửa: phần mô hình phía trước bị ẩn và mặt cắt hiện có gạch chéo để bạn vẽ lên (Giao lấy đường bao của nó vào phác thảo). Nhấn F7 lần nữa hoặc rời phác thảo sẽ kết thúc."
+  },
+  "zh": {
+    "cmd.sketch_slice": "切片观察",
+    "help.sketch.slice": "编辑草图时在草图平面处剖切视图: 前面的模型被隐藏, 剖面以剖面线显示, 便于在其上绘制 (相交可将其轮廓带入草图)。再按 F7 或退出草图即结束。"
+  }
+}

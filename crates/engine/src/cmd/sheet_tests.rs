@@ -3602,15 +3602,12 @@ fn hole_beside_two_adjacent_edge_flanges_cuts_and_bends_stay_guarded() {
     }
     let after = volume(&mut s);
     assert!((before - after - 9.0 * PI * 2.5).abs() < 0.05, "{before} -> {after}");
-    // A hole through the bend is a cut-out of the bend too (a normal cut).
+    // A round hole there runs edge-on into the flange, through only part of its thickness: no
+    // sheet metal cut-out, still refused (a cut straight through a bend: `a_cut_across_a_bend_…`).
     let mut bend = Session::default();
     build(&mut bend);
-    let v = volume(&mut bend);
-    if let Err(e) = hole(&mut bend, "Bend", [78.5, 20.0]) {
-        panic!("hole through the bend: {e}");
-    }
-    let cut = v - volume(&mut bend);
-    assert!(cut > 1.0, "{v} -> {cut}");
+    let error = hole(&mut bend, "Bend", [78.5, 20.0]).unwrap_err().to_string();
+    assert!(error.contains("bend"), "{error}");
 }
 
 /// The guard of #296 sews every bend on its own. A bend that carries a folded round cut-out
@@ -3642,15 +3639,12 @@ fn hole_beside_a_bend_with_a_round_cut_out_cuts_and_the_bend_stays_guarded() {
     }
     let after = volume(&mut s);
     assert!((before - after - 9.0 * PI * 2.5).abs() < 0.05, "{before} -> {after}");
-    // A hole through the bend is a cut-out of the bend too (a normal cut).
+    // A round hole there runs edge-on into the flange, through only part of its thickness: no
+    // sheet metal cut-out, still refused (a cut straight through a bend: `a_cut_across_a_bend_…`).
     let mut bend = Session::default();
     build(&mut bend);
-    let v = volume(&mut bend);
-    if let Err(e) = hole(&mut bend, "Bend", [25.0, 1.5]) {
-        panic!("hole through the bend: {e}");
-    }
-    let cut = v - volume(&mut bend);
-    assert!(cut > 1.0, "{v} -> {cut}");
+    let error = hole(&mut bend, "Bend", [25.0, 1.5]).unwrap_err().to_string();
+    assert!(error.contains("bend"), "{error}");
 }
 
 /// Whether the flat pattern has a cut-out whose points all lie on the circle of radius `r` about `c`.

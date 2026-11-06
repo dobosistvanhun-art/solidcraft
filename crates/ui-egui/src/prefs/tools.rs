@@ -20,6 +20,8 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             ),
             ui_kit::Text::Hint("hole_moves"),
         );
+        setting::hole_sketch_points(app, ui);
+        ui_kit::text(ui, app.tr("prefs.hole_sketch_points_note"), ui_kit::Text::Hint("hole_sketch_points"));
     });
     ui_kit::settings_section(ui, "extrude", app.tr_label("Extrude"), |ui| {
         setting::extrude_auto_to_object(app, ui);

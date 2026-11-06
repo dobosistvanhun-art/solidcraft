@@ -2861,9 +2861,18 @@ fn body_of_other_component_at(s: &Session, p: Vec3) -> Option<String> {
     (s.doc.model_body_component(body) != s.active_component).then(|| body.name.clone())
 }
 
-/// The points of a sketch a hole drills at when only the sketch is given: its standalone points and
-/// circle centres (not the ends of its lines and arcs).
-pub fn sketch_hole_points(s: &Session, sketch: u64) -> Vec<String> {
+/// The standalone points of a sketch (made with Point): what a new hole opens at after a sketch of
+/// them. Circle and arc centres and curve ends are left out, so a sketch of circles keeps the
+/// single-hole snapping.
+pub fn sketch_standalone_points(s: &Session, sketch: u64) -> Vec<String> {
+    let st = s.model.state();
+    let Some(ss) = st.sketch(sketch) else { return Vec::new() };
+    let used: Vec<usize> = ss.sketch.curves.iter().flat_map(|c| c.kind.point_ids()).collect();
+    ss.sketch.points.iter().enumerate().filter(|(i, p)| p.id != "origin" && !used.contains(i)).map(|(_, p)| p.id.clone()).collect()
+}
+
+/// The points of a sketch a hole drills at when only the sketch is given.
+fn sketch_hole_points(s: &Session, sketch: u64) -> Vec<String> {
     let st = s.model.state();
     let Some(ss) = st.sketch(sketch) else { return Vec::new() };
     let mut ends: Vec<usize> = Vec::new();

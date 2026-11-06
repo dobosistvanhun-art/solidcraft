@@ -573,6 +573,7 @@ fn select_other_keeps_the_face_as_picked_beside_many_snapped_points() {
     // capped as points, and the face as picked keeps its row.
     let mut h = Harness::new();
     h.app.set_origin_shown(false);
+    crate::prefs::set(&mut h.app, &json!({"hole_sketch_points": false})).unwrap();
     h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
     h.app.run("sketch.create", json!({"plane": {"face": [20, 15, 20]}})).unwrap();
     let many = crate::select_other::MAX_PER_KIND + 4;
@@ -755,6 +756,8 @@ fn rows_named(list: &Value, prefix: &str) -> usize {
 fn cylinder_with_cluster(sketch: Value, at: [f64; 2], view: &str) -> Cluster {
     let mut h = Harness::new();
     h.app.set_origin_shown(false);
+    // A Single hole picked among the points: Hole doesn't start at all of them.
+    crate::prefs::set(&mut h.app, &json!({"hole_sketch_points": false})).unwrap();
     h.app.run("solid.cylinder", json!({"radius": 15, "height": 20})).unwrap();
     h.app.run("sketch.create", sketch).unwrap();
     let many = 3 * crate::select_other::MAX_PER_KIND;
@@ -1112,7 +1115,7 @@ fn hole_after_a_sketch_of_points_opens_at_its_points() {
     h.app.run("sketch.create", json!({"plane": {"face": [20, 15, 20]}})).unwrap();
     h.app.run("sketch.point", json!({"point": [10, 10]})).unwrap();
     h.app.run("sketch.point", json!({"point": [30, 20]})).unwrap();
-    h.app.run("sketch.line", json!({"p0": [5, 25], "p1": [35, 25]})).unwrap();
+    h.app.run("sketch.line", json!({"points": [[5, 25], [35, 25]]})).unwrap();
     h.app.run("sketch.finish", json!({})).unwrap();
     h.app.start("solid.hole");
     h.frames(2);
@@ -1129,4 +1132,18 @@ fn hole_after_a_sketch_of_points_opens_at_its_points() {
     }
     let last = h.app.session.doc.features.last().map(|f| matches!(f.kind, FeatureKind::Hole { .. }));
     assert_eq!(last, Some(true), "a Hole feature at the points");
+}
+
+#[test]
+fn hole_after_a_sketch_of_points_opens_single_with_the_preference_off() {
+    let mut h = Harness::new();
+    crate::prefs::set(&mut h.app, &json!({"hole_sketch_points": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("sketch.create", json!({"plane": {"face": [20, 15, 20]}})).unwrap();
+    h.app.run("sketch.point", json!({"point": [10, 10]})).unwrap();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    h.app.start("solid.hole");
+    h.frames(2);
+    let Some(d) = h.app.dialog.as_ref() else { panic!("the Hole dialog opened") };
+    assert!(matches!(&d.kind, Kind::Hole { opts, .. } if !opts.multiple), "Single, as before: {:?}", d.kind);
 }

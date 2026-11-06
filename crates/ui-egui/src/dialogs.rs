@@ -1000,7 +1000,7 @@ impl Dialog {
                 ]
             }),
             "solid.move" => Dialog::new(crate::dialogs_move::kind(0, &s.doc), crate::dialogs_move::inputs(0)),
-            "solid.hole" => hole_start(s),
+            "solid.hole" => hole_start(s, app.preferences.hole_sketch_points),
             "solid.box" => Dialog::new(
                 Kind::Primitive {
                     cmd: "solid.box",
@@ -4092,14 +4092,17 @@ pub(crate) fn shown_expr(e: &str, kind: ValueKind) -> String {
 /// The Hole dialog as it opens: at the sketch points picked, else at the points of the sketch just
 /// drawn (its standalone points and circle centres, as Inventor's From Sketch takes them), one
 /// hole each; else a single hole on a face.
-fn hole_start(s: &Session) -> Dialog {
+fn hole_start(s: &Session, at_points: bool) -> Dialog {
+    if !at_points {
+        return Dialog::new(hole_defaults(s), single_hole_inputs());
+    }
     let mut points: Vec<Sel> = s.selection.iter().filter(|x| matches!(x, Sel::SketchPoint { id } if id.contains(':'))).cloned().collect();
     if points.is_empty()
         && s.active_sketch.is_none()
         && let Some(f) = s.doc.features.last()
         && matches!(f.kind, FeatureKind::Sketch { .. })
     {
-        points = solidcraft_engine::cmd::sketch_hole_points(s, f.id).into_iter().map(|p| Sel::SketchPoint { id: format!("{}:{p}", f.id) }).collect();
+        points = solidcraft_engine::cmd::sketch_standalone_points(s, f.id).into_iter().map(|p| Sel::SketchPoint { id: format!("{}:{p}", f.id) }).collect();
     }
     if points.is_empty() {
         return Dialog::new(hole_defaults(s), single_hole_inputs());

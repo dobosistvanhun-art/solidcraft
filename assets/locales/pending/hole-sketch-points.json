@@ -1,0 +1,38 @@
+{
+  "ar": {
+    "prefs.hole_sketch_points": "تبدأ الثقوب عند نقاط الرسم",
+    "prefs.hole_sketch_points_note": "بعد رسم نقاط، يفتح الثقب في وضع المتعدد عند تلك النقاط. إيقاف: يفتح كثقب مفرد كما من قبل."
+  },
+  "de": {
+    "prefs.hole_sketch_points": "Bohrungen beginnen an den Skizzenpunkten",
+    "prefs.hole_sketch_points_note": "Nach einer Skizze aus Punkten öffnet Bohrung im Modus Mehrere an diesen Punkten. Aus: sie öffnet als Einzeln, wie bisher."
+  },
+  "en": {
+    "prefs.hole_sketch_points": "Holes start at sketch points",
+    "prefs.hole_sketch_points_note": "After a sketch of points, Hole opens in Multiple mode at those points. Off: it opens as Single, as before."
+  },
+  "he": {
+    "prefs.hole_sketch_points": "חורים מתחילים בנקודות הסקיצה",
+    "prefs.hole_sketch_points_note": "אחרי סקיצה של נקודות, חור נפתח במצב מרובה בנקודות אלה. כבוי: נפתח כיחיד, כמו קודם."
+  },
+  "hu": {
+    "prefs.hole_sketch_points": "A furat a sketch pontjainál kezdődik",
+    "prefs.hole_sketch_points_note": "Pontokból álló sketch után a Furat Több módban nyílik, ezeknél a pontoknál. Kikapcsolva: Egyes módban, mint eddig."
+  },
+  "ja": {
+    "prefs.hole_sketch_points": "穴はスケッチの点から開始",
+    "prefs.hole_sketch_points_note": "点のスケッチの後、穴はその点で複数モードで開きます。オフ：従来どおり単一で開きます。"
+  },
+  "ko": {
+    "prefs.hole_sketch_points": "구멍을 스케치 점에서 시작",
+    "prefs.hole_sketch_points_note": "점 스케치 후 구멍이 그 점들에서 여러 개 모드로 열립니다. 끄기: 이전처럼 단일로 열립니다."
+  },
+  "vi": {
+    "prefs.hole_sketch_points": "Lỗ bắt đầu tại các điểm phác thảo",
+    "prefs.hole_sketch_points_note": "Sau một phác thảo gồm các điểm, Lỗ mở ở chế độ Nhiều tại các điểm đó. Tắt: mở ở chế độ Đơn như trước."
+  },
+  "zh": {
+    "prefs.hole_sketch_points": "孔从草图点开始",
+    "prefs.hole_sketch_points_note": "在点草图之后，孔在这些点处以多个模式打开。关闭：像以前一样以单个打开。"
+  }
+}

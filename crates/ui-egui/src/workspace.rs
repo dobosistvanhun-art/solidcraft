@@ -531,6 +531,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("sketch.pattern.circular", "Circular"),
     ("sketch.pattern.rectangular", "Rectangular"),
     ("sketch.rectangle.two_point", "Rectangle"),
+    ("sketch.slice", "Slice"),
     ("solid.move", "Move / Copy"),
     ("solid.pattern.rectangular", "Pattern"),
     ("surface.extrude", "Extrude"),
@@ -978,7 +979,7 @@ mod tests {
         }
         for (s, (cmds, n)) in lists {
             assert!(
-                n <= 4 || (s.tab == "SKETCH" && ((s.panel == "CONSTRAIN" && n == 7) || (s.panel == "CREATE" && n == 5))),
+                n <= 4 || (s.tab == "SKETCH" && ((s.panel == "CONSTRAIN" && n == 7) || (s.panel == "CREATE" && n == 6))),
                 "{}/{} promotes {n} commands",
                 s.tab,
                 s.panel

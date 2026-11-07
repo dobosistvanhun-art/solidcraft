@@ -1,7 +1,9 @@
 #!/bin/bash
 # SolidCraft (István's fork, branch "fuzio") built and installed on Fúzió.
 #
-#   bash ~/Projektek/solidcraft/scripts/fuzio-build.sh
+#   bash ~/Projektek/solidcraft/scripts/fuzio-build.sh              build and install
+#   bash ~/Projektek/solidcraft/scripts/fuzio-build.sh --no-install build only
+#   bash ~/Projektek/solidcraft/scripts/fuzio-build.sh --install    install the last build
 #
 # On the Fúzió desktop it builds inside the development box (Ubuntu 24.04: the compiler and the
 # libraries are installed there, the first time) and then installs the result with the Program
@@ -16,9 +18,23 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$SRC/target/fuzio"
 PKG="$OUT/solidcraft-fuzio.tar.gz"
 
-if [ "${1:-}" != "--in-box" ] && command -v fusion-dev >/dev/null 2>&1; then
+# --no-install: only the build (in the box); --install: only the install of the last build. The
+# FusionAI "Fordítás és telepítés" button runs the two, asking in between.
+MODE="${1:-}"
+if [ "$MODE" = "--install" ]; then
+    [ -f "$PKG" ] || { echo "Nincs lefordított csomag: $PKG — előbb: bash scripts/fuzio-build.sh --no-install" >&2; exit 1; }
+    echo "==> Telepítés a Programkezelővel"
+    fusion-programs install "$PKG" --name SolidCraft
+    echo "Kész: Start menü → SolidCraft"
+    exit 0
+fi
+if [ "$MODE" != "--in-box" ] && command -v fusion-dev >/dev/null 2>&1; then
     echo "==> Fordítás a fejlesztődobozban"
     (cd "$SRC" && fusion-dev box run bash "$SRC/scripts/fuzio-build.sh" --in-box)
+    if [ "$MODE" = "--no-install" ]; then
+        echo "Lefordítva: $PKG (telepítés: bash scripts/fuzio-build.sh --install)"
+        exit 0
+    fi
     echo "==> Telepítés a Programkezelővel"
     fusion-programs install "$PKG" --name SolidCraft
     echo "Kész: Start menü → SolidCraft"

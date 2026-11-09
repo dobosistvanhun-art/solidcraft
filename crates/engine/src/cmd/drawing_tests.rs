@@ -166,6 +166,37 @@ fn a_section_cuts_the_part_and_hatches_the_cut() {
 }
 
 #[test]
+fn a_section_through_drilled_holes_cuts_and_their_marks_follow_what_is_drawn() {
+    // Blind drilled holes from the top: the cutting line through their axes meets the drill
+    // tips' apexes, where the kernel's split has no answer on the plane itself.
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20}));
+    run(&mut s, "solid.hole", json!({"position": [10, 10, 20], "diameter": 5, "depth": 10}));
+    run(&mut s, "solid.hole", json!({"position": [30, 20, 20], "diameter": 5, "depth": 10}));
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [120, 200]}))["view"].as_u64().unwrap();
+    // The top view puts the box at x 100..140, y 185..215: the first hole's centre at (110, 195).
+    for line in [json!([[90, 195], [150, 195]]), json!([[110, 180], [110, 220]])] {
+        run(&mut s, "drawing.view.section", json!({"drawing": "D", "parent": top, "line": line, "at": [120, 120]}));
+        let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+        assert_eq!(r["errors"].as_array().map(Vec::len), Some(0), "{line}: {}", r["errors"]);
+        let sec = r["views"].as_array().and_then(|v| v.last()).map(|v| v["id"].clone()).unwrap();
+        run(&mut s, "drawing.view.delete", json!({"drawing": "D", "view": sec}));
+    }
+    // From the bottom the blind holes are behind material: no circles, so no centre marks, until
+    // hidden lines are shown.
+    run(&mut s, "drawing.create", json!({"name": "B", "size": "A3", "scale": "1:1", "views": "none"}));
+    let bottom = run(&mut s, "drawing.view.base", json!({"drawing": "B", "orientation": "bottom", "at": [120, 200]}))["view"].as_u64().unwrap();
+    let r = run(&mut s, "drawing.render", json!({"drawing": "B"}));
+    assert_eq!(count(&r, "chain"), 0, "no marks on holes that aren't drawn");
+    run(&mut s, "drawing.view.edit", json!({"drawing": "B", "view": bottom, "hidden": true}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": "B"}));
+    assert_eq!(count(&r, "chain"), 4, "two marks of two lines with the hidden circles");
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    assert_eq!(count(&r, "chain"), 4, "the top view marks both holes");
+}
+
+#[test]
 fn a_drawing_exports_as_pdf_and_dxf_and_is_saved_with_the_design() {
     let mut s = plate();
     run(&mut s, "drawing.create", json!({"name": "D"}));

@@ -570,6 +570,24 @@ fn projected(parent: &Basis, side: &str, method: Projection) -> Option<Basis> {
 /// The cutting plane of a section: through `a`–`b` of the parent view and its viewing direction;
 /// the view looks the way the arrows point. Returns the plane point, the arrow direction and the
 /// section view's basis.
+/// A body split at a section's plane. A cutting plane through a point of the body where its faces
+/// meet in one place, a drill tip's apex on the hole's axis, can leave the kernel's split without
+/// an answer: then the plane is moved a hair along the arrow (a hundred-thousandth of the view's
+/// size and up, far below a line's width on the sheet) and the split tried again.
+fn split_for_section(body: &solidcraft_kernel::Body, plane: &solidcraft_geom::Plane, arrow: Vec3, size: f64) -> Result<Vec<solidcraft_kernel::Body>, String> {
+    let first = match solidcraft_kernel::split_by_plane(body, plane) {
+        Ok(p) => return Ok(p),
+        Err(e) => e.to_string(),
+    };
+    for k in [1e-5, -1e-5, 1e-4, -1e-4, 1e-3] {
+        let moved = solidcraft_geom::Plane { origin: plane.origin + arrow * (size.max(1.0) * k), ..*plane };
+        if let Ok(p) = solidcraft_kernel::split_by_plane(body, &moved) {
+            return Ok(p);
+        }
+    }
+    Err(first)
+}
+
 fn section_basis(parent: &Basis, a: [f64; 2], b: [f64; 2], flip: bool) -> Option<(Vec3, Vec3, Basis)> {
     let pa = parent.center + parent.r * a[0] + parent.u * a[1];
     let pb = parent.center + parent.r * b[0] + parent.u * b[1];
@@ -1380,7 +1398,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                         // The pieces kept, as bodies of their own: what the view's points are measured on.
                         let mut own = Model { bodies: Vec::new(), circles: Vec::new(), bounds: Aabb3::EMPTY };
                         for (name, body, mesh) in &m.bodies {
-                            let pieces = solidcraft_kernel::split_by_plane(body, &plane).map_err(|e| e.to_string())?;
+                            let pieces = split_for_section(body, &plane, arrow, radius)?;
                             for (k, piece) in pieces.into_iter().enumerate() {
                                 let pm = piece.display_mesh(radius * 2e-4).map_err(|e| e.to_string())?;
                                 let n = pm.positions.len().max(1) as f64;
@@ -1471,10 +1489,20 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     max = Vec2::new(max.x.max(a.x).max(b.x), max.y.max(a.y).max(b.y));
                     out.line(a, b, style);
                 }
-                // Centre marks: two chain lines across each circle seen face on.
+                // Centre marks: two chain lines across each circle seen face on, and drawn: a
+                // circle hidden behind material (a blind hole seen from the side it doesn't reach)
+                // has its mark only when the view shows hidden lines.
+                let drawn_circle = |c: Vec2, r: f64| {
+                    let tol = (r * 0.02).max(1e-6);
+                    g.lines.iter().any(|&(a, b, style)| {
+                        (style == Style::Visible || (v.hidden && style == Style::Hidden))
+                            && (a.dist(c) - r).abs() < tol
+                            && (b.dist(c) - r).abs() < tol
+                    })
+                };
                 let mut seen: Vec<Vec2> = Vec::new();
                 for &(c, r) in &g.marks {
-                    if r * scale < 1.0 {
+                    if r * scale < 1.0 || !drawn_circle(c, r) {
                         continue;
                     }
                     let p = to_sheet(c);

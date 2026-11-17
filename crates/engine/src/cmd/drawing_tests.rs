@@ -603,3 +603,54 @@ fn a_section_is_dimensioned_on_its_cut() {
     let measured: Vec<&String> = t.iter().rev().take(4).collect();
     assert_eq!(measured, ["100", "40", "20", "20"], "thickness 20, the hole 20, the wall 40, overall 100: {t:?}");
 }
+
+#[test]
+fn a_hole_note_reads_the_hole_as_it_was_made_and_follows_it() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20}));
+    run(&mut s, "solid.hole", json!({"position": [10, 15, 20], "thread": "M6"}));
+    run(&mut s, "parameters.add", json!({"name": "cb", "expression": "6.8 mm"}));
+    run(&mut s, "solid.hole", json!({"position": [30, 15, 20], "diameter": 6.6, "depth": 15, "type": "counterbore", "cb_diameter": 11, "cb_depth": "cb"}));
+    let notes = s.doc.hole_notes();
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [120, 200]}))["view"].as_u64().unwrap();
+    // The top view puts the box at x 100..140, y 185..215: the holes' centres at (110, 200) and (130, 200).
+    let d0 = notes[0].diameters[0];
+    run(&mut s, "drawing.dimension.hole", json!({"drawing": "D", "view": top, "points": [[110.0 + d0 / 2.0, 200]]}));
+    run(&mut s, "drawing.dimension.hole", json!({"drawing": "D", "view": top, "points": [[135.5, 200]], "place": [150, 220]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    let t = texts(&r);
+    assert!(t.iter().any(|x| x.starts_with("M6") && x.contains("THREAD")), "{t:?}");
+    assert!(t.iter().any(|x| *x == format!("Ø{} THRU", d0.to_string().replace('.', ","))), "{t:?}");
+    assert!(t.iter().any(|x| x == "Ø6,6 DEEP 15") && t.iter().any(|x| x == "CBORE Ø11 DEEP 6,8"), "{t:?}");
+    // The note follows the hole: a deeper counterbore reads so on the sheet.
+    run(&mut s, "parameters.change", json!({"name": "cb", "expression": "8 mm"}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    assert!(texts(&r).iter().any(|x| x == "CBORE Ø11 DEEP 8"), "{:?}", texts(&r));
+    // A circle no hole feature made has no hole note.
+    let mut p = plate();
+    run(&mut p, "drawing.create", json!({"name": "P", "size": "A3", "scale": "1:2", "views": "none"}));
+    let v = run(&mut p, "drawing.view.base", json!({"drawing": "P", "orientation": "top", "at": [200, 150]}))["view"].as_u64().unwrap();
+    assert!(p.execute("drawing.dimension.hole", &json!({"drawing": "P", "view": v, "points": [[205, 150]]})).is_err());
+}
+
+#[test]
+fn round_things_seen_from_the_side_get_a_centre_line_along_their_axis() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"diameter": 20, "height": 30}));
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let front = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "front", "at": [120, 150]}))["view"].as_u64().unwrap();
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    assert_eq!(count(&r, "chain"), 1, "one centre line along the axis");
+    // A little past both ends: the cylinder stands 30 mm tall on the sheet, the line 36.
+    let chain: Vec<&Value> = r["prims"].as_array().unwrap().iter().filter(|p| p["style"] == "chain").collect();
+    let (a, b) = (&chain[0]["a"], &chain[0]["b"]);
+    let len = ((a[0].as_f64().unwrap() - b[0].as_f64().unwrap()).powi(2) + (a[1].as_f64().unwrap() - b[1].as_f64().unwrap()).powi(2)).sqrt();
+    assert!((len - 36.0).abs() < 0.1, "{len}");
+    // Seen end on it has a centre mark instead.
+    run(&mut s, "drawing.view.delete", json!({"drawing": "D", "view": front}));
+    run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [120, 150]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    assert_eq!(count(&r, "chain"), 2, "a centre mark of two lines");
+}

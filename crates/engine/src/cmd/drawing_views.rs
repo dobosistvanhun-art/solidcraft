@@ -288,6 +288,40 @@ fn whole_circles(m: &Model) -> Vec<(Vec3, f64, Vec3)> {
     groups.into_iter().filter(|g| g.3 >= std::f64::consts::TAU - 1e-6).map(|(k, r, a, _)| (k, r, a)).collect()
 }
 
+/// The axes of the round things a view sees from the side (whole circles whose axis lies in the
+/// sheet's plane): per axis line, from its first circle's centre to its last (view coordinates),
+/// with the largest radius on it. A single circle (a ring's edge) has no length and no line.
+fn side_axes(m: &Model, basis: &Basis) -> Vec<(Vec2, Vec2, f64)> {
+    let mut groups: Vec<(Vec3, Vec3, f64, f64, f64)> = Vec::new(); // origin, axis, t min, t max, radius
+    for (c, r, ax) in whole_circles(m) {
+        if ax.dot(basis.b).abs() > 0.01 {
+            continue;
+        }
+        let tol = 1e-6 * (1.0 + r);
+        let found = groups.iter_mut().find(|(o, a, ..)| {
+            let d = c - *o;
+            a.dot(ax).abs() > 0.999999 && (d - *a * d.dot(*a)).len() < tol.max(1e-4)
+        });
+        match found {
+            Some(g) => {
+                let t = (c - g.0).dot(g.1);
+                g.2 = g.2.min(t);
+                g.3 = g.3.max(t);
+                g.4 = g.4.max(r);
+            }
+            None => groups.push((c, ax, 0.0, 0.0, r)),
+        }
+        if groups.len() > 5_000 {
+            break;
+        }
+    }
+    groups
+        .into_iter()
+        .filter(|g| g.3 - g.2 > 1e-6)
+        .map(|(o, a, t0, t1, r)| (basis.project(o + a * t0), basis.project(o + a * t1), r))
+        .collect()
+}
+
 /// The points and edges of a view a pointer may pick (view coordinates), each kept only where the
 /// view draws a line (`radius`: the model's, for the tolerance).
 fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mut Vec<Snap>, radius: f64) -> (Vec<PickPoint>, Vec<PickEdge>) {
@@ -633,6 +667,9 @@ pub(crate) struct ViewGeom {
     snaps: Vec<Snap>,
     /// Circles seen face on: their centres (view coordinates) and radii, for centre marks.
     marks: Vec<(Vec2, f64)>,
+    /// Round things seen from the side (cylinders, holes): their axes from end to end (view
+    /// coordinates) and radii, for centre lines.
+    axes: Vec<(Vec2, Vec2, f64)>,
     /// Texts along lines (a flat pattern's bend notes): where (view coordinates), at what angle.
     notes: Vec<(Vec2, f64, String)>,
     /// What a pointer may pick (view coordinates).
@@ -784,7 +821,7 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
             break;
         }
     }
-    Ok(ViewGeom { basis, lines, snaps, marks, notes, points, edges, section: None })
+    Ok(ViewGeom { basis, lines, snaps, marks, axes: Vec::new(), notes, points, edges, section: None })
 }
 
 fn circles_of(body: &solidcraft_kernel::Body, mesh: &Arc<Mesh>) -> Arc<Vec<Option<EdgeCircle>>> {
@@ -1030,6 +1067,21 @@ pub fn number(v: f64) -> String {
 }
 
 /// The text of a dimension: its own (`<>` the value) or the value, then the tolerance.
+/// A hole note's place in a dimension's text: the note of the hole feature that made the circle
+/// (`M10×1,5 THREAD DEEP 15`, `Ø8,5 THRU`, …), worked out again each time the sheet is drawn.
+pub(crate) const HOLE_NOTE: &str = "<hole>";
+
+/// The note of the hole a circle of this diameter (mm) belongs to: a hole drilled at that size
+/// first, else one whose counterbore or countersink it is.
+pub(crate) fn hole_note(notes: &[solidcraft_doc::HoleNote], diameter: f64) -> Option<&str> {
+    let near = |x: f64| (x - diameter).abs() <= 1e-4 * (1.0 + diameter);
+    notes
+        .iter()
+        .find(|n| n.diameters.first().is_some_and(|d| near(*d)))
+        .or_else(|| notes.iter().find(|n| n.diameters.iter().skip(1).any(|d| near(*d))))
+        .map(|n| n.text.as_str())
+}
+
 fn dim_text(d: &DrawDim, value: String) -> String {
     let base = if d.text.trim().is_empty() { value } else { d.text.replace("<>", &value) };
     let tol = d.tolerance.trim();
@@ -1179,13 +1231,20 @@ fn draw_dim(out: &mut Out, d: &DrawDim, pts: &[(Vec2, Option<f64>, Vec3)], scale
             if d.kind == DimKind::Diameter {
                 out.arrow(start, dir);
             }
-            // The shelf as long as its text.
+            // The shelf as long as its text; a hole note's further lines under it.
             let text = dim_text(d, value);
-            let len = text_width(text.chars().count(), th) + 2.0;
+            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+            let len = text_width(widest, th) + 2.0;
             let shelf = out_end + Vec2::new(if dir.x >= 0.0 { len } else { -len }, 0.0);
             out.line(out_end, shelf, Style::Thin);
             let align = if dir.x >= 0.0 { Align::Left } else { Align::Right };
-            out.text(out_end + Vec2::new(if dir.x >= 0.0 { 1.0 } else { -1.0 }, 1.0), th, 0.0, text, align);
+            let side = if dir.x >= 0.0 { 1.0 } else { -1.0 };
+            for (k, l) in lines.iter().enumerate().skip(1) {
+                out.text(out_end + Vec2::new(side, -(k as f64) * th * 1.5), th, 0.0, l.to_string(), align);
+            }
+            // The first line last: it is where the dimension is picked and moved.
+            out.text(out_end + Vec2::new(side, 1.0), th, 0.0, lines.first().map(|l| l.to_string()).unwrap_or_default(), align);
         }
         DimKind::Angle => {
             let (Some((c, ..)), Some((p1, ..)), Some((p2, ..))) = (pts.first(), pts.get(1), pts.get(2)) else { return };
@@ -1464,8 +1523,9 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     }
                 }
             }
+            let axes = if matches!(v.kind, ViewKind::Detail { .. }) { Vec::new() } else { side_axes(own, &basis) };
             let (points, edges) = pickables(own, &basis, &lines, &mut snaps, radius);
-            Ok(ViewGeom { basis, lines, snaps, marks, notes: Vec::new(), points, edges, section: section.map(Arc::new) })
+            Ok(ViewGeom { basis, lines, snaps, marks, axes, notes: Vec::new(), points, edges, section: section.map(Arc::new) })
         };
         // A flat pattern is drawn from the sheet metal body each time (cheap: no projection).
         let geom = match &v.kind {
@@ -1513,6 +1573,23 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                     let reach = r * scale + 3.0;
                     out.line(p - Vec2::new(reach, 0.0), p + Vec2::new(reach, 0.0), Style::Chain);
                     out.line(p - Vec2::new(0.0, reach), p + Vec2::new(0.0, reach), Style::Chain);
+                }
+                // Centre lines along the axes of round things seen from the side (a shaft, a hole),
+                // a little past their ends; one whose outline isn't drawn (a hidden hole while
+                // hidden lines are off) has none.
+                let on_drawn = |q: Vec2, tol: f64| {
+                    g.lines.iter().any(|&(a, b, style)| (style == Style::Visible || (v.hidden && style == Style::Hidden)) && seg_dist(q, a, b) < tol)
+                };
+                for &(a, b, r) in &g.axes {
+                    let Some(u) = (b - a).normalized() else { continue };
+                    let n = Vec2::new(-u.y, u.x) * r;
+                    let tol = (r * 0.02).max(1e-6);
+                    if r * scale < 0.5 || !(on_drawn(a + n, tol) || on_drawn(a - n, tol)) {
+                        continue;
+                    }
+                    let (sa, sb) = (to_sheet(a), to_sheet(b));
+                    let Some(su) = (sb - sa).normalized() else { continue };
+                    out.line(sa - su * 3.0, sb + su * 3.0, Style::Chain);
                 }
                 // Notes along lines (bend notes), a little above them.
                 for (p, angle, text) in &g.notes {
@@ -1591,6 +1668,7 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
         }
     }
     // Dimensions: their model points, where they are now, projected in their view.
+    let mut holes: Option<Vec<solidcraft_doc::HoleNote>> = None;
     for dim in &d.dims {
         let Some(pv) = drawn.views.iter().find(|x| x.id == dim.view) else {
             drawn.errors.push((dim.id, "its view is missing".into()));
@@ -1622,6 +1700,17 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
             }
             out.prims.push(Prim::Fill { points: (0..8).map(|k| xs + Vec2::new((k as f64 * 0.785).cos(), (k as f64 * 0.785).sin()) * 0.5).collect() });
         }
+        // A hole note: the hole's note in place of its token (just the diameter when no hole
+        // feature makes this circle any more).
+        let noted;
+        let dim = if dim.kind == DimKind::Diameter && dim.text.contains(HOLE_NOTE) {
+            let notes = holes.get_or_insert_with(|| s.doc.hole_notes());
+            let note = pts.first().and_then(|p| p.1).and_then(|r| hole_note(notes, 2.0 * r)).unwrap_or("<>");
+            noted = DrawDim { text: dim.text.replace(HOLE_NOTE, note), ..dim.clone() };
+            &noted
+        } else {
+            dim
+        };
         let before = out.prims.len();
         let place = dim.at.map(|p| at + Vec2::new(p[0], p[1]) * pv.scale);
         draw_dim(&mut out, dim, &pts, pv.scale, place, d.dim_text());

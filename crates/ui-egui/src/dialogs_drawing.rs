@@ -139,6 +139,8 @@ pub struct DrawUi {
     /// Index into `ARCS`.
     pub arc: usize,
     pub tolerance: String,
+    /// A diameter dimension as a hole note: the note of the hole feature that made the circle.
+    pub hole_note: bool,
     pub note: String,
     /// The title block's fields as edited (written when a field is left).
     pub title: Vec<String>,
@@ -178,6 +180,7 @@ impl DrawUi {
             dim_kind: 0,
             arc: 0,
             tolerance: String::new(),
+            hole_note: false,
             note: String::new(),
             title: Vec::new(),
             drawn: None,
@@ -254,9 +257,11 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<crate::selection::S
         "drawing.dimension.radius" => (5, 0),
         "drawing.dimension.angle" => (6, 0),
         "drawing.dimension.arcs" => (1, 3),
+        "drawing.dimension.hole" => (4, 0),
         _ => (0, 0),
     };
     ui.dim_kind = kind;
+    ui.hole_note = id == "drawing.dimension.hole";
     ui.arc = arc;
     ui.status = Some(match id {
         "drawing.create" => "new".into(),
@@ -265,6 +270,22 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<crate::selection::S
         _ => String::new(),
     });
     Some((Kind::Drawing(Box::new(ui)), vec![]))
+}
+
+/// Turn the open editor to drawing `id` (a drawing tab, `view_tabs`): what was picked or half
+/// put on the last one is dropped, and the Select tool takes over.
+pub(crate) fn turn_to(k: &mut DrawUi, id: u64) {
+    if k.drawing == Some(id) {
+        return;
+    }
+    k.drawing = Some(id);
+    k.title.clear();
+    k.selected = None;
+    k.parent = None;
+    k.drag = None;
+    k.dim_drag = None;
+    k.status = None;
+    k.set_tool(Tool::Select);
 }
 
 /// The drawing editor is open: the viewport shows the sheet.
@@ -388,6 +409,10 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
                     choice_row(ui, "Points on", "drw_arc", &mut k.arc, &ARC_LABELS);
                 } else {
                     k.arc = 0;
+                }
+                if k.dim_kind == 4 {
+                    // Thread, diameter, depth or THRU, counterbore or countersink, as the hole was made.
+                    ui_kit::checkbox(ui, "Hole note", &mut k.hole_note);
                 }
                 if k.dim_kind != b {
                     k.dim_picks.clear();
@@ -1426,6 +1451,9 @@ fn dim_command(k: &DrawUi, drawing: u64, at: [f64; 2]) -> Option<Value> {
     if !k.tolerance.trim().is_empty() {
         p["tolerance"] = json!(k.tolerance.trim());
     }
+    if k.hole_note && kind == "diameter" {
+        p["text"] = json!("<hole>");
+    }
     if k.arc != 0 && k.dim_kind <= 3 {
         p["arc"] = json!(ARCS.get(k.arc).copied().unwrap_or(""));
     }
@@ -1913,6 +1941,7 @@ mod tests {
             ("drawing.dimension.vertical", 2, 0),
             ("drawing.dimension.diameter", 4, 0),
             ("drawing.dimension.arcs", 1, 3),
+            ("drawing.dimension.hole", 4, 0),
         ] {
             h.app.dialog = None;
             h.step(&json!({"start": id})).unwrap();

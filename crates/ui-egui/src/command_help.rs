@@ -63,6 +63,7 @@ pub const DOCUMENTED: &[&str] = &[
     "drawing.dimension.angle",
     "drawing.dimension.arcs",
     "drawing.dimension.diameter",
+    "drawing.dimension.hole",
     "drawing.dimension.horizontal",
     "drawing.dimension.radius",
     "drawing.dimension.vertical",

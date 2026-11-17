@@ -1,0 +1,58 @@
+{
+  "ar": {
+    "Model": "النموذج",
+    "Show the model": "عرض النموذج",
+    "Show this drawing: it follows every change of the model": "عرض هذا الرسم: يتبع كل تغيير في النموذج",
+    "Open in Tab": "فتح في علامة تبويب",
+    "Show this part on its own: its changes are the assembly's": "عرض هذا الجزء وحده: تغييراته تخص التجميع"
+  },
+  "de": {
+    "Model": "Modell",
+    "Show the model": "Das Modell zeigen",
+    "Show this drawing: it follows every change of the model": "Diese Zeichnung zeigen: sie folgt jeder Änderung des Modells",
+    "Open in Tab": "In Registerkarte öffnen",
+    "Show this part on its own: its changes are the assembly's": "Dieses Bauteil allein zeigen: seine Änderungen gehören zur Baugruppe"
+  },
+  "en": {
+    "Model": "Model",
+    "Show the model": "Show the model",
+    "Show this drawing: it follows every change of the model": "Show this drawing: it follows every change of the model",
+    "Open in Tab": "Open in Tab",
+    "Show this part on its own: its changes are the assembly's": "Show this part on its own: its changes are the assembly's"
+  },
+  "he": {
+    "Model": "מודל",
+    "Show the model": "הצגת המודל",
+    "Show this drawing: it follows every change of the model": "הצגת השרטוט: הוא עוקב אחרי כל שינוי במודל",
+    "Open in Tab": "פתיחה בכרטיסייה",
+    "Show this part on its own: its changes are the assembly's": "הצגת החלק לבדו: שינוייו שייכים להרכבה"
+  },
+  "hu": {
+    "Model": "Modell",
+    "Show the model": "A modell megjelenítése",
+    "Show this drawing: it follows every change of the model": "A rajz megjelenítése: a modell minden változását követi",
+    "Open in Tab": "Megnyitás külön fülön",
+    "Show this part on its own: its changes are the assembly's": "Az alkatrész önállóan: a változásai az összeállításba kerülnek"
+  },
+  "ja": {
+    "Model": "モデル",
+    "Show the model": "モデルを表示",
+    "Show this drawing: it follows every change of the model": "この図面を表示：モデルの変更に常に追従します",
+    "Open in Tab": "タブで開く",
+    "Show this part on its own: its changes are the assembly's": "この部品だけを表示：変更はアセンブリに反映されます"
+  },
+  "vi": {
+    "Model": "Mô hình",
+    "Show the model": "Hiện mô hình",
+    "Show this drawing: it follows every change of the model": "Hiện bản vẽ này: nó theo mọi thay đổi của mô hình",
+    "Open in Tab": "Mở trong thẻ",
+    "Show this part on its own: its changes are the assembly's": "Chỉ hiện chi tiết này: thay đổi của nó thuộc về cụm lắp"
+  },
+  "zh": {
+    "Model": "模型",
+    "Show the model": "显示模型",
+    "Show this drawing: it follows every change of the model": "显示此图纸：它随模型的每次更改而更新",
+    "Open in Tab": "在标签页中打开",
+    "Show this part on its own: its changes are the assembly's": "单独显示此零件：其更改属于装配体"
+  }
+}

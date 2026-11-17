@@ -317,6 +317,7 @@ mod value_step;
 pub(crate) mod view_angles;
 mod view_confirm;
 pub mod view_pick;
+pub(crate) mod view_tabs;
 pub mod viewport;
 mod viewport_details;
 mod viewport_layout;

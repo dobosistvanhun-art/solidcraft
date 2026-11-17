@@ -1,0 +1,42 @@
+{
+  "ar": {
+    "Hole note": "ملاحظة الثقب",
+    "cmd.drawing_dimension_hole": "ملاحظة الثقب",
+    "help.drawing.dimension.hole": "يكتب وصف الثقب كما صُنع: السن والقطر والعمق أو نافذ والتجويف أو الشطف. تتبع الملاحظة الثقب عندما يتغير."
+  },
+  "de": {
+    "Hole note": "Bohrungsangabe",
+    "cmd.drawing_dimension_hole": "Bohrungsangabe",
+    "help.drawing.dimension.hole": "Beschriftet eine Bohrung so, wie sie erstellt wurde: Gewinde, Durchmesser, Tiefe oder DURCHGEHEND, Senkung. Die Angabe folgt der Bohrung, wenn sie sich ändert."
+  },
+  "en": {
+    "Hole note": "Hole note",
+    "cmd.drawing_dimension_hole": "Hole Note",
+    "help.drawing.dimension.hole": "Labels a hole as it was made: thread, diameter, depth or THRU, counterbore or countersink. The note follows the hole when it changes."
+  },
+  "he": {
+    "Hole note": "הערת חור",
+    "cmd.drawing_dimension_hole": "הערת חור",
+    "help.drawing.dimension.hole": "מתאר חור כפי שנוצר: הברגה, קוטר, עומק או עובר, שקע או שיקוע. ההערה עוקבת אחרי החור כשהוא משתנה."
+  },
+  "hu": {
+    "Hole note": "Furat-felirat",
+    "cmd.drawing_dimension_hole": "Furat-felirat",
+    "help.drawing.dimension.hole": "A furatot úgy írja fel, ahogy készült: menet, átmérő, mélység vagy átmenő, süllyesztés. A felirat követi a furat változását."
+  },
+  "ja": {
+    "Hole note": "穴注記",
+    "cmd.drawing_dimension_hole": "穴注記",
+    "help.drawing.dimension.hole": "穴を作成したとおりに記入します：ねじ、直径、深さまたは貫通、座ぐり、皿もみ。穴を変更すると注記も追従します。"
+  },
+  "vi": {
+    "Hole note": "Ghi chú lỗ",
+    "cmd.drawing_dimension_hole": "Ghi chú lỗ",
+    "help.drawing.dimension.hole": "Ghi lỗ đúng như khi tạo: ren, đường kính, chiều sâu hoặc xuyên suốt, khoét bậc hoặc khoét côn. Ghi chú thay đổi theo lỗ."
+  },
+  "zh": {
+    "Hole note": "孔标注",
+    "cmd.drawing_dimension_hole": "孔标注",
+    "help.drawing.dimension.hole": "按孔的创建方式标注：螺纹、直径、深度或通孔、沉头或埋头。孔改变时标注随之更新。"
+  }
+}

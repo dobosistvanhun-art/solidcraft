@@ -344,7 +344,7 @@ pub const SECTIONS: &[Section] = &[
             "drawing.view.delete",
         ],
     },
-    Section { tab: "DRAWING", panel: "ANNOTATE", promoted: 2, ids: &["drawing.dimension", "drawing.note"] },
+    Section { tab: "DRAWING", panel: "ANNOTATE", promoted: 3, ids: &["drawing.dimension", "drawing.dimension.hole", "drawing.note"] },
     Section { tab: "DRAWING", panel: "EXPORT", promoted: 2, ids: &["drawing.export_pdf", "drawing.export_dxf"] },
     // Flat cutting drawings (laser, plasma, waterjet): the sketcher's drawing tools, a closed-contour
     // check and a cutting DXF, on one tab that stays while its sketch is open.

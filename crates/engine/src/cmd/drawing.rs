@@ -68,6 +68,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("drawing.dimension.aligned", "Aligned Dimension", dim_aligned).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind aligned"),
     CommandSpec::new("drawing.dimension.radius", "Radius Dimension", dim_radius).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind radius: one point on the arc"),
     CommandSpec::new("drawing.dimension.diameter", "Diameter Dimension", dim_diameter).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind diameter: one point on the circle"),
+    CommandSpec::new("drawing.dimension.hole", "Hole Note", dim_hole).at(TAB, "ANNOTATE").icon("hole").params(
+        "as drawing.dimension, kind diameter: one point on a hole's circle; the text is the note of the hole feature that made it \
+         (thread, diameter, depth or THRU, counterbore, countersink: `M10×1,5 THREAD DEEP 15` / `Ø8,5 DEEP 18`), and follows the hole. \
+         text? (`<hole>` is the note, `<>` the diameter; default `<hole>`)",
+    ),
     CommandSpec::new("drawing.dimension.angle", "Angle Dimension", dim_angle).at(TAB, "ANNOTATE").icon("dimension").params("as drawing.dimension, kind angle: the corner, then a point on each side"),
     CommandSpec::new("drawing.dimension.arcs", "Arc to Arc Dimension", dim_arcs).at(TAB, "ANNOTATE").icon("dimension").params(
         "as drawing.dimension between two circles or arcs (a point on each): kind? horizontal (default) | vertical | aligned; arc?: max (over their far sides, default) | min (between their near sides) | center",
@@ -834,6 +839,37 @@ fn dim_radius(s: &mut Session, p: &Value) -> Result<Value> {
 }
 fn dim_diameter(s: &mut Session, p: &Value) -> Result<Value> {
     dim_as(s, p, "diameter", None)
+}
+/// A hole note: a diameter dimension whose text is the note of the hole feature that made the
+/// circle (worked out each time the sheet is drawn, so it follows the hole).
+fn dim_hole(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "drawing.dimension.hole";
+    let i = find(s, p, cmd)?;
+    let view = id_of(p, "view", cmd)?;
+    let at = p
+        .get("points")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(|v| point(Some(v)))
+        .ok_or_else(|| bad(cmd, "`points` must hold one point on a hole's circle ([[x, y]] on the sheet)"))?;
+    let d = s.doc.drawings.get(i).cloned().ok_or_else(|| bad(cmd, "no such drawing"))?;
+    let drawn = dv::draw(s, &d);
+    let pv = drawn.views.iter().find(|v| v.id == view).ok_or_else(|| bad(cmd, "no such view (or it couldn't be drawn)"))?;
+    let snap = dv::pick(pv, Vec2::new(at[0], at[1]), PICK_REACH, dv::PickMode::Circles).ok_or_else(|| bad(cmd, "no circle edge there"))?;
+    let r = snap.radius.ok_or_else(|| bad(cmd, "no circle edge there"))?;
+    if dv::hole_note(&s.doc.hole_notes(), 2.0 * r).is_none() {
+        return Err(bad(cmd, format!("no hole feature makes this Ø{:.2} circle (use a diameter dimension)", 2.0 * r)));
+    }
+    let mut q = p.clone();
+    if let Value::Object(m) = &mut q {
+        let given = m.get("text").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty());
+        if !given {
+            m.insert("text".into(), json!(dv::HOLE_NOTE));
+        }
+        m.insert("kind".into(), json!("diameter"));
+        m.remove("arc");
+    }
+    dimension(s, &q)
 }
 fn dim_angle(s: &mut Session, p: &Value) -> Result<Value> {
     dim_as(s, p, "angle", None)

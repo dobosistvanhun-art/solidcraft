@@ -1599,6 +1599,74 @@ impl Document {
     }
 }
 
+/// A hole's note for a drawing (the Hole Note tool): the diameters of the circles it leaves
+/// (drill, counterbore or countersink, mm) and its text, e.g. `Ø8,5 THRU`, `M10×1,5 THREAD DEEP 15`
+/// with `Ø8,5 DEEP 18` below, `CBORE Ø14 DEEP 8`, `CSK Ø16 × 90°`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoleNote {
+    pub diameters: Vec<f64>,
+    pub text: String,
+}
+
+/// A length or angle as a drawing writes it: at most two decimals, a decimal comma.
+fn note_number(v: f64) -> String {
+    let t = format!("{:.2}", (v * 100.0).round() / 100.0);
+    let t = t.trim_end_matches('0').trim_end_matches('.');
+    if t == "-0" { "0".into() } else { t.replace('.', ",") }
+}
+
+impl Document {
+    /// The notes of the design's hole features that are not suppressed, in history order (one per
+    /// feature; a feature whose values don't evaluate is left out).
+    pub fn hole_notes(&self) -> Vec<HoleNote> {
+        let vals = self.evaluation_values();
+        let len = |e: &crate::Expr| val(&vals, e.as_str(), Kind::Length).ok().filter(|v| v.is_finite() && *v > 0.0);
+        let ang = |e: &crate::Expr| val(&vals, e.as_str(), Kind::Angle).ok().filter(|v| v.is_finite());
+        let mut out = Vec::new();
+        for f in self.features.iter().filter(|f| !f.suppressed) {
+            let FeatureKind::Hole { diameter, depth, hole, thread, thread_depth, handedness, to, .. } = &f.kind else { continue };
+            let Some(d) = len(diameter) else { continue };
+            let deep = |e: &Option<crate::Expr>| e.as_ref().and_then(&len);
+            // Through all, unless it has a depth or goes down to an object.
+            let drill = match (deep(depth), to.is_some()) {
+                (Some(h), _) => format!("Ø{} DEEP {}", note_number(d), note_number(h)),
+                (None, true) => format!("Ø{}", note_number(d)),
+                (None, false) => format!("Ø{} THRU", note_number(d)),
+            };
+            let mut lines = Vec::new();
+            if let Some(th) = thread.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                let mut name = th.replace(['x', 'X', '*'], "×").replace('.', ",");
+                if matches!(handedness, crate::ThreadHandedness::Left) {
+                    name.push_str(" LH");
+                }
+                lines.push(match deep(thread_depth) {
+                    Some(h) => format!("{name} THREAD DEEP {}", note_number(h)),
+                    None => format!("{name} THREAD"),
+                });
+            }
+            lines.push(drill);
+            let mut diameters = vec![d];
+            match hole {
+                HoleKind::Counterbore { cb_diameter, cb_depth, .. } => {
+                    if let (Some(cd), Some(ch)) = (len(cb_diameter), len(cb_depth)) {
+                        lines.push(format!("CBORE Ø{} DEEP {}", note_number(cd), note_number(ch)));
+                        diameters.push(cd);
+                    }
+                }
+                HoleKind::Countersink { cs_diameter, cs_angle, .. } => {
+                    if let (Some(cd), Some(a)) = (len(cs_diameter), ang(cs_angle)) {
+                        lines.push(format!("CSK Ø{} × {}°", note_number(cd), note_number(a.to_degrees())));
+                        diameters.push(cd);
+                    }
+                }
+                HoleKind::Simple | HoleKind::Drilled { .. } => {}
+            }
+            out.push(HoleNote { diameters, text: lines.join("\n") });
+        }
+        out
+    }
+}
+
 /// The values features are evaluated with: the parameters, and the design's length unit.
 fn evaluation_values(doc: &Document) -> (BTreeMap<String, Value>, BTreeMap<String, String>) {
     let (mut vals, perr) = doc.param_values();

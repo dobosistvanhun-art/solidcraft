@@ -20,11 +20,19 @@ PKG="$OUT/solidcraft-fuzio.tar.gz"
 
 # --no-install: only the build (in the box); --install: only the install of the last build. The
 # FusionAI "Fordítás és telepítés" button runs the two, asking in between.
+# A Programkezelő (Fúzió 0.0.78-tól) innen frissíti: Programok → „Frissítés a forrásból” (git pull, fordítás,
+# telepítés). A régebbi Programkezelő ezt nem ismeri: akkor csak telepít, mint eddig.
+VER=$(sed -n 's/^version = "\(.*\)"/\1/p' "$SRC/Cargo.toml" | head -1)
+ORIGIN=()
+if fusion-programs help 2>&1 | grep -q -- '--from-source'; then
+    ORIGIN=(--from-source "$SRC" --build "bash scripts/fuzio-build.sh" --version "$VER")
+fi
+
 MODE="${1:-}"
 if [ "$MODE" = "--install" ]; then
     [ -f "$PKG" ] || { echo "Nincs lefordított csomag: $PKG — előbb: bash scripts/fuzio-build.sh --no-install" >&2; exit 1; }
     echo "==> Telepítés a Programkezelővel"
-    fusion-programs install "$PKG" --name SolidCraft
+    fusion-programs install "$PKG" --name SolidCraft "${ORIGIN[@]}"
     echo "Kész: Start menü → SolidCraft"
     exit 0
 fi
@@ -36,7 +44,7 @@ if [ "$MODE" != "--in-box" ] && command -v fusion-dev >/dev/null 2>&1; then
         exit 0
     fi
     echo "==> Telepítés a Programkezelővel"
-    fusion-programs install "$PKG" --name SolidCraft
+    fusion-programs install "$PKG" --name SolidCraft "${ORIGIN[@]}"
     echo "Kész: Start menü → SolidCraft"
     exit 0
 fi

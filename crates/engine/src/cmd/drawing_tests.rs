@@ -654,3 +654,49 @@ fn round_things_seen_from_the_side_get_a_centre_line_along_their_axis() {
     let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
     assert_eq!(count(&r, "chain"), 2, "a centre mark of two lines");
 }
+
+/// A section through a modelled thread is made, and quickly: the threaded body is cut as its
+/// mesh (the solid split took minutes on its helical faces, and mostly failed), the cut face is
+/// hatched and outlined, and nothing behind the cut face shows through it.
+#[test]
+fn a_section_through_a_modelled_thread_is_made_quickly() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 60, "width": 30, "height": 20}));
+    run(&mut s, "solid.hole", json!({"position": [30, 15, 20], "diameter": 10}));
+    run(&mut s, "solid.thread", json!({"face": [35, 15, 10], "designation": "M12", "modeled": true}));
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [120, 200]}))["view"].as_u64().unwrap();
+    let t0 = std::time::Instant::now();
+    // Across the plate through the hole's centre (the top view puts it at (120, 200)).
+    let sec = run(&mut s, "drawing.view.section", json!({"drawing": "D", "parent": top, "line": [[85, 200], [155, 200]], "at": [120, 120]}))["view"]
+        .as_u64()
+        .unwrap();
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    let took = t0.elapsed().as_secs_f64();
+    assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{}", r["errors"]);
+    assert!(took < 60.0, "{took} s");
+    // The section view's lines: its hatching, and visible lines; none inside the cut face's two
+    // strips (the plate either side of the hole, 25 mm wide each, 20 high).
+    let in_view = |p: &Value| {
+        if p["type"] != "line" {
+            return false;
+        }
+        let (x, y) = (p["a"][0].as_f64().unwrap(), p["a"][1].as_f64().unwrap());
+        (x - 120.0).abs() < 31.0 && (y - 120.0).abs() < 11.0
+    };
+    let prims: Vec<&Value> = r["prims"].as_array().unwrap().iter().filter(|p| in_view(p)).collect();
+    let _ = sec;
+    eprintln!("section made in {took:.1} s");
+    assert!(prims.iter().filter(|p| p["style"] == "thin").count() > 10, "hatched");
+    let mid = |p: &Value| {
+        let a = (p["a"][0].as_f64().unwrap(), p["a"][1].as_f64().unwrap());
+        let b = (p["b"][0].as_f64().unwrap(), p["b"][1].as_f64().unwrap());
+        ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0)
+    };
+    let through = prims.iter().filter(|p| p["style"] == "visible").map(|p| mid(p)).filter(|(x, y)| {
+        // well inside a strip: x 93..113 or 127..147 from the sheet centre 120, y 112..128
+        let dx = (x - 120.0).abs();
+        (dx > 9.0 && dx < 27.0) && (y - 120.0).abs() < 8.0
+    });
+    assert_eq!(through.count(), 0, "nothing shows through the cut face");
+}

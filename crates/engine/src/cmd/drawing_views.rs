@@ -907,6 +907,166 @@ fn lines(meshes: Vec<Arc<Mesh>>, basis: &Basis, radius: f64) -> Result<Vec<(Vec2
     Ok(drawn.lines.into_iter().map(|l| (map(l.a), map(l.b), l.hidden)).collect())
 }
 
+/// The part of `mesh` on the side of the plane through `p` that `n` points to: its triangles cut
+/// at the plane, and its edges cut there too (the cut itself has no face).
+fn clip_mesh(mesh: &Mesh, p: Vec3, n: Vec3) -> Mesh {
+    let mut out = Mesh { display_only_edges: mesh.display_only_edges, ..Mesh::default() };
+    let side = |q: Vec3| (q - p).dot(n);
+    let add = |q: Vec3, normal: Vec3, out: &mut Mesh| -> u32 {
+        out.positions.push(q);
+        out.normals.push(normal);
+        (out.positions.len() - 1) as u32
+    };
+    for (t, face) in mesh.triangles.iter().zip(&mesh.tri_face) {
+        let Some(v) = mesh.tri(t) else { continue };
+        let nv: Vec<Vec3> = t.iter().map(|i| mesh.normals.get(*i as usize).copied().unwrap_or(Vec3::ZERO)).collect();
+        let d = v.map(side);
+        // The polygon of the triangle on the kept side (Sutherland–Hodgman against one plane).
+        let mut poly: Vec<(Vec3, Vec3)> = Vec::with_capacity(4);
+        for i in 0..3 {
+            let j = (i + 1) % 3;
+            let (Some(a), Some(b), Some(na), Some(nb)) = (v.get(i), v.get(j), nv.get(i), nv.get(j)) else { continue };
+            let (da, db) = (d.get(i).copied().unwrap_or(0.0), d.get(j).copied().unwrap_or(0.0));
+            if da >= 0.0 {
+                poly.push((*a, *na));
+            }
+            if (da >= 0.0) != (db >= 0.0) && (da - db).abs() > 1e-15 {
+                let s = da / (da - db);
+                poly.push((*a + (*b - *a) * s, *na + (*nb - *na) * s));
+            }
+        }
+        if poly.len() < 3 {
+            continue;
+        }
+        let ids: Vec<u32> = poly.iter().map(|(q, nn)| add(*q, *nn, &mut out)).collect();
+        for k in 1..ids.len() - 1 {
+            if let (Some(a), Some(b), Some(c)) = (ids.first(), ids.get(k), ids.get(k + 1)) {
+                out.triangles.push([*a, *b, *c]);
+                out.tri_face.push(*face);
+            }
+        }
+    }
+    for (i, line) in mesh.edges.iter().enumerate() {
+        let mut piece: Vec<Vec3> = Vec::new();
+        let flush = |piece: &mut Vec<Vec3>, out: &mut Mesh| {
+            if piece.len() >= 2 {
+                out.edges.push(std::mem::take(piece));
+                out.seams.push(mesh.seams.get(i).copied().unwrap_or(false));
+                out.smooth_edges.push(mesh.smooth_edges.get(i).copied().unwrap_or(false));
+                out.sharp_edges.push(mesh.sharp_edges.get(i).copied().unwrap_or(false));
+                out.edge_faces.push(mesh.edge_faces.get(i).cloned().unwrap_or_default());
+            }
+            piece.clear();
+        };
+        for w in line.windows(2) {
+            let &[a, b] = w else { continue };
+            let (da, db) = (side(a), side(b));
+            match (da >= 0.0, db >= 0.0) {
+                (true, true) => {
+                    if piece.is_empty() {
+                        piece.push(a);
+                    }
+                    piece.push(b);
+                }
+                (true, false) => {
+                    if piece.is_empty() {
+                        piece.push(a);
+                    }
+                    piece.push(a + (b - a) * (da / (da - db)));
+                    flush(&mut piece, &mut out);
+                }
+                (false, true) => {
+                    piece.push(a + (b - a) * (da / (da - db)));
+                    piece.push(b);
+                }
+                (false, false) => flush(&mut piece, &mut out),
+            }
+        }
+        flush(&mut piece, &mut out);
+    }
+    out
+}
+
+/// The parts of `lines` outside the region the cut's outline `segs` closes (even-odd): behind the
+/// cut face, which faces the viewer, nothing is seen.
+fn outside_cut(lines: Vec<(Vec2, Vec2, Style)>, segs: &[(Vec2, Vec2)]) -> Vec<(Vec2, Vec2, Style)> {
+    if segs.is_empty() {
+        return lines;
+    }
+    // The outline's segments in rows by height, so a line meets only those about it.
+    let (lo, hi) = segs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (a, b)| (lo.min(a.y).min(b.y), hi.max(a.y).max(b.y)));
+    let rows = (segs.len() / 8).clamp(1, 4096);
+    let h = ((hi - lo) / rows as f64).max(1e-9);
+    let row = |y: f64| (((y - lo) / h).floor().max(0.0) as usize).min(rows - 1);
+    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); rows];
+    for (i, (a, b)) in segs.iter().enumerate() {
+        for r in row(a.y.min(b.y))..=row(a.y.max(b.y)) {
+            if let Some(g) = grid.get_mut(r) {
+                g.push(i);
+            }
+        }
+    }
+    let inside = |q: Vec2| {
+        if q.y < lo || q.y > hi {
+            return false;
+        }
+        let mut odd = false;
+        for i in grid.get(row(q.y)).into_iter().flatten() {
+            let Some((a, b)) = segs.get(*i) else { continue };
+            if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (b.x - a.x) * (q.y - a.y) / (b.y - a.y) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    let mut out = Vec::with_capacity(lines.len());
+    for (a, b, style) in lines {
+        // Where the line crosses the outline: it is cut there, and each piece is kept or not by its middle.
+        let mut ts = vec![0.0, 1.0];
+        let (ylo, yhi) = (a.y.min(b.y), a.y.max(b.y));
+        if yhi >= lo && ylo <= hi {
+            let mut seen = Vec::new();
+            for r in row(ylo.max(lo))..=row(yhi.min(hi)) {
+                for i in grid.get(r).into_iter().flatten() {
+                    if seen.contains(i) {
+                        continue;
+                    }
+                    seen.push(*i);
+                    let Some((c, d)) = segs.get(*i) else { continue };
+                    if let Some((s, _)) = seg_cross(a, b, *c, *d) {
+                        ts.push(s);
+                    }
+                }
+            }
+        }
+        ts.sort_by(f64::total_cmp);
+        for w in ts.windows(2) {
+            let &[s0, s1] = w else { continue };
+            if s1 - s0 < 1e-9 {
+                continue;
+            }
+            let (p0, p1) = (a + (b - a) * s0, a + (b - a) * s1);
+            if !inside((p0 + p1) * 0.5) {
+                out.push((p0, p1, style));
+            }
+        }
+    }
+    out
+}
+
+/// Where the segments a–b and c–d cross: the parameters along each.
+fn seg_cross(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f64, f64)> {
+    let (r, s) = (b - a, d - c);
+    let den = r.x * s.y - r.y * s.x;
+    if den.abs() < 1e-15 {
+        return None;
+    }
+    let q = c - a;
+    let t = (q.x * s.y - q.y * s.x) / den;
+    let u = (q.x * r.y - q.y * r.x) / den;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((t, u))
+}
+
 /// The section of `mesh` by the plane through `p` with normal `n`: segments in 3D.
 fn slice(mesh: &Mesh, p: Vec3, n: Vec3) -> Vec<(Vec3, Vec3)> {
     let mut out = Vec::new();
@@ -1456,8 +1616,18 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                         let mut cut = Vec::new();
                         // The pieces kept, as bodies of their own: what the view's points are measured on.
                         let mut own = Model { bodies: Vec::new(), circles: Vec::new(), bounds: Aabb3::EMPTY };
+                        // Bodies with faces of no analytic surface (a modelled thread, a loft) are cut as
+                        // their meshes: the solid split takes minutes on them, and often fails.
+                        let mut meshed = false;
                         for (name, body, mesh) in &m.bodies {
-                            let pieces = split_for_section(body, &plane, arrow, radius)?;
+                            let analytic = (0..body.face_count()).all(|f| solidcraft_kernel::face_surface(body, f).is_some());
+                            let pieces = if analytic { split_for_section(body, &plane, arrow, radius).ok() } else { None };
+                            let Some(pieces) = pieces else {
+                                kept.push(Arc::new(clip_mesh(mesh, p0, arrow)));
+                                meshed = true;
+                                cut.extend(slice(mesh, p0, arrow));
+                                continue;
+                            };
                             for (k, piece) in pieces.into_iter().enumerate() {
                                 let pm = piece.display_mesh(radius * 2e-4).map_err(|e| e.to_string())?;
                                 let n = pm.positions.len().max(1) as f64;
@@ -1474,12 +1644,18 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                             }
                             cut.extend(slice(mesh, p0, arrow));
                         }
+                        let segs: Vec<(Vec2, Vec2)> = cut.iter().map(|(a, b)| (basis.project(*a), basis.project(*b))).collect();
                         let mut ls: Vec<(Vec2, Vec2, Style)> = if kept.is_empty() {
                             Vec::new()
                         } else {
                             lines(kept, &basis, radius)?.into_iter().filter(|l| !l.2).map(|(a, b, _)| (a, b, Style::Visible)).collect()
                         };
-                        let segs: Vec<(Vec2, Vec2)> = cut.iter().map(|(a, b)| (basis.project(*a), basis.project(*b))).collect();
+                        if meshed {
+                            // A mesh cut open has no face on the cut: what lies behind the cut face is hidden
+                            // by it, and its outline is drawn.
+                            ls = outside_cut(ls, &segs);
+                            ls.extend(segs.iter().map(|(a, b)| (*a, *b, Style::Visible)));
+                        }
                         ls.extend(hatch(&segs, 3.0 / scale).into_iter().map(|(a, b)| (a, b, Style::Thin)));
                         Ok((basis, ls, (!own.bodies.is_empty()).then_some(own)))
                     }

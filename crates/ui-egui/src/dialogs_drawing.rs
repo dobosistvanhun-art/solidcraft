@@ -161,6 +161,8 @@ pub struct DrawUi {
     pub cycle: usize,
     pub cycle_at: Option<[f64; 2]>,
     pub status: Option<String>,
+    /// A section line's start in line with a hole's centre: the point, and the centre it lines up with.
+    pub align: Option<([f64; 2], [f64; 2])>,
 }
 
 impl DrawUi {
@@ -192,6 +194,7 @@ impl DrawUi {
             choices: 0,
             cycle: 0,
             cycle_at: None,
+            align: None,
             status: None,
         }
     }
@@ -747,6 +750,26 @@ pub struct Candidate {
     pub dist: f64,
 }
 
+/// The pointer's place moved into line with a circle's centre of view `only` (across or along, the
+/// nearer within `reach`), and that centre.
+fn aligned(v: &Value, at: [f64; 2], reach: f64, only: Option<u64>) -> Option<([f64; 2], [f64; 2])> {
+    let mut best: Option<(f64, [f64; 2], [f64; 2])> = None;
+    for x in v["views"].as_array().into_iter().flatten() {
+        if only.is_some_and(|o| x["id"].as_u64() != Some(o)) {
+            continue;
+        }
+        for p in x["points"].as_array().into_iter().flatten() {
+            let (Some(c), Some("center")) = (read2(&p["at"]), p["kind"].as_str()) else { continue };
+            for (off, q) in [((at[1] - c[1]).abs(), [at[0], c[1]]), ((at[0] - c[0]).abs(), [c[0], at[1]])] {
+                if off <= reach && best.is_none_or(|b| off < b.0) {
+                    best = Some((off, q, c));
+                }
+            }
+        }
+    }
+    best.map(|(_, q, c)| (q, c))
+}
+
 /// A reference kind as `'static` text (the render's are a known few).
 fn kind_of(k: &str) -> &'static str {
     match k {
@@ -1165,6 +1188,21 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
             }
             // The points about the pointer, shown faintly so it is seen what is there to pick.
             near = candidates(&v, at, reach * 3.0, want, only(k)).into_iter().filter(|c| matches!(c.pick, Pick::Point(_))).collect();
+        }
+    }
+    // A section line's start in line with a hole's (or a round's) centre, across or along it: a thin
+    // guide from the centre shows it, and the click takes that line.
+    k.align = None;
+    if let Some(at) = cursor
+        && k.tool == Tool::Section
+        && k.picks.is_empty()
+        && k.hover.is_none()
+    {
+        k.align = aligned(&v, at, reach * 1.5, view_at(&v, at));
+        if let Some((p, c)) = k.align {
+            let thin = Stroke::new(1.0, t.accent.gamma_multiply(0.8));
+            painter.extend(egui::Shape::dashed_line(&[to(c), to(p)], thin, 4.0, 3.0));
+            painter.circle_stroke(to(p), 3.5, thin);
         }
     }
     let mark = |p: Pick, stroke: Stroke| match p {
@@ -1713,6 +1751,7 @@ fn press(app: &mut SolveApp, k: &mut DrawUi, v: &Value, at: [f64; 2], put: Optio
             let p = match (k.tool, k.hover, k.picks.first()) {
                 (Tool::Section, Some((_, pick)), _) => pick.anchors().first().copied().unwrap_or(at),
                 (Tool::Section, None, Some(first)) => squared(*first, at),
+                (Tool::Section, None, None) => k.align.map(|(p, _)| p).unwrap_or(at),
                 _ => at,
             };
             if k.picks.len() == 1 && k.picks.first().is_some_and(|f| dist(*f, p) < 0.5) {
@@ -1918,11 +1957,12 @@ mod tests {
         assert!(notes.len() == 1 && notes[0].text == "Sorjamentes" && (notes[0].at[0] - 40.0).abs() < 1.0, "{notes:?}");
         // A section across the top view (centred at (120, 120), 100 wide at 1:1): its line, then its place.
         set(&mut h, |k| k.set_tool(Tool::Section));
-        click(&mut h, [63.0, 121.0]);
-        click(&mut h, [177.0, 122.0]);
+        // (away from the hole's centre line, which a start near it lines up with)
+        click(&mut h, [63.0, 131.0]);
+        click(&mut h, [177.0, 132.0]);
         assert_eq!(ui(&h).picks.len(), 2, "{:?}", ui(&h).status);
         let picks = ui(&h).picks;
-        assert!(picks[0][1] == picks[1][1] && (picks[0][1] - 121.0).abs() < 0.05, "squared: {picks:?}");
+        assert!(picks[0][1] == picks[1][1] && (picks[0][1] - 131.0).abs() < 0.05, "squared: {picks:?}");
         click(&mut h, [130.0, 50.0]);
         let d = h.app.session.doc.drawings.first().cloned().unwrap();
         assert_eq!(d.views.len(), 5, "{:?}", ui(&h).status);
@@ -1931,6 +1971,29 @@ mod tests {
         // A horizontal cutting line: the section lies below its parent, in line with it.
         assert!((sec.at[0] - 120.0).abs() < 1e-6 && (sec.at[1] - 50.0).abs() < 1.0, "{:?}", sec.at);
         assert_eq!(ui(&h).tool, Tool::Select);
+    }
+
+    /// A section line's start a little off a hole's centre line is taken in line with it (a thin
+    /// guide from the centre shows it), so the cut goes through the hole.
+    #[test]
+    fn a_section_line_lines_up_with_a_holes_centre() {
+        let mut h = with_views();
+        set(&mut h, |k| k.set_tool(Tool::Section));
+        // The top view is centred at (120, 120): the hole's centre is there.
+        let at = screen([60.0, 121.4]);
+        h.step(&json!({"move": at})).unwrap();
+        h.frames(2);
+        let guide = ui(&h).align;
+        assert!(guide.is_some_and(|(p, c)| (p[1] - 120.0).abs() < 1e-6 && (c[0] - 120.0).abs() < 1e-6), "{guide:?}");
+        click(&mut h, [60.0, 121.4]);
+        click(&mut h, [180.0, 123.0]);
+        let picks = ui(&h).picks;
+        assert!(picks.len() == 2 && picks.iter().all(|p| (p[1] - 120.0).abs() < 1e-6), "through the centre: {picks:?}");
+        // Far from any centre's line: where it is clicked.
+        set(&mut h, |k| k.set_tool(Tool::Section));
+        h.step(&json!({"move": screen([60.0, 135.0])})).unwrap();
+        h.frames(2);
+        assert_eq!(ui(&h).align, None);
     }
 
     #[test]

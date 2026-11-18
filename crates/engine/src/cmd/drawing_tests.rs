@@ -700,3 +700,48 @@ fn a_section_through_a_modelled_thread_is_made_quickly() {
     });
     assert_eq!(through.count(), 0, "nothing shows through the cut face");
 }
+
+/// A modelled M8 thread in a hole through a Ø50 round bar (István's report, 2026-11-18): the
+/// thread is cut faceted, and the whole bar with it — so its cylinder and its flanks are drawn as
+/// the smooth faces the facets follow (not a line per facet, which hatched the whole bar), and a
+/// drawing of it, a section through the thread included, is made in seconds.
+#[test]
+fn a_modelled_thread_leaves_the_bar_smooth_and_its_drawing_quick() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"diameter": 50, "height": 40}));
+    run(&mut s, "solid.hole", json!({"position": [8, 6, 40], "diameter": 6.8}));
+    run(&mut s, "solid.thread", json!({"face": [11.4, 6, 20], "designation": "M8", "modeled": true}));
+    let state = s.model.state();
+    let mb = state.bodies.first().unwrap();
+    let faces = mb.body.face_count();
+    let mesh = mb.mesh();
+    let drawn = (0..mesh.edges.len()).filter(|i| mesh.shaded_edge_visible(*i)).count();
+    assert!(faces > 1500, "faceted: {faces}");
+    // The lines drawn are the thread's own (its crests and roots, within its major radius of the
+    // hole's axis), and the bar's real edges: none on the bar's cylinder.
+    let away = (0..mesh.edges.len())
+        .filter(|i| mesh.shaded_edge_visible(*i))
+        .filter(|i| {
+            mesh.edges[*i].iter().any(|p| {
+                let to_hole = ((p.x - 8.0).powi(2) + (p.y - 6.0).powi(2)).sqrt();
+                let r = (p.x * p.x + p.y * p.y).sqrt();
+                // (the bar's rims lie on its circle, within the facets' chord)
+                to_hole > 4.1 && (r - 25.0).abs() > 0.05
+            })
+        })
+        .count();
+    assert_eq!(away, 0, "{drawn} drawn of {}", mesh.edges.len());
+    let t0 = std::time::Instant::now();
+    run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+    let top = run(&mut s, "drawing.view.base", json!({"drawing": "D", "orientation": "top", "at": [100, 200]}))["view"].as_u64().unwrap();
+    run(&mut s, "drawing.view.projected", json!({"drawing": "D", "parent": top, "side": "below", "at": [100, 110]}));
+    // Through the hole's centre (8, 6): the top view puts the bar's centre at (100, 200).
+    run(&mut s, "drawing.view.section", json!({"drawing": "D", "parent": top, "line": [[70, 206], [140, 206]], "at": [250, 200]}));
+    let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+    let took = t0.elapsed().as_secs_f64();
+    eprintln!("drawing made in {took:.1} s");
+    assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{}", r["errors"]);
+    assert!(took < 30.0, "{took} s");
+    let lines = r["prims"].as_array().unwrap().iter().filter(|p| p["type"] == "line").count();
+    assert!(lines < 20_000, "{lines} lines");
+}

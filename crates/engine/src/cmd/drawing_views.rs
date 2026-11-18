@@ -907,6 +907,9 @@ fn lines(meshes: Vec<Arc<Mesh>>, basis: &Basis, radius: f64) -> Result<Vec<(Vec2
     Ok(drawn.lines.into_iter().map(|l| (map(l.a), map(l.b), l.hidden)).collect())
 }
 
+/// Bodies of more faces than this are cut as their meshes in a section view (a faceted body).
+const MESH_SECTION_FACES: usize = 1500;
+
 /// The part of `mesh` on the side of the plane through `p` that `n` points to: its triangles cut
 /// at the plane, and its edges cut there too (the cut itself has no face).
 fn clip_mesh(mesh: &Mesh, p: Vec3, n: Vec3) -> Mesh {
@@ -1620,7 +1623,9 @@ pub(crate) fn draw(s: &crate::Session, d: &Drawing) -> SheetDrawn {
                         // their meshes: the solid split takes minutes on them, and often fails.
                         let mut meshed = false;
                         for (name, body, mesh) in &m.bodies {
-                            let analytic = (0..body.face_count()).all(|f| solidcraft_kernel::face_surface(body, f).is_some());
+                            // (and a faceted body, as a modelled thread leaves it: thousands of flat faces)
+                            let analytic = body.face_count() <= MESH_SECTION_FACES
+                                && (0..body.face_count()).all(|f| solidcraft_kernel::face_surface(body, f).is_some());
                             let pieces = if analytic { split_for_section(body, &plane, arrow, radius).ok() } else { None };
                             let Some(pieces) = pieces else {
                                 kept.push(Arc::new(clip_mesh(mesh, p0, arrow)));

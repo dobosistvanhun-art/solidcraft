@@ -8373,6 +8373,9 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
                 let lineage = nb.lineage.and_then(|l| crate::lineage::Lineage::step(&cut, &[&l, &faces]));
                 nb = Traced { body: cut, lineage };
             }
+            // Drawn as the smooth faces the facets follow (the cylinder about it, the thread's flanks):
+            // only real creases keep their lines, on screen and on drawings.
+            nb.body = nb.body.with_facet_smoothing(20f64.to_radians());
             if let Some(slot) = st.bodies.get_mut(i) {
                 *slot = ModelBody::traced_new(mb.name, nb, mb.feature);
             }

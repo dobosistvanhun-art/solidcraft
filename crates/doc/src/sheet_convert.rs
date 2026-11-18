@@ -736,6 +736,104 @@ pub fn bend_edge_names(st: &crate::ModelState, body: &str, pts: &[Vec3]) -> Vec<
 /// chamfers or on bend cylinders that do (the body's coordinates, mm). See the module docs.
 /// `body_to_world` places diagnostic points in world coordinates. Geometry and picks stay local.
 /// Returns the sheet and a note for every corner or end of a bend not finished as the rule says.
+/// Convert to Sheet Metal without picking edges: the fixed face and the bends of a sheet of even
+/// thickness (a shelled body, or a bent part read from a STEP file), found from the body itself.
+///
+/// The fixed face, unless `face` points at one, is the largest planar face with the same small
+/// distance of material behind it all over (a sheet's skin, not a solid's side). From it the
+/// bends are taken across face by face, nearest first: each edge to a planar face at an angle
+/// with the same material behind it, and each bend modelled with its radius (a cylinder tangent
+/// to both faces) to the face beyond it. An edge between two faces already reached is no bend:
+/// it is cut open (the corners of a shelled tray). Faces across the thickness (a tray's rim, the
+/// end of a flange) are no part of the skin.
+///
+/// Returns a point on the fixed face and a point on each bend, in the body's frame (as picks
+/// are); no bends for a flat plate, or for a body that is not a sheet of even thickness.
+pub fn auto_picks(mb: &ModelBody, face: Option<Vec3>) -> Result<(Vec3, Vec<Vec3>)> {
+    let (b, mesh) = (&mb.body, mb.mesh());
+    let size = b.size();
+    if !(size.is_finite() && size > 0.0) {
+        return err("the body has no size");
+    }
+    let (tol, near) = ((size * 1e-6).max(1e-6), (size * 2e-3).max(1e-3));
+    let faces = mesh.tri_face.iter().max().map_or(0, |m| *m as usize + 1);
+    // Each face's area, and the middle of its largest triangle (a point well inside it).
+    let mut area = vec![0.0; faces];
+    let mut inside = vec![(0.0, Vec3::default()); faces];
+    for (tri, f) in mesh.triangles.iter().zip(&mesh.tri_face) {
+        let (Some([p, q, r]), Some(a)) = (mesh.tri(tri), area.get_mut(*f as usize)) else { continue };
+        let tri_area = (q - p).cross(r - p).len() / 2.0;
+        *a += tri_area;
+        if let Some(best) = inside.get_mut(*f as usize).filter(|best| tri_area > best.0) {
+            *best = (tri_area, (p + q + r) * (1.0 / 3.0));
+        }
+    }
+    let normal = |f: usize| match face_surface(b, f) {
+        Some(FaceSurface::Plane { normal, .. }) => Some(normal),
+        _ => None,
+    };
+    let area_of = |f: usize| area.get(f).copied().unwrap_or(0.0);
+    let thin = |f: usize| behind(b, &mesh, f).map(|(_, d)| d).filter(|d| *d > 0.0 && d * d * 16.0 <= area_of(f));
+    let f0 = match face {
+        Some(p) => match crate::appearance::nearest_face(mb, p).filter(|(d, _)| *d <= near) {
+            Some((_, f)) => f,
+            None => return err(format!("no face of the body at the fixed face point {}", at(p))),
+        },
+        None => {
+            let planar = (0..faces).filter(|f| normal(*f).is_some());
+            let skin = planar.clone().filter(|f| thin(*f).is_some()).max_by(|x, y| area_of(*x).total_cmp(&area_of(*y)));
+            match skin.or_else(|| planar.max_by(|x, y| area_of(*x).total_cmp(&area_of(*y)))) {
+                Some(f) => f,
+                None => return err("the body has no flat face to keep fixed"),
+            }
+        }
+    };
+    let fixed = inside.get(f0).map(|x| x.1).unwrap_or_default();
+    let Some(t) = thin(f0) else { return Ok((fixed, Vec::new())) };
+    let skin = |f: usize| normal(f).is_some() && behind(b, &mesh, f).is_some_and(|(_, d)| (d - t).abs() <= 1e-6 * t.max(1.0));
+    // The faces beside each face, with a point in the middle of the edge between them.
+    let mut beside: BTreeMap<usize, Vec<(usize, Vec3)>> = BTreeMap::new();
+    for (line, pair) in mesh.edges.iter().zip(&mesh.edge_faces) {
+        let (&[x, y], Some(&p), Some(&q)) = (pair.as_slice(), line.first(), line.last()) else { continue };
+        if x == y {
+            continue;
+        }
+        let half = (p + q) * 0.5;
+        let on = line.windows(2).map(|w| half.dist_to_segment(w[0], w[1])).fold(f64::INFINITY, f64::min) <= tol;
+        let mid = if on { half } else { line.get(line.len() / 2).copied().unwrap_or(half) };
+        beside.entry(x as usize).or_default().push((y as usize, mid));
+        beside.entry(y as usize).or_default().push((x as usize, mid));
+    }
+    let mut reached = std::collections::BTreeSet::from([f0]);
+    let mut queue = std::collections::VecDeque::from([f0]);
+    let mut bends = Vec::new();
+    while let Some(f) = queue.pop_front() {
+        let Some(nf) = normal(f) else { continue };
+        for &(g, mid) in beside.get(&f).map(Vec::as_slice).unwrap_or_default() {
+            if reached.contains(&g) || bends.len() >= MAX_BENDS {
+                continue;
+            }
+            if let Some(ng) = normal(g) {
+                // A sharp bend: a face at an angle (not one in the same plane, nor across the sheet).
+                if skin(g) && nf.dot(ng).abs() < 1.0 - 1e-6 {
+                    bends.push(mid);
+                    reached.insert(g);
+                    queue.push_back(g);
+                }
+            } else if let Some(c) = bend_cylinder(b, &mesh, g, tol).filter(|c| c.a == f || c.b == f) {
+                let other = if c.a == f { c.b } else { c.a };
+                if !reached.contains(&other) && skin(other) {
+                    bends.push(inside.get(g).map(|x| x.1).unwrap_or(mid));
+                    reached.insert(g);
+                    reached.insert(other);
+                    queue.push_back(other);
+                }
+            }
+        }
+    }
+    Ok((fixed, bends))
+}
+
 pub fn convert_body(
     mb: &ModelBody,
     rule: &str,

@@ -107,9 +107,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&CONVERT_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params(
-            "body; face: [x,y,z] on its large flat face (a plate of even thickness; recesses in one face up to half the thickness deep, \
+            "body; face?: [x,y,z] on its large flat face (default, or `auto`: found from the body, the largest flat face of its skin) (a plate of even thickness; recesses in one face up to half the thickness deep, \
              such as an engraved label, become pockets of the sheet), or that face's name from model.faces; rule?; \
-             bends?: [[x,y,z] on sharp edges] (a solid or a shelled body: `face` is the fixed face and the flat faces reached from it \
+             bends?: `auto` (the default when no face is given: on a sheet of even thickness, a shelled body or a bent part from a STEP \
+             file, every edge and modelled bend from the fixed face across its skin, nearest first; edges between faces reached \
+             already are cut open; none on a flat plate) or [[x,y,z] on sharp edges] (a solid or a shelled body: `face` is the fixed face and the flat faces reached from it \
              across these edges become the sheet; a shell keeps its thickness, a solid takes the rule's inward; \
              edges between two of those faces that are no bends are cut open with the rule's gap; \
              a point in the middle of a chamfer between two faces, or on a bend modelled with its radius (a cylinder between \
@@ -731,12 +733,26 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     if s.model.state().body(&body).is_none() {
         return Err(bad(cmd, format!("no body `{body}`")));
     }
-    let face = p.get("face").ok_or_else(|| bad(cmd, "`face` must be a point [x, y, z] on the plate's face, or its name from model.faces"))?;
-    let face = super::face::face_ref(s, face, Some(&body), cmd)?;
-    // With bend edges, a solid or shelled body; without, a plate.
-    let bends = match p.get("bends") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(_) => points(p, "bends", cmd)?,
+    // Found from the body: the fixed face when none is given, the bends when `bends` is `auto` or
+    // neither is given (a sheet of even thickness: a shelled body, a bent part from a STEP file).
+    let given = p.get("face").filter(|v| !v.is_null() && v.as_str() != Some("auto"));
+    let face = given.map(|f| super::face::face_ref(s, f, Some(&body), cmd)).transpose()?;
+    let auto = match p.get("bends") {
+        None | Some(Value::Null) => face.is_none(),
+        Some(v) => v.as_str() == Some("auto"),
+    };
+    let (face, bends) = if auto || face.is_none() {
+        let mb = s.model.state().body(&body).cloned().ok_or_else(|| bad(cmd, format!("no body `{body}`")))?;
+        let (fixed, found) = solidcraft_doc::sheet::auto_picks(&mb, face).map_err(|e| bad(cmd, e.to_string()))?;
+        let bends = if auto { found } else { points(p, "bends", cmd)? };
+        (face.unwrap_or(fixed), bends)
+    } else {
+        // With bend edges, a solid or shelled body; without, a plate.
+        let bends = match p.get("bends") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(_) => points(p, "bends", cmd)?,
+        };
+        (face.unwrap_or_default(), bends)
     };
     // Such a sheet's values are its rule's (a plate's thickness is the plate's own).
     if let Some(key) = RULE_ONLY.iter().find(|k| !bends.is_empty() && p.get(**k).is_some()) {

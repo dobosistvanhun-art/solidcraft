@@ -50,6 +50,36 @@ impl JsonSchema for SheetPoints {
     }
 }
 
+/// The `bends` of a conversion: `auto` (found from the body), or points on the bend edges.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConvertBends {
+    Auto,
+    Points(SheetPoints),
+}
+
+impl<'de> Deserialize<'de> for ConvertBends {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        if v.as_str() == Some("auto") {
+            return Ok(ConvertBends::Auto);
+        }
+        crate::cmd::sheet_points(Some(&v)).map(|p| ConvertBends::Points(SheetPoints(p))).map_err(D::Error::custom)
+    }
+}
+
+impl JsonSchema for ConvertBends {
+    fn schema_name() -> Cow<'static, str> {
+        "ConvertBends".into()
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let points = generator.subschema_for::<SheetPoints>();
+        json_schema!({
+            "description": "`auto` (the bends found from the body), or points in mm on the bend edges.",
+            "anyOf": [{"const": "auto"}, points]
+        })
+    }
+}
+
 /// The `edges` of an edge flange: 1 to 1000 points on sheet edges, each `[x, y, z]` (or
 /// `{x, y, z}`) or `{point, angle?, height?}` for an edge with its own angle and height (read by
 /// `sheet::flange_edge`). Whether the expressions suit the design is checked by the handler.
@@ -571,14 +601,17 @@ pub struct UnfoldParams {
 pub struct ConvertParams {
     /// The body to convert.
     pub body: String,
-    /// Its large flat face (a plate), or the face that stays put (with `bends`).
-    pub face: FaceRef,
+    /// Its large flat face (a plate), or the face that stays put (with `bends`). Default (or
+    /// `auto`): found from the body, the largest flat face of its skin.
+    #[serde(default)]
+    pub face: Option<FaceRef>,
     /// The sharp edges that become bends of the rule's radius at their virtual sharp. A point in
     /// the middle of a chamfer between two faces, or on a bend modelled with its radius (a
-    /// cylinder tangent to two flat faces, either skin), makes it one bend. Default: none (a
-    /// plate).
+    /// cylinder tangent to two flat faces, either skin), makes it one bend. `auto`: found from
+    /// the body (a sheet of even thickness), every edge and modelled bend from the fixed face
+    /// across its skin. Default: `auto` when no face is given, else none (a plate).
     #[serde(default)]
-    pub bends: Option<SheetPoints>,
+    pub bends: Option<ConvertBends>,
     /// The sheet metal rule, by name. Default: the active rule. A plate keeps its own thickness.
     #[serde(default)]
     pub rule: Option<String>,

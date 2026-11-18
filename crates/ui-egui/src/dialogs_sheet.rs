@@ -224,7 +224,7 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
         "sheet.unfold" => (Sm::Unfold { refold: false }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         "sheet.refold" => (Sm::Unfold { refold: true }, vec![SelInput::new("Body (last if none)", BODIES, false)]),
         "sheet.convert" => {
-            (Sm::Convert { rule: 0 }, vec![SelInput::new("Fixed Face", PLANAR_FACES, false), SelInput::new("Bend Edges", EDGES, true)])
+            (Sm::Convert { rule: 0 }, vec![SelInput::new("Fixed Face", PLANAR_FACES | BODIES, false), SelInput::new("Bend Edges", EDGES, true)])
         }
         "sheet.manage_rules" => {
             let active = app.session.doc.sheet.active.clone();
@@ -488,7 +488,11 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
             enter |= hint_row(ui, "Bend Radius", radius, crate::i18n::tr_label("from the rule"));
         }
         Sm::Unfold { .. } => {}
-        Sm::Convert { rule } => rule_combo(app, ui, "sm_conv_rule", rule),
+        Sm::Convert { rule } => {
+            rule_combo(app, ui, "sm_conv_rule", rule);
+            // The body alone, or its fixed face without bend edges: the rest is found.
+            crate::ui_kit::caption(ui, "Bend Edges", crate::i18n::tr_label("none picked: found from the body"));
+        }
         Sm::Rules { pick, name, values, relief, material, angles, active, loaded } => {
             let rules = rule_list(app);
             crate::rule_editor::rule_editor! {
@@ -924,15 +928,16 @@ pub fn commands(app: &SolveApp, k: &Sm, inputs: &[SelInput], extra: &Map<String,
             (if *refold { "sheet.refold" } else { "sheet.unfold" }, p)
         }
         Sm::Convert { rule } => {
-            let Some(Sel::Face { body, point, .. }) = items(inputs, 0).first() else {
-                return Err("select the fixed face first (a plate's large face)".into());
+            let mut p = match items(inputs, 0).first() {
+                Some(Sel::Face { body, point, .. }) => json!({"body": body, "face": pt(*point)}),
+                // The body alone: its fixed face is found too.
+                Some(Sel::Body { name }) => json!({"body": name}),
+                _ => return Err("select the part, or its fixed face (a plate's large face)".into()),
             };
-            let mut p = json!({"body": body, "face": pt(*point)});
-            // The sharp edges of a solid or shelled body that become bends (a plate has none).
+            // The sharp edges of a solid or shelled body that become bends; none picked: found
+            // from the body (a sheet of even thickness; a plate has none).
             let bends: Vec<Value> = items(inputs, 1).edge_points().into_iter().map(pt).collect();
-            if !bends.is_empty() {
-                p["bends"] = json!(bends);
-            }
+            p["bends"] = if bends.is_empty() { json!("auto") } else { json!(bends) };
             if let Some(r) = rule_value(app, *rule) {
                 p["rule"] = json!(r);
             }

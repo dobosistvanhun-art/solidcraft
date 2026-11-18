@@ -1854,3 +1854,51 @@ fn trays_of_its_own_sheet_metal_convert_back() {
         }
     }
 }
+
+/// Convert to Sheet Metal finds the fixed face and the bends itself on a sheet of even
+/// thickness: a shelled tray comes out as when its floor and four floor edges are picked (its
+/// corners cut open), a section with modelled bends as when its bends are, and a plate as a plate.
+#[test]
+fn convert_finds_the_fixed_face_and_the_bends_of_a_sheet_itself() {
+    let (t, k, r, gap) = (2.0, 0.44, 2.0, 0.5);
+    let made = |auto: bool| {
+        let mut s = Session::default();
+        rule(&mut s, "Test", 3.0, k, r, gap);
+        tray(&mut s, t);
+        let p = if auto { json!({"body": "Tray"}) } else { json!({"body": "Tray", "face": [50, 30, 0], "bends": BOTTOM_EDGES}) };
+        let out = run(&mut s, "sheet.convert", p);
+        assert!(out["warning"].is_null(), "{out}");
+        let mut rows = bend_rows(&mut s);
+        rows.sort_by(|a, b| a.2.total_cmp(&b.2));
+        (volume(&mut s), flat_size(&mut s), rows)
+    };
+    let (by_hand, found) = (made(false), made(true));
+    assert!((by_hand.0 - found.0).abs() < 1e-6 * by_hand.0, "{by_hand:?} {found:?}");
+    assert!(same_size(found.1, by_hand.1, 1e-9) && found.2 == by_hand.2 && found.2.len() == 4, "{by_hand:?} {found:?}");
+    // A face given, the bends still found: from the floor inside, the other skin is the fixed one.
+    let mut s = Session::default();
+    rule(&mut s, "Test", 3.0, k, r, gap);
+    tray(&mut s, t);
+    run(&mut s, "sheet.convert", json!({"body": "Tray", "face": [50, 30, 2], "bends": "auto"}));
+    assert_eq!(bend_rows(&mut s).len(), 4);
+    assert!(same_size(flat_size(&mut s), by_hand.1, 1e-6), "{:?} {:?}", flat_size(&mut s), by_hand.1);
+    // A U with bends modelled with their radius: both bends, as picked.
+    let section = |s: &mut Session| {
+        rule(s, "Test", 2.0, 0.5, 3.0, 0.5);
+        bent_section(s, &[(0.0, 30.0), (0.0, 0.0), (80.0, 0.0), (80.0, 30.0)], 2.0, 2.0, 60.0)
+    };
+    let mut a = Session::default();
+    let corners = section(&mut a);
+    run(&mut a, "sheet.convert", json!({"body": "Section", "face": [40, 0, 30], "bends": [corners[0].0, corners[1].0]}));
+    let mut b = Session::default();
+    section(&mut b);
+    run(&mut b, "sheet.convert", json!({"body": "Section"}));
+    assert_eq!(bend_rows(&mut b).len(), 2);
+    assert!(same_size(flat_size(&mut b), flat_size(&mut a), 1e-6), "{:?} {:?}", flat_size(&mut b), flat_size(&mut a));
+    assert!((volume(&mut b) - volume(&mut a)).abs() < 1e-6 * volume(&mut a));
+    // A plate: no bends, the plate as it is.
+    let mut p = Session::default();
+    run(&mut p, "solid.box", json!({"length": 100, "width": 60, "height": 2, "body_name": "Plate"}));
+    run(&mut p, "sheet.convert", json!({"body": "Plate"}));
+    assert!((volume(&mut p) - 12_000.0).abs() < 1e-6 && bend_rows(&mut p).is_empty());
+}

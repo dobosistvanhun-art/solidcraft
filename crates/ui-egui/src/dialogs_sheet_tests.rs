@@ -859,8 +859,8 @@ fn flange_dialog_offers_material_outside_and_tangent_bend_positions() {
     assert_eq!(saved, "tangent");
 }
 
-/// Convert takes a fixed face and, for a solid or shelled body, its bend edges; Edit Feature
-/// brings both back.
+/// Convert takes a fixed face and, for a solid or shelled body, its bend edges, or the part
+/// alone (the rest found); Edit Feature brings both back.
 #[test]
 fn convert_takes_the_fixed_face_and_the_bend_edges() {
     let mut s = Session::default();
@@ -871,9 +871,21 @@ fn convert_takes_the_fixed_face_and_the_bend_edges() {
     let mut d = app.dialog.clone().unwrap();
     assert_eq!(d.inputs.iter().map(|i| i.label).collect::<Vec<_>>(), ["Fixed Face", "Bend Edges"]);
     assert!(apply_commands(&app, &d).is_err(), "nothing to convert without a face");
-    // The face alone is the plate conversion: no `bends`.
+    // The face alone: the bends are found from the body (a plate has none).
     d.inputs[0].items = face_sel(&app.session, Vec3::new(50.0, 30.0, 0.0)).into_iter().collect();
-    assert!(apply_commands(&app, &d).unwrap()[0].1.get("bends").is_none());
+    assert_eq!(apply_commands(&app, &d).unwrap()[0].1["bends"], json!("auto"));
+    // The part alone: its fixed face too.
+    let mut whole = d.clone();
+    whole.inputs[0].items = vec![Sel::Body { name: "Tray".into() }];
+    let c = apply_commands(&app, &whole).unwrap();
+    assert_eq!(c[0].1, json!({"body": "Tray", "bends": "auto"}));
+    let mut tray = Session::default();
+    tray.execute("solid.box", &json!({"length": 100, "width": 60, "height": 30, "body_name": "Tray"})).unwrap();
+    tray.execute("solid.shell", &json!({"faces": [[50, 30, 30]], "thickness": 2})).unwrap();
+    let mut found = SolveApp::new(tray, Services::default());
+    run_all(&mut found, c);
+    let n = found.session.execute("sheet.flat_pattern", &json!({})).unwrap()["bends"].as_array().map(Vec::len);
+    assert_eq!(n, Some(4), "the tray's four floor edges");
     let edges: Vec<Sel> = [[50.0, 0.0, 0.0], [100.0, 30.0, 0.0], [50.0, 60.0, 0.0], [0.0, 30.0, 0.0]]
         .iter()
         .filter_map(|p| edge_sel(&app.session, Vec3::new(p[0], p[1], p[2])))

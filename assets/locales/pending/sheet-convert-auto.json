@@ -1,0 +1,34 @@
+{
+  "ar": {
+    "none picked: found from the body": "بلا اختيار: تُكتشف من الجسم",
+    "select the part, or its fixed face (a plate's large face)": "اختر القطعة أو وجهها الثابت (الوجه الكبير للوح)"
+  },
+  "de": {
+    "none picked: found from the body": "keine gewählt: aus dem Körper ermittelt",
+    "select the part, or its fixed face (a plate's large face)": "Teil oder seine feste Fläche wählen (die große Fläche einer Platte)"
+  },
+  "en": {
+    "none picked: found from the body": "none picked: found from the body",
+    "select the part, or its fixed face (a plate's large face)": "select the part, or its fixed face (a plate's large face)"
+  },
+  "he": {
+    "none picked: found from the body": "לא נבחרו: מזוהים מהגוף",
+    "select the part, or its fixed face (a plate's large face)": "בחרו את החלק או את הפאה הקבועה שלו (הפאה הגדולה של לוח)"
+  },
+  "hu": {
+    "none picked: found from the body": "ha nincs kijelölve: a testből felismeri",
+    "select the part, or its fixed face (a plate's large face)": "jelöld ki az alkatrészt vagy a rögzített lapját (a lemez nagy lapját)"
+  },
+  "ja": {
+    "none picked: found from the body": "未選択時：ボディから自動検出",
+    "select the part, or its fixed face (a plate's large face)": "部品またはその固定面（板の大きな面）を選択してください"
+  },
+  "vi": {
+    "none picked: found from the body": "không chọn: tự nhận từ khối",
+    "select the part, or its fixed face (a plate's large face)": "chọn chi tiết hoặc mặt cố định của nó (mặt lớn của tấm)"
+  },
+  "zh": {
+    "none picked: found from the body": "未选择时：从实体自动识别",
+    "select the part, or its fixed face (a plate's large face)": "选择零件或其固定面（板的大面）"
+  }
+}

@@ -259,7 +259,13 @@ converts the same way: the sheet is bent there with the rule's radius and K-fact
 modelled radius, so the flat pattern is the one the rule makes. The result is an
 ordinary sheet body: edge flanges, cuts, Unfold, the flat pattern and its exports work on it,
 and it follows the solid when a parameter changes (the edges and the fixed face are found by
-their names). Without bend edges Convert expects a plate, as before. Either way round walls
+their names). Nothing has to be picked on a sheet of even thickness (a shelled body, a bent
+part from a STEP file): pick the part alone (or its fixed face without bend edges; `bends:
+"auto"`) and Convert finds the rest. The fixed face is the largest flat face of the sheet's
+skin; from it every sharp edge to a face at an angle with the same thickness behind it, and every
+bend modelled with its radius, becomes a bend, nearest first, and an edge between two faces
+reached already is cut open (a tray's corners). A flat plate has none, and converts as a plate.
+Picked bend edges are taken as they are. Either way round walls
 (holes, slot ends, rounded corners, notches) stay circles and arcs in the flat pattern and the
 DXF, also where a STEP file writes one in pieces, and the holes and slots of every face of the
 sheet are its cut-outs, where the bends put them. An engraving in a face of the sheet (a recess

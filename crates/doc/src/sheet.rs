@@ -22,7 +22,7 @@ mod convert;
 mod face_names;
 #[path = "sheet_normal_cut.rs"]
 mod normal_cut;
-pub use convert::{bend_edge_names, convert_body};
+pub use convert::{auto_picks, bend_edge_names, convert_body};
 pub(crate) use convert::{outline_loop, round_wall};
 pub use face_names::body_sheet_face_names;
 

@@ -83,6 +83,14 @@ pub(crate) fn show_model(app: &mut SolveApp) {
     leave_part(app);
 }
 
+/// The drawing the drawing editor shows, when it is open.
+pub(crate) fn open_drawing(app: &SolveApp) -> Option<u64> {
+    match app.dialog.as_ref().map(|d| &d.kind) {
+        Some(Kind::Drawing(k)) => k.drawing,
+        _ => None,
+    }
+}
+
 /// Show drawing `id`: the drawing editor opens on it, or turns to it when it is open.
 pub(crate) fn show_drawing(app: &mut SolveApp, id: u64) {
     if !app.session.doc.drawings.iter().any(|d| d.id == id) {
@@ -311,5 +319,21 @@ mod tests {
         if h.app.dialog.is_some() {
             assert!(super::state(&h.app).is_none(), "a half-made feature keeps the screen");
         }
+    }
+
+    /// The design's drawings are in the browser too: a click on one opens it, the open one marked.
+    #[test]
+    fn the_browser_lists_the_drawings_and_opens_one_on_a_click() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", json!({"length": 100, "width": 50, "height": 20})).unwrap();
+        h.settle();
+        assert!(h.step(&json!({"click": {"handle": "row:Drawings"}})).is_err(), "no drawings: no folder");
+        h.app.run("drawing.create", json!({"name": "Front sheet", "views": "none"})).unwrap();
+        let b = h.app.run("drawing.create", json!({"name": "Detail sheet", "views": "none"})).unwrap()["drawing"].as_u64().unwrap();
+        h.settle();
+        h.step(&json!({"click": {"handle": "row:Detail sheet"}})).unwrap();
+        h.frames(2);
+        assert_eq!(super::shown(&h.app), Some(Shown::Drawing(b)), "the drawing's row opens it");
+        assert_eq!(super::open_drawing(&h.app), Some(b));
     }
 }

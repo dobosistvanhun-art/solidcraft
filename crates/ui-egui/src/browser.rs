@@ -1605,6 +1605,7 @@ fn component_rows_inner(
     if id == 0 && !crate::render_workspace::active(app) {
         doc_settings(app, ui, d);
         named_view_rows(app, ui, d, acts);
+        drawing_rows(app, ui, d);
         origin_rows(app, ui, d, acts);
         canvas_rows(app, ui, d, acts);
         point_clouds::rows(app, ui, d, acts);
@@ -2015,6 +2016,40 @@ fn named_view_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &m
         }
         if let Some(p) = r.secondary {
             acts.menu = Some((p, Target::NamedView { name }));
+        }
+    }
+}
+
+/// The Drawings folder, while the design has drawings: a click on one opens it (as its tab
+/// below the view does), the one open marked.
+fn drawing_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize) {
+    if app.session.doc.drawings.is_empty() {
+        return;
+    }
+    let key = "drawings";
+    let open = is_open(app, key, true);
+    let r = draw_row(ui, ui.id().with(key), &Row { depth, fold: Some(open), icon: "folder", label: "Drawings", ..Default::default() });
+    if r.fold || r.clicked {
+        toggle(app, key, true);
+    }
+    if !open {
+        return;
+    }
+    let shown = crate::view_tabs::open_drawing(app);
+    let drawings: Vec<(u64, String)> = app.session.doc.drawings.iter().map(|d| (d.id, d.name.clone())).collect();
+    for (id, name) in drawings {
+        let row = Row {
+            depth: depth + 1,
+            icon: "sheet",
+            label: &name,
+            name: true,
+            selected: shown == Some(id),
+            tip: Some("Show this drawing: it follows every change of the model"),
+            ..Default::default()
+        };
+        let r = draw_row(ui, ui.id().with(("drawing", id)), &row);
+        if r.clicked || r.double {
+            crate::view_tabs::show_drawing(app, id);
         }
     }
 }

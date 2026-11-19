@@ -777,6 +777,34 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
             break;
         }
     }
+    // The perforation fields' holes (they are no part of the flat's outline: the DXF adds them on
+    // their own layer, and so does the sheet): round ones as circles, square and rectangular ones
+    // as their corners; each centre is a point to dimension to.
+    for p in &sh.perforations {
+        for h in sh.perforation_holes(p).map_err(|e| e.to_string())? {
+            let ring: Vec<Vec2> = match p.hole_corners(h) {
+                Some(k) => k.iter().chain(k.first()).copied().collect(),
+                None => {
+                    let r = p.diameter / 2.0;
+                    // a few segments for a small hole, more for a large one
+                    let n = ((r * 8.0).ceil() as usize).clamp(12, 48);
+                    (0..=n).map(|i| h + Vec2::new((i as f64 / n as f64 * std::f64::consts::TAU).cos(), (i as f64 / n as f64 * std::f64::consts::TAU).sin()) * r).collect()
+                }
+            };
+            if lines.len() + ring.len() > MAX_FLAT_LINES {
+                return Err("the flat pattern has too many lines to draw (its perforation)".into());
+            }
+            for w in ring.windows(2) {
+                if let [a, b] = w {
+                    lines.push((*a - c, *b - c, Style::Visible));
+                }
+            }
+            if snaps.len() < 100_000 {
+                let radius = p.shape.is_round().then_some(p.diameter / 2.0);
+                snaps.push(snap(h, format!("perforation:{}", p.feature), radius));
+            }
+        }
+    }
     let mut notes = Vec::new();
     for b in sh.bends().iter().take(10_000) {
         let (a, e) = (b.start - c, b.end - c);

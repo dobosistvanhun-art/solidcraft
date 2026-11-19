@@ -1066,12 +1066,14 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                     continue;
                 }
                 let style = p["style"].as_str().unwrap_or("thin");
+                // On screen a line keeps a slim width at any zoom (the paper's 0.5 / 0.25 / 0.7 mm grew
+                // into thick bands when zoomed in); the PDF and print keep the paper's widths.
                 let width = match style {
-                    "visible" => 0.5,
-                    "wide" => 0.7,
-                    _ => 0.25,
+                    "visible" => px(0.5).clamp(1.0, 2.0),
+                    "wide" => px(0.7).clamp(1.4, 2.6),
+                    _ => px(0.25).clamp(0.6, 1.0),
                 };
-                let stroke = Stroke::new(px(width), ink);
+                let stroke = Stroke::new(width, ink);
                 match style {
                     "hidden" => painter.extend(egui::Shape::dashed_line(&[a, b], stroke, px(3.0), px(1.5))),
                     "chain" => painter.extend(egui::Shape::dashed_line(&[a, b], stroke, px(12.0), px(2.0))),

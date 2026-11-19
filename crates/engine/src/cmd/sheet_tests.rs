@@ -5651,6 +5651,30 @@ fn perforation_circles(dxf: &str) -> Vec<(f64, f64, f64)> {
     out
 }
 
+/// A perforated sheet's flat pattern on a drawing shows its holes (István, 2026-11-19: they were
+/// in the DXF but missing on the sheet), round ones as circles, square ones as squares, each centre
+/// a point to dimension to.
+#[test]
+fn a_drawings_flat_pattern_shows_the_perforation() {
+    for (shape, per_hole) in [("round", 20), ("square", 4)] {
+        let mut s = Session::default();
+        outline_blank(&mut s, json!([[0, 0], [100, 0], [100, 60], [0, 60]]));
+        run(&mut s, "sheet.perforate", json!({"diameter": "5", "pitch": "10", "margin": "5", "shape": shape}));
+        let holes = flat(&mut s)["perforations"][0]["count"].as_u64().unwrap() as usize;
+        assert!(holes > 10, "{holes}");
+        run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));
+        run(&mut s, "drawing.view.flat", json!({"drawing": "D", "at": [200, 150]}));
+        let r = run(&mut s, "drawing.render", json!({"drawing": "D"}));
+        assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{}", r["errors"]);
+        let visible = r["prims"].as_array().unwrap().iter().filter(|p| p["type"] == "line" && p["style"] == "visible").count();
+        assert!(visible >= 4 + holes * per_hole, "{shape}: {visible} lines for {holes} holes");
+        let centres = r["views"][0]["points"].as_array().unwrap().iter().filter(|p| p["kind"] == "center").count();
+        if shape == "round" {
+            assert_eq!(centres, holes, "each hole's centre");
+        }
+    }
+}
+
 /// #732: Rv 1.0-1.5 over a 100 x 60 x 0.8 sheet: every hole is in the flat pattern and in the DXF (layer
 /// PERFORATION), placed on the documented grid, and the B-rep is not cut (the field is stored like a cosmetic thread).
 #[test]

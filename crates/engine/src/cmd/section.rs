@@ -45,7 +45,8 @@ fn slice(s: &mut Session, p: &Value) -> Result<Value> {
     s.slice = Some(id);
     s.status_slot(crate::status_items::StatusId::Section, true);
     s.refresh_display();
-    let section = contract::Section { origin: [origin.x, origin.y, origin.z], normal: [normal.x, normal.y, normal.z], hatch: true, axis: None, at: None };
+    let section =
+        contract::Section { origin: [origin.x, origin.y, origin.z], normal: [normal.x, normal.y, normal.z], hatch: true, axis: None, at: None };
     serde_json::to_value(contract::SliceResult { sliced: true, section: Some(section) }).map_err(|e| bad(cmd, e.to_string()))
 }
 

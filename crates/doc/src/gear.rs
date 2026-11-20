@@ -153,7 +153,9 @@ fn gcd(a: u32, b: u32) -> u32 {
 pub fn same_size(c: &Chain) -> Vec<&'static str> {
     CHAINS
         .iter()
-        .filter(|x| x.name != c.name && (x.pitch - c.pitch).abs() < 0.01 && (x.roller - c.roller).abs() < 0.01 && (x.inner_width - c.inner_width).abs() < 0.01)
+        .filter(|x| {
+            x.name != c.name && (x.pitch - c.pitch).abs() < 0.01 && (x.roller - c.roller).abs() < 0.01 && (x.inner_width - c.inner_width).abs() < 0.01
+        })
         .map(|x| x.name)
         .collect()
 }

@@ -280,6 +280,23 @@ gear
     Worm starts = gear.starts (Unitless)
     Bore = gear.bore (Length)
   expressions: gear.teeth, gear.module, gear.width, gear.alpha, gear.beta, gear.x_shift, gear.q, gear.starts, gear.bore, gear.x, gear.y, gear.z
+fitting
+  inputs:
+    Thickness = fitting.thickness (Length)
+    Diameter = fitting.diameter (Length)
+    Top diameter = fitting.top (Length)
+    Height = fitting.height (Length)
+    Shift = fitting.shift (Length)
+    Branch diameter = fitting.branch (Length)
+    Branch length = fitting.branch_length (Length)
+    Branch height = fitting.branch_at (Length)
+    Branch angle = fitting.branch_angle (Angle)
+    Branch offset = fitting.branch_offset (Length)
+    Bend radius = fitting.bend (Length)
+    Elbow angle = fitting.angle (Angle)
+    Segments = fitting.segments (Unitless)
+    Straight = fitting.straight (Length)
+  expressions: fitting.thickness, fitting.diameter, fitting.top, fitting.height, fitting.shift, fitting.branch, fitting.branch_length, fitting.branch_at, fitting.branch_angle, fitting.branch_offset, fitting.bend, fitting.angle, fitting.segments, fitting.straight, fitting.x, fitting.y, fitting.z
 sheet_base
 sheet_contour
   inputs:

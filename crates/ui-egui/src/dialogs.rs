@@ -1139,6 +1139,20 @@ impl Dialog {
                 },
                 vec![],
             ),
+            "fitting.tee" | "fitting.cone" | "fitting.elbow" => Dialog::new(
+                Kind::Primitive {
+                    cmd: match id {
+                        "fitting.tee" => "fitting.tee",
+                        "fitting.cone" => "fitting.cone",
+                        _ => "fitting.elbow",
+                    },
+                    fields: fitting_fields(s, id),
+                    operation: 0,
+                    at: None,
+                    refs: Default::default(),
+                },
+                vec![],
+            ),
             "solid.combine" => Dialog::new(
                 Kind::Combine { operation: 1, keep_tools: false },
                 vec![SelInput::new("Target Body", BODIES, false), SelInput::new("Tool Bodies", BODIES, true)],
@@ -2440,6 +2454,9 @@ fn title(k: &Kind) -> &'static str {
             "solid.gear.sprocket" => "SPROCKET",
             "solid.gear.worm" => "WORM",
             "solid.gear.worm_wheel" => "WORM WHEEL",
+            "fitting.tee" => "ui.heading_fitting_tee",
+            "fitting.cone" => "ui.heading_fitting_cone",
+            "fitting.elbow" => "ui.heading_fitting_elbow",
             _ => "TORUS",
         },
         Kind::Combine { .. } => "COMBINE",
@@ -4102,7 +4119,8 @@ fn hole_start(s: &Session, at_points: bool) -> Dialog {
         && let Some(f) = s.doc.features.last()
         && matches!(f.kind, FeatureKind::Sketch { .. })
     {
-        points = solidcraft_engine::cmd::sketch_standalone_points(s, f.id).into_iter().map(|p| Sel::SketchPoint { id: format!("{}:{p}", f.id) }).collect();
+        points =
+            solidcraft_engine::cmd::sketch_standalone_points(s, f.id).into_iter().map(|p| Sel::SketchPoint { id: format!("{}:{p}", f.id) }).collect();
     }
     if points.is_empty() {
         return Dialog::new(hole_defaults(s), single_hole_inputs());
@@ -5250,6 +5268,12 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                     "solid.box" => {
                         p.insert("corner".into(), box_corner(s, fields, point, normal));
                     }
+                    "fitting.tee" | "fitting.cone" | "fitting.elbow" => {
+                        p.insert("base".into(), pt(point));
+                        if let Some(n) = normal {
+                            p.insert("axis".into(), pt(n));
+                        }
+                    }
                     "solid.cylinder"
                     | "solid.coil"
                     | "solid.cone"
@@ -5274,7 +5298,18 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             } else {
                 crate::primitive_placement::params(s, cmd, &d.extra, &mut p);
             }
-            p.insert("operation".into(), json!(OPS.get(*operation).copied().unwrap_or("new")));
+            if is_fitting(cmd) {
+                // A fitting is always new bodies; its sizes are said on the outside, inside or middle.
+                p.retain(|_, v| v.as_str().is_none_or(|t| !t.trim().is_empty()));
+                if let Some(m) = d.extra.get("measured") {
+                    p.insert("measured".into(), m.clone());
+                }
+                if let Some(a) = d.extra.get("axis").filter(|_| at.is_none()) {
+                    p.insert("axis".into(), a.clone());
+                }
+            } else {
+                p.insert("operation".into(), json!(OPS.get(*operation).copied().unwrap_or("new")));
+            }
             (cmd, Value::Object(p))
         }
         Kind::BoundaryFill { operation, cells, .. } => {
@@ -6373,6 +6408,67 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             {
                 d.extra.insert("width".into(), json!(w.to_string()));
             }
+            d
+        }
+        FeatureKind::Fitting {
+            base,
+            axis,
+            fitting,
+            measured,
+            thickness,
+            diameter,
+            top,
+            height,
+            shift,
+            branch,
+            branch_length,
+            branch_at,
+            branch_angle,
+            branch_offset,
+            bend,
+            angle,
+            segments,
+            straight,
+        } => {
+            use solidcraft_engine::doc::FittingType;
+            let cmd = match fitting {
+                FittingType::Tee => "fitting.tee",
+                FittingType::Cone => "fitting.cone",
+                FittingType::Elbow => "fitting.elbow",
+            };
+            let mut d = start(cmd)?;
+            let e = |x: &Option<solidcraft_engine::doc::Expr>| x.as_ref().map(|v| v.to_string()).unwrap_or_default();
+            let fields: Vec<(&'static str, String)> = match fitting {
+                FittingType::Elbow => vec![
+                    ("diameter", diameter.to_string()),
+                    ("thickness", thickness.to_string()),
+                    ("angle", e(angle)),
+                    ("segments", e(segments)),
+                    ("bend", e(bend)),
+                    ("straight", e(straight)),
+                ],
+                _ => vec![
+                    ("diameter", diameter.to_string()),
+                    ("top", e(top)),
+                    ("height", e(height)),
+                    ("shift", e(shift)),
+                    ("thickness", thickness.to_string()),
+                    ("branch", e(branch)),
+                    ("branch_length", e(branch_length)),
+                    ("branch_at", e(branch_at)),
+                    ("branch_angle", e(branch_angle)),
+                    ("branch_offset", e(branch_offset)),
+                ],
+            };
+            d.kind = Kind::Primitive { cmd, fields, operation: 0, at: None, refs: Default::default() };
+            d.extra.insert("base".into(), pt_expr(base));
+            d.extra.insert("axis".into(), pt3(axis.0));
+            let m = match measured {
+                solidcraft_engine::doc::fitting::Measured::Outside => "outside",
+                solidcraft_engine::doc::fitting::Measured::Inside => "inside",
+                solidcraft_engine::doc::fitting::Measured::Middle => "middle",
+            };
+            d.extra.insert("measured".into(), json!(m));
             d
         }
         FeatureKind::Sphere { center, radius, operation } => {
@@ -7733,5 +7829,49 @@ mod preselected_sketch_line_tests {
             let made = h.app.session.doc.features.iter().filter(|f| format!("{:?}", f.kind).starts_with(kind.trim_end_matches("Feature"))).count();
             assert_eq!(made, 1, "{command} runs on the edge");
         }
+    }
+}
+
+/// Whether a primitive dialog is a pipe fitting's (no operation: its pieces are new bodies).
+pub(crate) fn is_fitting(cmd: &str) -> bool {
+    cmd.starts_with("fitting.")
+}
+
+/// A new fitting dialog's fields, in the order they show.
+fn fitting_fields(s: &Session, id: &str) -> Vec<(&'static str, String)> {
+    let l = |v: &str| length_default(s, v);
+    match id {
+        "fitting.elbow" => vec![
+            ("diameter", l("100")),
+            ("thickness", l("1")),
+            ("angle", "90 deg".into()),
+            ("segments", "5".into()),
+            ("bend", l("150")),
+            ("straight", l("0")),
+        ],
+        "fitting.cone" => vec![
+            ("diameter", l("200")),
+            ("top", l("100")),
+            ("height", l("150")),
+            ("shift", l("0")),
+            ("thickness", l("1")),
+            ("branch", String::new()),
+            ("branch_length", String::new()),
+            ("branch_at", String::new()),
+            ("branch_angle", "90 deg".into()),
+            ("branch_offset", l("0")),
+        ],
+        _ => vec![
+            ("diameter", l("100")),
+            ("top", String::new()),
+            ("height", l("200")),
+            ("shift", l("0")),
+            ("thickness", l("1")),
+            ("branch", l("60")),
+            ("branch_length", l("120")),
+            ("branch_at", l("100")),
+            ("branch_angle", "90 deg".into()),
+            ("branch_offset", l("0")),
+        ],
     }
 }

@@ -2794,7 +2794,7 @@ pub(crate) const DESIGN_LEN: &str = "\u{1}design_len";
 /// An expression's value. A length that comes out unit-less without being a bare number (a
 /// unit-less parameter used as a length) is in the design's units.
 /// A point given as length expressions.
-fn point(vals: &BTreeMap<String, Value>, p: &crate::PointExpr) -> Result<Vec3> {
+pub(crate) fn point(vals: &BTreeMap<String, Value>, p: &crate::PointExpr) -> Result<Vec3> {
     let [x, y, z] = p;
     let v = Vec3::new(val(vals, x, Kind::Length)?, val(vals, y, Kind::Length)?, val(vals, z, Kind::Length)?);
     if [v.x, v.y, v.z].iter().all(|c| c.is_finite() && c.abs() < 1e9) { Ok(v) } else { Err(DocError::Invalid("the position is out of range".into())) }
@@ -6145,6 +6145,10 @@ fn feature_tools_with_constructor(
             let pitch = if *clockwise { -p } else { p };
             Ok(unnamed(vec![kernel::sweep_helix(&plane, &region, *base, axis, pitch, n)?]))
         }
+        FeatureKind::Fitting { .. } => match crate::fitting_eval::sized(vals, &f.kind)? {
+            Some(s) => Ok(unnamed(s.bodies()?)),
+            None => Ok(Vec::new()),
+        },
         FeatureKind::Gear {
             base,
             axis,
@@ -8226,6 +8230,12 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             st.sketches.retain(|s| s.feature != f.id);
             st.sketches.push(Arc::new(SolvedSketch { feature: f.id, name: f.name.clone(), plane, sketch: sk, report, profiles, ends }));
             Ok(())
+        }
+        // A pipe fitting: its pieces, new bodies.
+        FeatureKind::Fitting { .. } => {
+            let (mut constructor, mut to_body) = (None, None);
+            let tools = feature_tools_with_constructor(doc, vals, f, st, false, &mut constructor, &mut to_body)?;
+            apply_traced(doc, st, f, tools, Operation::NewBody, &[])
         }
         FeatureKind::Extrude { operation, targets, .. }
         | FeatureKind::Pipe { operation, targets, .. }

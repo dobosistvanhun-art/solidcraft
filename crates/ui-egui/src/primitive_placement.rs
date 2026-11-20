@@ -23,7 +23,7 @@ use solidcraft_engine::Sel;
 fn keys(cmd: &str) -> &'static [&'static str] {
     match cmd {
         "solid.box" => &["corner", "center"],
-        "solid.cylinder" | "solid.cone" => &["base"],
+        "solid.cylinder" | "solid.cone" | "fitting.tee" | "fitting.cone" | "fitting.elbow" => &["base"],
         "solid.sphere" | "solid.torus" => &["center"],
         _ => &[],
     }

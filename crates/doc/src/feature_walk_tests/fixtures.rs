@@ -143,6 +143,10 @@ pub(super) fn fixtures() -> Vec<(&'static str, Value)> {
             "gear",
             json!({"type": "gear", "base": ["gear.x", "gear.y", "gear.z"], "gear": "worm_wheel", "teeth": "gear.teeth", "module": "gear.module", "width": "gear.width", "pressure_angle": "gear.alpha", "helix_angle": "gear.beta", "profile_shift": "gear.x_shift", "quotient": "gear.q", "starts": "gear.starts", "bore": "gear.bore"}),
         ),
+        (
+            "fitting",
+            json!({"type": "fitting", "base": ["fitting.x", "fitting.y", "fitting.z"], "axis": [0, 0, 1], "fitting": "tee", "thickness": "fitting.thickness", "diameter": "fitting.diameter", "top": "fitting.top", "height": "fitting.height", "shift": "fitting.shift", "branch": "fitting.branch", "branch_length": "fitting.branch_length", "branch_at": "fitting.branch_at", "branch_angle": "fitting.branch_angle", "branch_offset": "fitting.branch_offset", "bend": "fitting.bend", "angle": "fitting.angle", "segments": "fitting.segments", "straight": "fitting.straight"}),
+        ),
         ("sheet_base", json!({"type": "sheet_base", "sketch": 1, "profiles": {"type": "all"}})),
         ("sheet_contour", json!({"type": "sheet_contour", "sketch": 1, "curves": ["l1"], "distance": "contour.distance"})),
         (

@@ -133,6 +133,7 @@ coil_profile
   sketches: [1]
   remap_refs: sketch
 gear
+fitting
 sheet_base
   sketches: [1]
   remap_refs: sketch

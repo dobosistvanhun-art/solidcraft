@@ -294,10 +294,9 @@ pub fn draft(b: &Body, faces: &[Vec3], neutral: &Plane, pull: Vec3, angle: f64) 
 fn tilted(n: Vec3, c: Vec3, neutral: &Plane, pull: Vec3, angle: f64) -> Result<(Vec3, Vec3)> {
     let nn = neutral.normal();
     // The hinge's direction: along both the face and the neutral plane.
-    let hinge = nn
-        .cross(n)
-        .normalized()
-        .ok_or_else(|| KernelError::Invalid("a face parallel to the neutral plane can't be drafted: pick the side faces, or a neutral plane across them".into()))?;
+    let hinge = nn.cross(n).normalized().ok_or_else(|| {
+        KernelError::Invalid("a face parallel to the neutral plane can't be drafted: pick the side faces, or a neutral plane across them".into())
+    })?;
     // Turning about the hinge, the normal goes toward hinge × n or away from it: toward the pull.
     let toward = hinge.cross(n);
     let toward = if toward.dot(pull) < 0.0 { toward * -1.0 } else { toward };

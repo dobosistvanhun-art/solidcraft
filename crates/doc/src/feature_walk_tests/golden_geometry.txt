@@ -129,6 +129,9 @@ coil_profile
 gear
   moves: axis[0], axis[2], base[0], base[1], base[2]
   placement: gear.x, gear.y, gear.z
+fitting
+  moves: axis[0], axis[2], base[0], base[1], base[2]
+  placement: fitting.x, fitting.y, fitting.z
 sheet_base
   profiles: 1 all
 sheet_contour

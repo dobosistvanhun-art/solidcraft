@@ -320,8 +320,10 @@ pub const SECTIONS: &[Section] = &[
         promoted: 4,
         ids: &["sheet.flange", "sheet.path_flange", "sheet.hem", "sheet.fold", "sheet.loft", "sheet.perforate", "solid.hole", "sheet.convert"],
     },
+    // Pipe fittings of sheet, each piece with its exact flat pattern.
+    Section { tab: "SHEET METAL", panel: "FITTINGS", promoted: 3, ids: &["fitting.tee", "fitting.cone", "fitting.elbow"] },
     Section { tab: "SHEET METAL", panel: "FLAT", promoted: 3, ids: &["sheet.unfold", "sheet.refold", "sheet.flat_pattern"] },
-    Section { tab: "SHEET METAL", panel: "OUTPUT", promoted: 2, ids: &["sheet.export_dxf", "sheet.export_bend_table"] },
+    Section { tab: "SHEET METAL", panel: "OUTPUT", promoted: 2, ids: &["sheet.export_dxf", "sheet.export_bend_table", "fitting.export_dxf"] },
     Section { tab: "SHEET METAL", panel: "RULES", promoted: 1, ids: &["sheet.manage_rules"] },
     Section { tab: "SHEET METAL", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
     // A frame starts from a sketch of its lines; its profile sizes are often parameters.

@@ -653,6 +653,18 @@ pub(crate) fn primitive_label(key: &str) -> &str {
         "revolutions" => "ui.revolutions",
         "pitch" => "ui.pitch",
         "section_size" => "ui.section_size",
+        "thickness" => "ui.thickness",
+        "angle" => "ui.angle",
+        "top" => "ui.top_diameter",
+        "shift" => "ui.fitting_shift",
+        "segments" => "ui.fitting_segments",
+        "bend" => "ui.fitting_bend",
+        "straight" => "ui.fitting_straight",
+        "branch" => "ui.fitting_branch",
+        "branch_length" => "ui.fitting_branch_length",
+        "branch_at" => "ui.fitting_branch_at",
+        "branch_angle" => "ui.fitting_branch_angle",
+        "branch_offset" => "ui.fitting_branch_offset",
         _ => key,
     }
 }
@@ -913,8 +925,7 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                     // The chain catalogue: its number with pitch, roller and width; or a chain of
                     // its own (pitch x roller x width).
                     use solidcraft_engine::doc::gear::{CHAINS, chain};
-                    let mut labels: Vec<String> =
-                        CHAINS
+                    let mut labels: Vec<String> = CHAINS
                         .iter()
                         .map(|c| match solidcraft_engine::doc::gear::inch_pitch(c.pitch) {
                             Some(i) => format!("{}  ({i} · p {} · roller {} · width {})", c.name, c.pitch, c.roller, c.inner_width),
@@ -967,7 +978,13 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                     });
                 });
             }
-            crate::op_auto::op_row(ui, "pr_op", operation);
+            if crate::dialogs::is_fitting(cmd) {
+                form_row(ui, "ui.fitting_measured", |ui| {
+                    extra_segments(ui, &mut d.extra, "measured", &[("Outside", "outside"), ("Inside", "inside"), ("ui.fitting_middle", "middle")])
+                });
+            } else {
+                crate::op_auto::op_row(ui, "pr_op", operation);
+            }
         }
         Kind::Combine { operation, keep_tools } => {
             form_row(ui, "Operation", |ui| {

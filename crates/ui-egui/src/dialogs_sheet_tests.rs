@@ -1505,3 +1505,29 @@ fn flat_pattern_navigation_slots_hide_orbit_controls_and_keep_fit_home() {
         assert!(crate::scenario::handle_at(&format!("nav:slot:{slot}")).is_some(), "{slot}");
     }
 }
+
+/// The pipe fittings' dialogs make their fittings with the sizes shown (no operation: their
+/// pieces are new bodies), and Edit Feature brings the sizes back and rebuilds in place.
+#[test]
+fn pipe_fitting_dialogs_make_and_edit_their_fittings() {
+    for (cmd, bodies) in [("fitting.tee", 2), ("fitting.cone", 1), ("fitting.elbow", 5)] {
+        let mut app = SolveApp::new(Session::default(), Services::default());
+        app.start(cmd);
+        let mut d = app.dialog.clone().unwrap();
+        d.extra.insert("measured".into(), json!("middle"));
+        let c = apply_commands(&app, &d).unwrap();
+        assert_eq!(c[0].0, cmd);
+        assert!(c[0].1.get("operation").is_none(), "{}", c[0].1);
+        assert_eq!(c[0].1["measured"], "middle");
+        run_all(&mut app, c);
+        assert_eq!(app.session.model.state().bodies.len(), bodies, "{cmd}");
+        let f = app.session.doc.features.last().unwrap().clone();
+        let e = edit_dialog(&app, f.id, None).unwrap();
+        let c = apply_commands(&app, &e).unwrap();
+        assert_eq!(c[0].0, "timeline.redefine");
+        assert_eq!(c[0].1["command"], cmd);
+        assert_eq!(c[0].1["params"]["measured"], "middle");
+        run_all(&mut app, c);
+        assert_eq!(app.session.model.state().bodies.len(), bodies, "{cmd} rebuilt");
+    }
+}

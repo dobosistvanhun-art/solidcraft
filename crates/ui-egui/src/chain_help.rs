@@ -56,7 +56,9 @@ pub fn rows(ui: &mut Ui, c: &Chain) {
             None => mm(c.pitch),
         };
         let width = match inch_pitch(c.inner_width) {
-            Some(i) if ChainFamily::of(c) == ChainFamily::Motorcycle || ChainFamily::of(c) == ChainFamily::Bicycle => format!("{}  ({i})", mm(c.inner_width)),
+            Some(i) if ChainFamily::of(c) == ChainFamily::Motorcycle || ChainFamily::of(c) == ChainFamily::Bicycle => {
+                format!("{}  ({i})", mm(c.inner_width))
+            }
             _ => mm(c.inner_width),
         };
         for (label, value) in [("Pitch (p)", pitch), ("Roller diameter (d1)", mm(c.roller)), ("Inner width (b1)", width)] {
@@ -73,7 +75,9 @@ pub fn rows(ui: &mut Ui, c: &Chain) {
         sketch(ui, c);
         ui_kit::text(
             ui,
-            tr_label("To tell a chain: measure across three rollers, centre to centre, and halve it (the pitch); then the gap between the inner plates (the inner width)."),
+            tr_label(
+                "To tell a chain: measure across three rollers, centre to centre, and halve it (the pitch); then the gap between the inner plates (the inner width).",
+            ),
             ui_kit::Text::Note("chain_measure"),
         );
     });

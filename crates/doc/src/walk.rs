@@ -60,6 +60,8 @@ impl Walk for crate::document::RevolveConvention {}
 impl Walk for crate::document::RailFit {}
 impl Walk for crate::document::CoilSection {}
 impl Walk for crate::document::GearType {}
+impl Walk for crate::document::FittingType {}
+impl Walk for crate::fitting::Measured {}
 impl Walk for crate::document::ThinSide {}
 impl Walk for crate::document::ExtendMode {}
 impl Walk for crate::document::RuledMode {}

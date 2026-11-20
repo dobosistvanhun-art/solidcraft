@@ -5030,8 +5030,10 @@ fn a_cut_across_a_bend_goes_through_the_bend_and_the_flange() {
         // The flat pattern's area: its outline less its cut-outs.
         let area = |f: &Value| {
             let ring = |l: &Value| {
-                let p: Vec<(f64, f64)> =
-                    l.as_array().map(|a| a.iter().map(|q| (q[0].as_f64().unwrap_or(0.0), q[1].as_f64().unwrap_or(0.0))).collect()).unwrap_or_default();
+                let p: Vec<(f64, f64)> = l
+                    .as_array()
+                    .map(|a| a.iter().map(|q| (q[0].as_f64().unwrap_or(0.0), q[1].as_f64().unwrap_or(0.0))).collect())
+                    .unwrap_or_default();
                 (0..p.len()).map(|i| p[i].0 * p[(i + 1) % p.len()].1 - p[(i + 1) % p.len()].0 * p[i].1).sum::<f64>().abs() / 2.0
             };
             let sum = |k: &str| f[k].as_array().map(|a| a.iter().map(ring).sum::<f64>()).unwrap_or(0.0);

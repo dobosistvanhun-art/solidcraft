@@ -315,11 +315,7 @@ fn side_axes(m: &Model, basis: &Basis) -> Vec<(Vec2, Vec2, f64)> {
             break;
         }
     }
-    groups
-        .into_iter()
-        .filter(|g| g.3 - g.2 > 1e-6)
-        .map(|(o, a, t0, t1, r)| (basis.project(o + a * t0), basis.project(o + a * t1), r))
-        .collect()
+    groups.into_iter().filter(|g| g.3 - g.2 > 1e-6).map(|(o, a, t0, t1, r)| (basis.project(o + a * t0), basis.project(o + a * t1), r)).collect()
 }
 
 /// The points and edges of a view a pointer may pick (view coordinates), each kept only where the
@@ -608,7 +604,12 @@ fn projected(parent: &Basis, side: &str, method: Projection) -> Option<Basis> {
 /// meet in one place, a drill tip's apex on the hole's axis, can leave the kernel's split without
 /// an answer: then the plane is moved a hair along the arrow (a hundred-thousandth of the view's
 /// size and up, far below a line's width on the sheet) and the split tried again.
-fn split_for_section(body: &solidcraft_kernel::Body, plane: &solidcraft_geom::Plane, arrow: Vec3, size: f64) -> Result<Vec<solidcraft_kernel::Body>, String> {
+fn split_for_section(
+    body: &solidcraft_kernel::Body,
+    plane: &solidcraft_geom::Plane,
+    arrow: Vec3,
+    size: f64,
+) -> Result<Vec<solidcraft_kernel::Body>, String> {
     let first = match solidcraft_kernel::split_by_plane(body, plane) {
         Ok(p) => return Ok(p),
         Err(e) => e.to_string(),
@@ -701,8 +702,62 @@ pub(crate) fn flat_sheet<'a>(st: &'a solidcraft_doc::ModelState, d: &Drawing, bo
 /// A sheet metal body's flat pattern as a view, about its middle: the outline and cut-outs
 /// (visible lines, their ends and arc centres to dimension to), each bend's centre line (a chain
 /// line) with its note, and centre marks on the round holes.
+/// The flat pattern of the pipe fitting piece `body` is, when a Fitting feature made it.
+pub(crate) fn fitting_piece(s: &crate::Session, body: &str) -> Option<solidcraft_doc::fitting::Pattern> {
+    if body.is_empty() {
+        return None;
+    }
+    let st = s.model.state();
+    let feature = st.bodies.iter().find(|b| b.name == body)?.feature;
+    if !matches!(s.doc.feature(feature)?.kind, solidcraft_doc::FeatureKind::Fitting { .. }) {
+        return None;
+    }
+    let index = st.bodies.iter().filter(|b| b.feature == feature).position(|b| b.name == body)?;
+    s.doc.fitting_patterns(feature).ok()?.into_iter().nth(index).map(|(_, p)| p)
+}
+
+/// A pipe fitting piece's flat pattern as a view, about its middle: the outline and the
+/// opening (visible lines, their points to dimension to) and the marked lines (chain lines).
+fn fitting_view(body: &str, pat: &solidcraft_doc::fitting::Pattern) -> Result<ViewGeom, String> {
+    let all = pat.outline.iter().chain(pat.holes.iter().flatten());
+    let (lo, hi) = all.fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| {
+        (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y)))
+    });
+    if !(lo.is_finite() && hi.is_finite()) {
+        return Err("the flat pattern is empty".into());
+    }
+    let c = (lo + hi) * 0.5;
+    let basis = Basis { r: Vec3::X, u: Vec3::Y, b: Vec3::Z, center: Vec3::new(c.x, c.y, 0.0) };
+    let mut lines = Vec::new();
+    let mut snaps = Vec::new();
+    let mut points = Vec::new();
+    let mut edges = Vec::new();
+    for ring in std::iter::once(&pat.outline).chain(&pat.holes) {
+        let n = ring.len();
+        for i in 0..n {
+            let (a, b) = (ring[i], ring[(i + 1) % n]);
+            lines.push((a - c, b - c, Style::Visible));
+            edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false, model: None });
+            snaps.push(Snap {
+                at: a - c,
+                r: DimRef { body: body.to_string(), edge: None, at: "flat".into(), point: Vec3::new(a.x, a.y, 0.0) },
+                radius: None,
+                sharp: false,
+            });
+            points.push(PickPoint { at: a - c, kind: "end", hidden: false });
+        }
+    }
+    for (a, b) in &pat.marks {
+        lines.push((*a - c, *b - c, Style::Chain));
+    }
+    Ok(ViewGeom { basis, lines, snaps, marks: Vec::new(), axes: Vec::new(), notes: Vec::new(), points, edges, section: None })
+}
+
 fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, String> {
     use solidcraft_geom::Seg2;
+    if let Some(pat) = fitting_piece(s, body) {
+        return fitting_view(body, &pat);
+    }
     let st = s.model.state();
     let sh = flat_sheet(&st, d, body)?;
     let regions = sh.flat_regions().map_err(|e| e.to_string())?;
@@ -788,7 +843,12 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
                     let r = p.diameter / 2.0;
                     // a few segments for a small hole, more for a large one
                     let n = ((r * 8.0).ceil() as usize).clamp(12, 48);
-                    (0..=n).map(|i| h + Vec2::new((i as f64 / n as f64 * std::f64::consts::TAU).cos(), (i as f64 / n as f64 * std::f64::consts::TAU).sin()) * r).collect()
+                    (0..=n)
+                        .map(|i| {
+                            h + Vec2::new((i as f64 / n as f64 * std::f64::consts::TAU).cos(), (i as f64 / n as f64 * std::f64::consts::TAU).sin())
+                                * r
+                        })
+                        .collect()
                 }
             };
             if lines.len() + ring.len() > MAX_FLAT_LINES {

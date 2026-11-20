@@ -427,8 +427,8 @@ fn view_flat(s: &mut Session, p: &Value) -> Result<Value> {
     let body = str_(p, "body").map(str::trim).unwrap_or("").to_string();
     let i = find(s, p, cmd)?;
     let d = s.doc.drawings.get(i).cloned().ok_or_else(|| bad(cmd, "no such drawing"))?;
-    // There must be one to draw (and it must unfold).
-    {
+    // There must be one to draw (and it must unfold): a sheet metal body, or a pipe fitting's piece.
+    if dv::fitting_piece(s, &body).is_none() {
         let st = s.model.state();
         let sh = dv::flat_sheet(&st, &d, &body).map_err(|e| bad(cmd, e))?;
         sh.flat_regions().map_err(|e| bad(cmd, e.to_string()))?;

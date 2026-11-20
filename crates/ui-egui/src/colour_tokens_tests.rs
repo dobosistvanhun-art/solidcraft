@@ -147,6 +147,7 @@ const ALLOWED_LITERALS: &[(&str, usize, &str)] = &[
     ("canvas.rs", 3, "white rings around manipulator handles"),
     ("context_menu.rs", 1, "the radial menu's shadow"),
     ("dialogs_appearance.rs", 1, "a design appearance: the colour is the fact"),
+    ("dialogs_cut_colour.rs", 2, "a cut layer's colour swatch: the colour is the fact"),
     ("dialogs_save_mesh.rs", 1, "an installed slicer's own icon, drawn untinted"),
     ("dialogs_library.rs", 1, "a library appearance's swatch: the colour is the fact"),
     ("render_ui/scene.rs", 2, "Browser appearance swatches: the colours are document data"),

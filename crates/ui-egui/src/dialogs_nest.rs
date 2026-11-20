@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, pos2, vec2};
+use egui::{Align2, FontId, Pos2, Rect, Stroke, pos2, vec2};
 use serde_json::{Value, json};
 use solidcraft_engine::doc::{Document, FeatureKind};
 
@@ -190,7 +190,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&name).strong());
                 if let Some(e) = p["error"].as_str() {
-                    ui.label(egui::RichText::new("⚠").color(Color32::from_rgb(210, 60, 40))).on_hover_text(e);
+                    ui.label(egui::RichText::new("⚠").color(crate::theme::Tokens::get().warning)).on_hover_text(e);
                 }
                 if ui_kit::button(ui, "✕", ui_kit::Button::Small).on_hover_text(crate::i18n::tr_label("Remove")).clicked() {
                     edit = Some(json!({"index": i, "remove": true}));
@@ -441,11 +441,11 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
     let to = |p: [f64; 2]| -> Pos2 { pos2((ox + p[0] * scale) as f32, (oy - p[1] * scale) as f32) };
     let from = |p: Pos2| -> [f64; 2] { [(f64::from(p.x) - ox) / scale, (oy - f64::from(p.y)) / scale] };
     // The sheets: light wood, the margin dashed.
-    let wood = Color32::from_rgb(232, 214, 182);
+    let wood = t.sheet_fill;
     for s in 0..sheets {
         let x0 = pitch(w) * s as f64;
         let r = Rect::from_two_pos(to([x0, 0.0]), to([x0 + w, h]));
-        painter.rect_filled(r.translate(vec2(3.0, 3.0)), 0.0, Color32::from_black_alpha(50));
+        painter.rect_filled(r.translate(vec2(3.0, 3.0)), 0.0, t.border);
         painter.rect_filled(r, 0.0, wood);
         if margin > 0.0 {
             let m = Rect::from_two_pos(to([x0 + margin, margin]), to([x0 + w - margin, h - margin]));
@@ -455,7 +455,7 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
                 (m.right_bottom(), m.left_bottom()),
                 (m.left_bottom(), m.left_top()),
             ] {
-                painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, Color32::from_rgb(160, 130, 90)), 6.0, 4.0));
+                painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, t.sheet_ink), 6.0, 4.0));
             }
         }
         painter.text(to([x0, h]) + vec2(0.0, -4.0), Align2::LEFT_BOTTOM, format!("{}", s + 1), FontId::proportional(t.font_small), t.text_dim);
@@ -497,13 +497,13 @@ pub fn overlay(app: &mut SolveApp, painter: &egui::Painter, rect: Rect, d: &mut 
         }
         let clash = moving.map_or(bad.contains(&(i as u64)), |dg| dg.clash);
         let colour = if clash {
-            Color32::from_rgb(210, 40, 40)
+            t.error
         } else if k.selected == Some(i) {
             t.accent
         } else if pl["locked"].as_bool().unwrap_or(false) {
-            Color32::from_rgb(90, 90, 90)
+            t.text_dim
         } else {
-            Color32::from_rgb(40, 60, 110)
+            t.sheet_ink
         };
         let width = if k.selected == Some(i) { 2.2 } else { 1.4 };
         for (n, poly) in polys.iter().enumerate() {

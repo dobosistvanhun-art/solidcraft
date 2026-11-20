@@ -49,8 +49,8 @@ pub use features::{auto_operation, extrude_reach, shown_scope, sketch_standalone
 pub use file::open_steps::OpenSteps;
 pub use join_pieces::{Addition, addition};
 pub use parts::part_length_label;
-pub use sketch::dimension_roles;
 pub(crate) use section::end_slice;
+pub use sketch::dimension_roles;
 pub(crate) use sketch::face::face_pick_form;
 pub use sketch_construction::{
     ConstructionLine, construction_line_choice, construction_line_mode, construction_line_solutions, construction_line_takes_length,
@@ -68,6 +68,7 @@ pub use component_link::resolve_design_links;
 mod config;
 mod design_link;
 mod file;
+mod fitting;
 mod frame;
 pub(crate) mod inspect;
 mod interference;
@@ -339,6 +340,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(mesh::COMMANDS.iter());
     v.extend(construct::COMMANDS.iter());
     v.extend(sheet::COMMANDS.iter());
+    v.extend(fitting::COMMANDS.iter());
     v.extend(plastic::COMMANDS.iter());
     v.extend(frame::COMMANDS.iter());
     v.extend(component::COMMANDS.iter());

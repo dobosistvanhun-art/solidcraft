@@ -610,7 +610,11 @@ fn a_hole_note_reads_the_hole_as_it_was_made_and_follows_it() {
     run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20}));
     run(&mut s, "solid.hole", json!({"position": [10, 15, 20], "thread": "M6"}));
     run(&mut s, "parameters.add", json!({"name": "cb", "expression": "6.8 mm"}));
-    run(&mut s, "solid.hole", json!({"position": [30, 15, 20], "diameter": 6.6, "depth": 15, "type": "counterbore", "cb_diameter": 11, "cb_depth": "cb"}));
+    run(
+        &mut s,
+        "solid.hole",
+        json!({"position": [30, 15, 20], "diameter": 6.6, "depth": 15, "type": "counterbore", "cb_diameter": 11, "cb_depth": "cb"}),
+    );
     let notes = s.doc.hole_notes();
     assert_eq!(notes.len(), 2, "{notes:?}");
     run(&mut s, "drawing.create", json!({"name": "D", "size": "A3", "scale": "1:1", "views": "none"}));

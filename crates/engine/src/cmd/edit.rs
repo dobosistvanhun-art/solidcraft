@@ -1721,6 +1721,9 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
                 | "plastic.snap_fit"
                 | "plastic.rest"
                 | "frame.member"
+                | "fitting.tee"
+                | "fitting.cone"
+                | "fitting.elbow"
         );
     if !constructor {
         return Err(bad(cmd, format!("`{cid}` does not make a feature")));

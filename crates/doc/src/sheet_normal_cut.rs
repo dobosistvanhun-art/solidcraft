@@ -133,7 +133,10 @@ impl SheetBody {
                     return Ok(None);
                 }
                 let grow = Vec2::new(SEAM_OVERLAP, SEAM_OVERLAP);
-                let clip = Region2 { outer: Loop2 { segs: cell.outer.clone() }, holes: cell.holes.iter().map(|segs| Loop2 { segs: segs.clone() }).collect() };
+                let clip = Region2 {
+                    outer: Loop2 { segs: cell.outer.clone() },
+                    holes: cell.holes.iter().map(|segs| Loop2 { segs: segs.clone() }).collect(),
+                };
                 Ok(Some(Traced {
                     origin: Vec2::ZERO,
                     e1: Vec2::new(1.0, 0.0),

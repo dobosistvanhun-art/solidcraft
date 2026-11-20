@@ -1261,6 +1261,70 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<BodyName>,
     },
+    /// A pipe fitting made of sheet (`crate::fitting`): a pipe or a concentric or eccentric
+    /// cone (bottom and top diameters, height, the top's shift) with or without a round branch
+    /// set into its side, or a mitred elbow of segments; its axis from `base` along `axis`. Each
+    /// piece is a body of its own, its flat pattern worked out exactly ([`crate::Document::fitting_patterns`]).
+    Fitting {
+        #[serde(with = "point_expr")]
+        #[walk(placement)]
+        base: PointExpr,
+        #[serde(default = "z_axis")]
+        axis: Dir,
+        #[serde(default)]
+        fitting: FittingType,
+        /// Which diameter the sizes give (the sheet's outside, inside or middle).
+        #[serde(default)]
+        measured: crate::fitting::Measured,
+        #[walk(length = "Thickness")]
+        thickness: Expr,
+        /// The body's (a cone's bottom) diameter, an elbow's pipe diameter.
+        #[walk(length = "Diameter")]
+        diameter: Expr,
+        /// A cone's top diameter (default: the bottom's: a pipe).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Top diameter")]
+        top: Option<Expr>,
+        /// The body's height (an elbow: none).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Height")]
+        height: Option<Expr>,
+        /// An eccentric cone's top moved over (along the base's X).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Shift")]
+        shift: Option<Expr>,
+        /// A branch: its diameter, its length from the body's axis, the height where its axis
+        /// meets the body's, its angle from the body's axis (90°: square), and off-centre.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Branch diameter")]
+        branch: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Branch length")]
+        branch_length: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Branch height")]
+        branch_at: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Branch angle")]
+        branch_angle: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Branch offset")]
+        branch_offset: Option<Expr>,
+        /// An elbow: its centre line's bend radius, its angle, its segments (the two at the
+        /// ends half ones) and a straight length at each end.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Bend radius")]
+        bend: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Elbow angle")]
+        angle: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "Segments")]
+        segments: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Straight")]
+        straight: Option<Expr>,
+    },
     /// Sheet metal base flange: a sheet from a closed profile (thickness from the rule).
     SheetBase {
         sketch: SketchId,
@@ -2283,6 +2347,19 @@ fn loft_crown_is_plain(c: &[f64; 2]) -> bool {
     c.iter().all(|v| *v == 0.0)
 }
 
+/// What a Fitting feature makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FittingType {
+    /// A pipe or cone with a branch (a tee, a lateral, a branch into a cone).
+    #[default]
+    Tee,
+    /// A pipe or a concentric or eccentric cone, no branch.
+    Cone,
+    /// A mitred elbow.
+    Elbow,
+}
+
 /// What a Gear feature makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2574,6 +2651,7 @@ impl FeatureKind {
             FeatureKind::SheetConvert { .. } => "ConvertToSheetMetalFeature",
             FeatureKind::Coil { .. } => "CoilFeature",
             FeatureKind::Gear { .. } => "GearFeature",
+            FeatureKind::Fitting { .. } => "FittingFeature",
             FeatureKind::Rib { web: false, .. } => "RibFeature",
             FeatureKind::Rib { .. } => "WebFeature",
             FeatureKind::ReplaceFace { .. } => "ReplaceFaceFeature",
@@ -2642,6 +2720,7 @@ impl FeatureKind {
             FeatureKind::Align { .. } => "align",
             FeatureKind::Coil { .. } => "coil",
             FeatureKind::Gear { .. } => "gear",
+            FeatureKind::Fitting { .. } => "fitting",
             FeatureKind::SheetBase { .. } => "sheet_base",
             FeatureKind::SheetContour { .. } => "sheet_contour",
             FeatureKind::SheetFlange { .. } => "sheet_flange",
@@ -2823,6 +2902,9 @@ impl FeatureKind {
             FeatureKind::Gear { gear: GearType::Worm, .. } => "Worm",
             FeatureKind::Gear { gear: GearType::WormWheel, .. } => "WormWheel",
             FeatureKind::Gear { .. } => "Gear",
+            FeatureKind::Fitting { fitting: FittingType::Elbow, .. } => "Elbow",
+            FeatureKind::Fitting { fitting: FittingType::Cone, .. } => "Cone",
+            FeatureKind::Fitting { .. } => "Tee",
             FeatureKind::Rib { web: false, .. } => "Rib",
             FeatureKind::Rib { .. } => "Web",
             FeatureKind::ReplaceFace { .. } => "ReplaceFace",

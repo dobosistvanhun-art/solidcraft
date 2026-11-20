@@ -163,6 +163,8 @@ pub struct DrawUi {
     pub status: Option<String>,
     /// A section line's start in line with a hole's centre: the point, and the centre it lines up with.
     pub align: Option<([f64; 2], [f64; 2])>,
+    /// The pipe fitting piece whose flat pattern to put (index into [`fitting_pieces`]).
+    pub piece: usize,
 }
 
 impl DrawUi {
@@ -196,6 +198,7 @@ impl DrawUi {
             cycle_at: None,
             align: None,
             status: None,
+            piece: 0,
         }
     }
 
@@ -370,8 +373,24 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
         return false;
     };
     let id = d.id;
-    if wants_flat && let Some(v) = run(app, k, "drawing.view.flat", json!({"drawing": id})) {
-        k.selected = v["view"].as_u64();
+    if wants_flat {
+        // a sheet metal part's pattern; with none, the newest pipe fitting's pieces, each its own
+        let pieces = fitting_pieces(app);
+        let newest = pieces.last().map(|p| p.feature);
+        let bodies: Vec<String> = if app.session.model.state().sheets.is_empty() {
+            pieces.iter().filter(|p| Some(p.feature) == newest).map(|p| p.body.clone()).collect()
+        } else {
+            vec![String::new()]
+        };
+        if bodies.is_empty() {
+            run(app, k, "drawing.view.flat", json!({"drawing": id}));
+        }
+        for body in bodies {
+            let p = if body.is_empty() { json!({"drawing": id}) } else { json!({"drawing": id, "body": body}) };
+            if let Some(v) = run(app, k, "drawing.view.flat", p) {
+                k.selected = v["view"].as_u64();
+            }
+        }
         k.set_tool(Tool::Select);
     }
 
@@ -456,6 +475,31 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut DrawUi) -> bool {
                 k.selected = v["view"].as_u64();
             }
         });
+        // A pipe fitting's pieces (a tee's body and branch, an elbow's segments, a flange…): the
+        // flat pattern of one, or of them all.
+        let pieces = fitting_pieces(app);
+        if !pieces.is_empty() {
+            let labels: Vec<&str> = pieces.iter().map(|p| p.label.as_str()).collect();
+            k.piece = k.piece.min(pieces.len() - 1);
+            choice_row(ui, "ui.fitting_piece", "drw_fitting_piece", &mut k.piece, &labels);
+            ui.horizontal_wrapped(|ui| {
+                let one = ui_kit::button(ui, crate::i18n::tr_label("ui.fitting_piece_pattern"), ui_kit::Button::Small).clicked();
+                let all = ui_kit::button(ui, crate::i18n::tr_label("ui.fitting_all_patterns"), ui_kit::Button::Small).clicked();
+                let chosen = pieces.get(k.piece).map(|p| p.feature);
+                let bodies: Vec<String> = if all {
+                    pieces.iter().filter(|p| Some(p.feature) == chosen).map(|p| p.body.clone()).collect()
+                } else if one {
+                    pieces.get(k.piece).map(|p| vec![p.body.clone()]).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                for body in bodies {
+                    if let Some(v) = run(app, k, "drawing.view.flat", json!({"drawing": id, "body": body})) {
+                        k.selected = v["view"].as_u64();
+                    }
+                }
+            });
+        }
         let Some(v) = &selected else {
             ui_kit::text(ui, crate::i18n::tr_label("Click a view to select it, drag it to move it"), ui_kit::Text::Hint("drw_views"));
             return;
@@ -1780,6 +1824,29 @@ fn press(app: &mut SolveApp, k: &mut DrawUi, v: &Value, at: [f64; 2], put: Optio
             }
         }
     }
+}
+
+/// A pipe fitting's piece with a flat pattern: its fitting, its body and how it is listed.
+pub(crate) struct FittingPiece {
+    pub feature: u64,
+    pub body: String,
+    pub label: String,
+}
+
+/// Every pipe fitting piece that has a flat pattern, by fitting in the timeline's order, each
+/// fitting's pieces in the order of its bodies (a turned socket or threaded end has none).
+pub(crate) fn fitting_pieces(app: &SolveApp) -> Vec<FittingPiece> {
+    use solidcraft_engine::doc::FeatureKind;
+    let st = app.session.model.state();
+    let mut out = Vec::new();
+    for f in app.session.doc.features.iter().filter(|f| matches!(f.kind, FeatureKind::Fitting { .. }) && !f.suppressed) {
+        let Ok(patterns) = app.session.doc.fitting_patterns(f.id) else { continue };
+        let bodies = st.bodies.iter().filter(|b| b.feature == f.id);
+        for ((piece, _), body) in patterns.into_iter().zip(bodies) {
+            out.push(FittingPiece { feature: f.id, body: body.name.clone(), label: format!("{}: {piece}", f.name) });
+        }
+    }
+    out
 }
 
 #[cfg(test)]

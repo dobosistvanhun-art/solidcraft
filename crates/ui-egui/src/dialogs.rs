@@ -1139,20 +1139,26 @@ impl Dialog {
                 },
                 vec![],
             ),
-            "fitting.tee" | "fitting.cone" | "fitting.elbow" => Dialog::new(
-                Kind::Primitive {
-                    cmd: match id {
-                        "fitting.tee" => "fitting.tee",
-                        "fitting.cone" => "fitting.cone",
-                        _ => "fitting.elbow",
+            "fitting.tee" | "fitting.cone" | "fitting.elbow" | "fitting.flange" | "fitting.socket" | "fitting.nipple" | "fitting.collar" => {
+                Dialog::new(
+                    Kind::Primitive {
+                        cmd: match id {
+                            "fitting.tee" => "fitting.tee",
+                            "fitting.cone" => "fitting.cone",
+                            "fitting.flange" => "fitting.flange",
+                            "fitting.socket" => "fitting.socket",
+                            "fitting.nipple" => "fitting.nipple",
+                            "fitting.collar" => "fitting.collar",
+                            _ => "fitting.elbow",
+                        },
+                        fields: fitting_fields(s, id),
+                        operation: 0,
+                        at: None,
+                        refs: Default::default(),
                     },
-                    fields: fitting_fields(s, id),
-                    operation: 0,
-                    at: None,
-                    refs: Default::default(),
-                },
-                vec![],
-            ),
+                    vec![],
+                )
+            }
             "solid.combine" => Dialog::new(
                 Kind::Combine { operation: 1, keep_tools: false },
                 vec![SelInput::new("Target Body", BODIES, false), SelInput::new("Tool Bodies", BODIES, true)],
@@ -2457,6 +2463,10 @@ fn title(k: &Kind) -> &'static str {
             "fitting.tee" => "ui.heading_fitting_tee",
             "fitting.cone" => "ui.heading_fitting_cone",
             "fitting.elbow" => "ui.heading_fitting_elbow",
+            "fitting.flange" => "ui.heading_fitting_flange",
+            "fitting.socket" => "ui.heading_fitting_socket",
+            "fitting.nipple" => "ui.heading_fitting_nipple",
+            "fitting.collar" => "ui.heading_fitting_collar",
             _ => "TORUS",
         },
         Kind::Combine { .. } => "COMBINE",
@@ -5268,7 +5278,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                     "solid.box" => {
                         p.insert("corner".into(), box_corner(s, fields, point, normal));
                     }
-                    "fitting.tee" | "fitting.cone" | "fitting.elbow" => {
+                    "fitting.tee" | "fitting.cone" | "fitting.elbow" | "fitting.flange" | "fitting.socket" | "fitting.nipple" | "fitting.collar" => {
                         p.insert("base".into(), pt(point));
                         if let Some(n) = normal {
                             p.insert("axis".into(), pt(n));
@@ -5306,6 +5316,14 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                 }
                 if let Some(a) = d.extra.get("axis").filter(|_| at.is_none()) {
                     p.insert("axis".into(), a.clone());
+                }
+                // a flange of a standard size: its class and size (the sizes shown are its own)
+                if *cmd == "fitting.flange" {
+                    for k in ["pn", "dn"] {
+                        if let Some(v) = d.extra.get(k).filter(|v| v.is_u64()) {
+                            p.insert(k.into(), v.clone());
+                        }
+                    }
                 }
             } else {
                 p.insert("operation".into(), json!(OPS.get(*operation).copied().unwrap_or("new")));
@@ -6429,12 +6447,23 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             angle,
             segments,
             straight,
+            bore,
+            pitch,
+            holes,
+            hole,
+            thread,
+            thread_length,
+            width,
         } => {
             use solidcraft_engine::doc::FittingType;
             let cmd = match fitting {
                 FittingType::Tee => "fitting.tee",
                 FittingType::Cone => "fitting.cone",
                 FittingType::Elbow => "fitting.elbow",
+                FittingType::Flange => "fitting.flange",
+                FittingType::Socket => "fitting.socket",
+                FittingType::Nipple => "fitting.nipple",
+                FittingType::Collar => "fitting.collar",
             };
             let mut d = start(cmd)?;
             let e = |x: &Option<solidcraft_engine::doc::Expr>| x.as_ref().map(|v| v.to_string()).unwrap_or_default();
@@ -6446,6 +6475,37 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     ("segments", e(segments)),
                     ("bend", e(bend)),
                     ("straight", e(straight)),
+                ],
+                // a blind flange (no bore) stays blind: its bore is 0
+                FittingType::Flange => vec![
+                    ("diameter", diameter.to_string()),
+                    ("bore", bore.as_ref().map_or_else(|| "0".to_string(), |b| b.to_string())),
+                    ("bolt_circle", e(pitch)),
+                    ("holes", e(holes)),
+                    ("hole", e(hole)),
+                    ("thickness", thickness.to_string()),
+                ],
+                FittingType::Socket => vec![
+                    ("diameter", diameter.to_string()),
+                    ("height", e(height)),
+                    ("thickness", thickness.to_string()),
+                    ("thread", thread.clone().unwrap_or_default()),
+                    ("thread_length", e(thread_length)),
+                    ("bore", e(bore)),
+                ],
+                FittingType::Nipple => vec![
+                    ("thread", thread.clone().unwrap_or_default()),
+                    ("height", e(height)),
+                    ("thickness", thickness.to_string()),
+                    ("thread_length", e(thread_length)),
+                    ("bore", e(bore)),
+                ],
+                FittingType::Collar => vec![
+                    ("diameter", diameter.to_string()),
+                    ("height", e(height)),
+                    ("thickness", thickness.to_string()),
+                    ("width", e(width)),
+                    ("bend", e(bend)),
                 ],
                 _ => vec![
                     ("diameter", diameter.to_string()),
@@ -7841,6 +7901,32 @@ pub(crate) fn is_fitting(cmd: &str) -> bool {
 fn fitting_fields(s: &Session, id: &str) -> Vec<(&'static str, String)> {
     let l = |v: &str| length_default(s, v);
     match id {
+        // DN 50 PN 16 to start with (its class and size chosen in the dialog)
+        "fitting.flange" => {
+            let size = solidcraft_engine::doc::flange_catalog::size(16, 50);
+            let v =
+                |f: fn(&solidcraft_engine::doc::flange_catalog::FlangeSize) -> f64| size.as_ref().map(|z| l(&f(z).to_string())).unwrap_or_default();
+            vec![
+                ("diameter", v(|z| z.outside)),
+                ("bore", v(|z| z.bore)),
+                ("bolt_circle", v(|z| z.pitch)),
+                ("holes", size.map(|z| z.holes.to_string()).unwrap_or_default()),
+                ("hole", v(|z| z.hole)),
+                ("thickness", v(|z| z.thickness)),
+            ]
+        }
+        "fitting.socket" => vec![
+            ("diameter", l("60.3")),
+            ("height", l("80")),
+            ("thickness", l("2")),
+            ("thread", String::new()),
+            ("thread_length", String::new()),
+            ("bore", String::new()),
+        ],
+        "fitting.nipple" => {
+            vec![("thread", "G1/2".into()), ("height", l("40")), ("thickness", l("2.6")), ("thread_length", l("15")), ("bore", String::new())]
+        }
+        "fitting.collar" => vec![("diameter", l("100")), ("height", l("80")), ("thickness", l("1.5")), ("width", l("25")), ("bend", l("3"))],
         "fitting.elbow" => vec![
             ("diameter", l("100")),
             ("thickness", l("1")),

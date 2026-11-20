@@ -898,6 +898,37 @@ pub(crate) fn start_sketch_dxf(app: &mut SolveApp, id: &str) -> bool {
     true
 }
 
+/// Export Fitting Patterns as DXF, started from the ribbon or command search: asks where to save
+/// for the newest pipe fitting (one file a piece, `<name>-<piece>.dxf`). With no fitting, or one
+/// with no sheet pieces, it reports why before any file is asked for. `false`: `id` is no such
+/// command.
+pub(crate) fn start_fitting_dxf(app: &mut SolveApp, id: &str) -> bool {
+    if id != "fitting.export_dxf" {
+        return false;
+    }
+    match app.session.execute("fitting.patterns", &json!({})) {
+        Err(_) => {
+            // The command's own "no fitting" error, without a picker.
+            let _ = app.run(id, json!({}));
+            return true;
+        }
+        Ok(v) if v["pieces"].as_array().is_none_or(Vec::is_empty) => {
+            app.set_status(app.tr("ui.fitting_no_patterns").to_string(), true);
+            return true;
+        }
+        Ok(_) => {}
+    }
+    let name = format!("{}.dxf", app.session.doc.name);
+    app.pick_save(&name, &["dxf"], |app, path| {
+        let Some(path) = path else { return };
+        if let Ok(r) = app.run("fitting.export_dxf", json!({"path": path})) {
+            let files = r["pieces"].as_array().map_or(0, Vec::len);
+            app.set_status(format!("{} ({files})", app.tr("ui.fitting_exported")), false);
+        }
+    });
+    true
+}
+
 /// Export to a file with extension `ext`, in `format` when the extension alone doesn't name it.
 fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
     let name = format!("{}.{ext}", app.session.doc.name);

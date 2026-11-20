@@ -103,7 +103,7 @@ pub(crate) fn fields<'a>(doc: &Document, kind: &'a mut crate::dialogs::Kind) -> 
         D::Hole { diameter, depth, cb_diameter, cb_depth, cs_diameter, .. } => vec![diameter, depth, cb_diameter, cb_depth, cs_diameter],
         D::Primitive { fields, .. } => fields
             .iter_mut()
-            .filter(|(key, _)| !matches!(*key, "revolutions" | "segments" | "angle" | "branch_angle"))
+            .filter(|(key, _)| !matches!(*key, "revolutions" | "segments" | "angle" | "branch_angle" | "holes" | "thread"))
             .map(|(_, value)| value)
             .collect(),
         D::Surface(k) => match k {

@@ -122,3 +122,108 @@ fn a_drawing_shows_a_fitting_pieces_flat_pattern() {
     let (x0, x1) = (frame["min"][0].as_f64().unwrap_or(0.0), frame["max"][0].as_f64().unwrap_or(0.0));
     assert!(((x1 - x0) - width).abs() < 0.5, "the view is the pattern's width at 1:1: {frame}");
 }
+
+/// A DN 50 PN 16 plate flange (EN 1092-1 type 01): 165 across, 4 holes of 18 on a 125 circle, a
+/// 61.5 bore, 20 thick; its flat pattern is the plate, its body the pattern 20 deep.
+#[test]
+fn a_standard_flange_is_its_own_flat_pattern() {
+    use std::f64::consts::PI;
+    let mut s = Session::default();
+    let r = run(&mut s, "fitting.flange", json!({"pn": 16, "dn": 50}));
+    assert_eq!(r["created_bodies"].as_array().map(Vec::len), Some(1), "{r}");
+    let pats = pieces_match_their_patterns(&mut s, 1, 0.002);
+    let f = &pats["pieces"][0];
+    assert_eq!(f["piece"], "flange");
+    let want = PI * (82.5f64.powi(2) - 30.75f64.powi(2)) - 4.0 * PI * 81.0;
+    assert!((f["area"].as_f64().unwrap_or(0.0) - want).abs() / want < 1e-3, "{f}");
+    assert!((f["width"].as_f64().unwrap_or(0.0) - 165.0).abs() < 0.01, "{f}");
+    assert_eq!(f["holes"].as_array().map(Vec::len), Some(5), "the bore and four bolt holes");
+    assert_eq!(pats["thickness"], 20.0);
+    assert_eq!(pats["exact"], true);
+    // a blind one of PN 10 DN 200: eight holes, no bore; sizes of its own override the standard's
+    run(&mut s, "fitting.flange", json!({"pn": 10, "dn": 200, "blind": true, "thickness": 12}));
+    let pats = pieces_match_their_patterns(&mut s, 1, 0.002);
+    assert_eq!(pats["pieces"][0]["holes"].as_array().map(Vec::len), Some(8), "{pats}");
+    assert_eq!(pats["thickness"], 12.0);
+    let dxf = run(&mut s, "fitting.export_dxf", json!({}));
+    assert!(dxf["pieces"][0]["dxf"].as_str().is_some_and(|t| t.contains("\nCUT")), "the holes on the CUT layer");
+}
+
+/// A socket of sheet over a 60.3 pipe (its inside the pipe's), and a turned one with a G 2
+/// thread inside: a cosmetic thread on its bore, no sheet pattern.
+#[test]
+fn a_socket_of_sheet_or_threaded() {
+    use std::f64::consts::PI;
+    let mut s = Session::default();
+    run(&mut s, "fitting.socket", json!({"diameter": 60.3, "height": 80, "thickness": 2}));
+    let pats = pieces_match_their_patterns(&mut s, 1, 0.01);
+    let w = pats["pieces"][0]["width"].as_f64().unwrap_or(0.0);
+    assert!((w - 62.3 * PI).abs() < 0.05, "the middle circumference of a sleeve 60.3 inside: {w}");
+    let r = run(&mut s, "fitting.socket", json!({"diameter": 75, "height": 50, "thickness": 2, "thread": "G2"}));
+    let id = r["feature"].as_u64().unwrap_or(0);
+    let st = s.model.state();
+    let th: Vec<_> = st.threads.iter().filter(|t| t.feature == id).collect();
+    assert_eq!(th.len(), 1, "the socket's own thread, on its bore");
+    assert!(th[0].internal && th[0].designation.starts_with("G2"), "{:?}", th[0]);
+    // an edit keeps one thread, the fitting's own
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": id, "command": "fitting.socket", "params": {"diameter": 80, "height": 60, "thickness": 2, "thread": "G2"}}),
+    );
+    assert_eq!(s.model.state().threads.iter().filter(|t| t.feature == id).count(), 1);
+    let pats = run(&mut s, "fitting.patterns", json!({}));
+    assert_eq!(pats["pieces"].as_array().map(Vec::len), Some(0), "a turned socket has no sheet pattern");
+}
+
+/// A threaded end (nipple) G 1/2, 40 long, the thread 15 from its top.
+#[test]
+fn a_threaded_end_carries_its_pipe_thread() {
+    let mut s = Session::default();
+    let r = run(&mut s, "fitting.nipple", json!({"thread": "G1/2", "height": 40, "thickness": 2.6, "thread_length": 15}));
+    assert_eq!(r["created_bodies"].as_array().map(Vec::len), Some(1), "{r}");
+    let st = s.model.state();
+    assert_eq!(st.threads.len(), 1);
+    let t = &st.threads[0];
+    assert!(!t.internal && (t.end - t.start - 15.0).abs() < 1e-6, "15 of thread outside: {t:?}");
+    let v = volume(&mut s, r["created_bodies"][0].as_str().unwrap_or_default());
+    let (ro, ri) = (20.955 / 2.0, 20.955 / 2.0 - 2.6);
+    let want = std::f64::consts::PI * (ro * ro - ri * ri) * 40.0;
+    assert!((v - want).abs() / want < 0.01, "{v} vs {want}");
+}
+
+/// A collar (bördel): a pipe turned out at its top; its pattern is the blank, not exact.
+#[test]
+fn a_collar_turns_out_its_pipe() {
+    let mut s = Session::default();
+    let r = run(&mut s, "fitting.collar", json!({"diameter": 100, "height": 80, "thickness": 1.5, "width": 25, "bend": 3}));
+    assert_eq!(r["created_bodies"].as_array().map(Vec::len), Some(1), "{r}");
+    let pats = run(&mut s, "fitting.patterns", json!({}));
+    assert_eq!(pats["exact"], false, "{pats}");
+    let p = &pats["pieces"][0];
+    let body = p["body"].as_str().unwrap_or_default().to_string();
+    let v = volume(&mut s, &body);
+    // the collar's sheet spreads round as it turns out: the body holds more than its blank
+    let blank = p["area"].as_f64().unwrap_or(0.0) * 1.5;
+    assert!(v > blank && v < blank * 1.4, "{v} vs the blank's {blank}");
+    let bb = run(&mut s, "inspect.measure", json!({"bodies": [body]}));
+    assert!(bb.to_string().contains("volume"), "{bb}");
+}
+
+#[test]
+fn flanges_and_threaded_ends_refuse_what_they_cannot_make() {
+    let mut s = Session { param_check: ParamCheck::Strict, ..Session::default() };
+    for (cmd, p) in [
+        ("fitting.flange", json!({"pn": 25, "dn": 50})),
+        ("fitting.flange", json!({"pn": 16, "dn": 55})),
+        ("fitting.flange", json!({"diameter": 100, "bolt_circle": 80, "holes": 40, "hole": 14, "thickness": 10})),
+        ("fitting.flange", json!({"diameter": 100, "thickness": 10})),
+        ("fitting.nipple", json!({"thread": "G9/7", "height": 20, "thickness": 2})),
+        ("fitting.nipple", json!({"height": 20, "thickness": 2})),
+        ("fitting.socket", json!({"diameter": 20, "height": 30, "thickness": 2, "thread": "G1"})),
+        ("fitting.collar", json!({"diameter": 100, "height": 50, "thickness": 2, "width": 3, "bend": 2})),
+    ] {
+        assert!(s.execute(cmd, &p).is_err(), "{cmd} {p}");
+    }
+    assert!(s.doc.features.is_empty(), "nothing was made");
+}

@@ -8235,7 +8235,15 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
         FeatureKind::Fitting { .. } => {
             let (mut constructor, mut to_body) = (None, None);
             let tools = feature_tools_with_constructor(doc, vals, f, st, false, &mut constructor, &mut to_body)?;
-            apply_traced(doc, st, f, tools, Operation::NewBody, &[])
+            apply_traced(doc, st, f, tools, Operation::NewBody, &[])?;
+            // a threaded socket's or nipple's pipe thread: cosmetic, the fitting's own
+            if let Some(sized) = crate::fitting_eval::sized(vals, &f.kind)?
+                && let Some((th, at)) = sized.thread_at()?
+            {
+                let t = thread_on(st, f.id, at, Some(&th.designation), th.length, false, crate::ThreadHandedness::Right)?;
+                st.threads.push(t);
+            }
+            Ok(())
         }
         FeatureKind::Extrude { operation, targets, .. }
         | FeatureKind::Pipe { operation, targets, .. }

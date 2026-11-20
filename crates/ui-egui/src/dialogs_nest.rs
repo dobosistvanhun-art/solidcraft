@@ -239,7 +239,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut NestUi) -> bool {
                 for c in &all {
                     let taken = parts.iter().any(|p| same_part(p, &c.key));
                     if !c.closed {
-                        ui.add_enabled(false, egui::Button::new(format!("{} — {}", c.name, crate::i18n::tr_label("no closed contour"))));
+                        ui_kit::button(ui, format!("{} — {}", c.name, crate::i18n::tr_label("no closed contour")), ui_kit::Button::Enabled(false));
                     } else if !taken && ui_kit::button(ui, c.name.as_str(), ui_kit::Button::Small).clicked() {
                         let mut p = c.key.clone();
                         p["count"] = json!(1);

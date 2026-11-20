@@ -4,7 +4,7 @@
 //! stays open to colour one group of contours after another; everything goes through
 //! `sketch.cut_colour`.
 
-use egui::{Color32, Stroke, vec2};
+use egui::{Color32, vec2};
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::sketch::cut_colour::PALETTE;
@@ -84,16 +84,13 @@ pub fn apply(app: &mut SolveApp, k: &mut CutColourUi, inputs: &[SelInput], colou
 pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut CutColourUi, inputs: &[SelInput]) -> bool {
     ui.label(crate::i18n::tr_label("Pick contours in the sketch, then click a colour"));
     let mut chosen: Option<Option<usize>> = None;
-    let size = vec2(26.0, 22.0);
     for row in PALETTE.chunks(6).enumerate() {
         let (r, colours) = row;
         ui.horizontal(|ui| {
             for (c, (_, rgb)) in colours.iter().enumerate() {
                 let i = r * 6 + c;
                 let fill = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                let swatch =
-                    egui::Button::new("").fill(fill).stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)).min_size(size);
-                if ui.add(swatch).on_hover_text(label(i)).clicked() {
+                if ui_kit::color_swatch(ui, egui::Id::new(("cut_colour", i)), fill, false, &label(i), i).clicked() {
                     chosen = Some(Some(i));
                 }
             }

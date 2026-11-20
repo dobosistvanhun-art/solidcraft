@@ -321,7 +321,12 @@ pub const SECTIONS: &[Section] = &[
         ids: &["sheet.flange", "sheet.path_flange", "sheet.hem", "sheet.fold", "sheet.loft", "sheet.perforate", "solid.hole", "sheet.convert"],
     },
     // Pipe fittings of sheet, each piece with its exact flat pattern.
-    Section { tab: "SHEET METAL", panel: "FITTINGS", promoted: 3, ids: &["fitting.tee", "fitting.cone", "fitting.elbow"] },
+    Section {
+        tab: "SHEET METAL",
+        panel: "FITTINGS",
+        promoted: 4,
+        ids: &["fitting.tee", "fitting.cone", "fitting.elbow", "fitting.flange", "fitting.socket", "fitting.nipple", "fitting.collar"],
+    },
     Section { tab: "SHEET METAL", panel: "FLAT", promoted: 3, ids: &["sheet.unfold", "sheet.refold", "sheet.flat_pattern"] },
     Section { tab: "SHEET METAL", panel: "OUTPUT", promoted: 2, ids: &["sheet.export_dxf", "sheet.export_bend_table", "fitting.export_dxf"] },
     Section { tab: "SHEET METAL", panel: "RULES", promoted: 1, ids: &["sheet.manage_rules"] },
@@ -492,6 +497,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("drawing.export_pdf", "Drawing PDF"),
     ("drawing.view.flat", "Flat Pattern"),
     ("drawing.view.projected", "Projected"),
+    ("fitting.flange", "Pipe Flange"),
     ("nest.export_dxf", "Nest DXF"),
     ("inspect.accessibility", "Access"),
     ("inspect.center_of_mass", "Mass Center"),
@@ -607,9 +613,13 @@ pub(crate) fn legacy_render_destination(c: &CommandSpec) -> Option<(&'static str
         "config.table" | "config.configure" => Some(("MANAGE", "CONFIGURATIONS")),
         _ => None,
     };
+    // The cutting tab borrows the sketcher's tools: a command's home is its own tab's, the
+    // cutting tab only for what lives there alone (its check, colours and DXF).
+    let home = |s: &&Section| s.tab != CUT_TAB && s.ids.contains(&c.id);
     primary
-        .or_else(|| SECTIONS.iter().chain(LEGACY_RENDER_SECTIONS).find(|s| s.ids.contains(&c.id)).map(|s| (s.tab, s.panel)))
+        .or_else(|| SECTIONS.iter().chain(LEGACY_RENDER_SECTIONS).find(home).map(|s| (s.tab, s.panel)))
         .or_else(|| PLACEMENTS.iter().find(|(t, p, ..)| *t == c.tab && *p == c.panel).map(|(_, _, t, p)| (*t, *p)))
+        .or_else(|| SECTIONS.iter().find(|s| s.ids.contains(&c.id)).map(|s| (s.tab, s.panel)))
 }
 
 /// Ordered menu commands, with the promoted commands first. Empty sections are omitted by

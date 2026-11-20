@@ -32,6 +32,8 @@ mod feature_geometry;
 mod feature_refs;
 pub mod fitting;
 mod fitting_eval;
+pub use fitting_eval::FittingThread;
+pub mod flange_catalog;
 pub use face_anchor::{FaceAnchor, FaceAttachmentStatus};
 pub mod format;
 mod format_offsets;

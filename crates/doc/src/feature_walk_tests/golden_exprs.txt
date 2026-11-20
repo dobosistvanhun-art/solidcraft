@@ -296,7 +296,13 @@ fitting
     Elbow angle = fitting.angle (Angle)
     Segments = fitting.segments (Unitless)
     Straight = fitting.straight (Length)
-  expressions: fitting.thickness, fitting.diameter, fitting.top, fitting.height, fitting.shift, fitting.branch, fitting.branch_length, fitting.branch_at, fitting.branch_angle, fitting.branch_offset, fitting.bend, fitting.angle, fitting.segments, fitting.straight, fitting.x, fitting.y, fitting.z
+    Bore = fitting.bore (Length)
+    Bolt circle = fitting.pitch (Length)
+    Bolt holes = fitting.holes (Unitless)
+    Bolt hole = fitting.hole (Length)
+    Thread length = fitting.thread_length (Length)
+    Collar width = fitting.width (Length)
+  expressions: fitting.thickness, fitting.diameter, fitting.top, fitting.height, fitting.shift, fitting.branch, fitting.branch_length, fitting.branch_at, fitting.branch_angle, fitting.branch_offset, fitting.bend, fitting.angle, fitting.segments, fitting.straight, fitting.bore, fitting.pitch, fitting.holes, fitting.hole, fitting.thread_length, fitting.width, fitting.x, fitting.y, fitting.z
 sheet_base
 sheet_contour
   inputs:

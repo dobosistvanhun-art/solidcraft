@@ -346,6 +346,120 @@ impl Elbow {
     }
 }
 
+/// A circle as a closed ring, counter-clockwise, its chords at most about 0.01 mm off the arc.
+pub fn circle(c: Vec2, r: f64) -> Vec<Vec2> {
+    // a chord of angle a is r(1 − cos(a/2)) ≈ r a²/8 off its arc
+    let n = ((std::f64::consts::TAU / (0.08 / r.max(1e-3)).sqrt()).ceil() as usize).clamp(48, 4096);
+    (0..n).map(|i| c + Vec2::from_angle(std::f64::consts::TAU * i as f64 / n as f64) * r).collect()
+}
+
+/// A plate flange: a ring of plate (`outside`, `bore` radii; a blind flange: bore 0) with
+/// `holes` bolt holes of radius `hole` on the circle of radius `pitch`, the first half a pitch
+/// round from the X axis (so none lies on the flange's centre lines, as is usual).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flange {
+    pub outside: f64,
+    pub bore: f64,
+    pub pitch: f64,
+    pub holes: usize,
+    pub hole: f64,
+}
+
+impl Flange {
+    pub fn check(&self) -> Result<(), String> {
+        let ok = |v: f64| v.is_finite() && v >= 0.0;
+        if !(ok(self.outside) && ok(self.bore) && ok(self.pitch) && ok(self.hole)) || self.outside <= 0.0 {
+            return bad("a flange's sizes must be positive");
+        }
+        if self.bore >= self.outside {
+            return bad("a flange's bore must be smaller than its outside");
+        }
+        if self.holes > 256 {
+            return bad("a flange has at most 256 bolt holes");
+        }
+        if self.holes > 0 {
+            if self.hole <= 0.0 {
+                return bad("a bolt hole's diameter must be positive");
+            }
+            if self.pitch - self.hole <= self.bore || self.pitch + self.hole >= self.outside {
+                return bad("the bolt holes must lie between the bore and the rim");
+            }
+            if self.holes > 1 && self.pitch * (std::f64::consts::PI / self.holes as f64).sin() <= self.hole {
+                return bad("the bolt holes overlap: fewer, smaller, or a larger bolt circle");
+            }
+        }
+        Ok(())
+    }
+
+    /// The bolt holes' centres.
+    pub fn hole_centres(&self) -> Vec<Vec2> {
+        let n = self.holes.max(1) as f64;
+        (0..self.holes).map(|i| Vec2::from_angle(std::f64::consts::PI * (2.0 * i as f64 + 1.0) / n) * self.pitch).collect()
+    }
+
+    /// The flange cut from plate: its rim, its bore and its bolt holes (exactly: a flat part);
+    /// its centre lines marked.
+    pub fn pattern(&self) -> Pattern {
+        let mut holes = Vec::new();
+        if self.bore > 0.0 {
+            holes.push(circle(Vec2::new(0.0, 0.0), self.bore));
+        }
+        holes.extend(self.hole_centres().into_iter().map(|c| circle(c, self.hole)));
+        let r = self.outside;
+        let marks = vec![(Vec2::new(-r, 0.0), Vec2::new(r, 0.0)), (Vec2::new(0.0, -r), Vec2::new(0.0, r))];
+        Pattern { outline: circle(Vec2::new(0.0, 0.0), r), holes, marks }
+    }
+}
+
+/// A pipe with a turned-out collar (a bördel, a lap-joint stub): a pipe of middle radius
+/// `radius` standing `height` to where it bends out, round a bend of inside radius `bend`, into a
+/// collar flat across its top reaching `width` beyond the pipe's outside.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Collar {
+    pub radius: f64,
+    pub height: f64,
+    pub bend: f64,
+    pub width: f64,
+}
+
+impl Collar {
+    pub fn check(&self, t: f64) -> Result<(), String> {
+        let ok = |v: f64| v.is_finite() && v > 0.0;
+        if !(ok(self.radius) && ok(self.height) && ok(self.width) && self.bend.is_finite() && self.bend >= 0.0) {
+            return bad("a collar's sizes must be positive");
+        }
+        if self.width <= self.bend + t {
+            return bad("a collar must reach beyond its bend: a wider collar or a smaller bend");
+        }
+        if self.width > self.radius * 4.0 {
+            return bad("a collar can be at most twice the pipe's diameter wide");
+        }
+        Ok(())
+    }
+
+    /// The bend's middle-surface radius.
+    pub fn neutral(&self, t: f64) -> f64 {
+        self.bend + t / 2.0
+    }
+
+    /// The collar's flat part, across its middle surface: from the bend's end to the rim.
+    pub fn flat(&self, t: f64) -> f64 {
+        self.width + t / 2.0 - self.neutral(t)
+    }
+
+    /// The pipe the collar is turned out of, unrolled: the pipe's circumference round, its
+    /// height plus the bend's and the collar's lengths on the middle surface high (the collar
+    /// stretches round as it turns out, so the sheet thins there: a blank's length, not an exact
+    /// development); the line where the bend starts marked.
+    pub fn pattern(&self, t: f64) -> Pattern {
+        let circ = std::f64::consts::TAU * self.radius;
+        let tall = self.height + self.neutral(t) * std::f64::consts::FRAC_PI_2 + self.flat(t);
+        let outline = vec![Vec2::new(0.0, 0.0), Vec2::new(circ, 0.0), Vec2::new(circ, tall), Vec2::new(0.0, tall)];
+        let marks = vec![(Vec2::new(0.0, self.height), Vec2::new(circ, self.height))];
+        Pattern { outline, holes: Vec::new(), marks }
+    }
+}
+
 /// The area a closed ring encloses (positive counter-clockwise).
 pub fn area(ring: &[Vec2]) -> f64 {
     let n = ring.len();

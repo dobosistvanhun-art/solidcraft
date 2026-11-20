@@ -1324,6 +1324,32 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Straight")]
         straight: Option<Expr>,
+        /// A flange's bore (none: a blind flange), a nipple's or threaded socket's bore.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Bore")]
+        bore: Option<Expr>,
+        /// A flange's bolt circle diameter, its bolt holes and their diameter.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Bolt circle")]
+        pitch: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(unitless = "Bolt holes")]
+        holes: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Bolt hole")]
+        hole: Option<Expr>,
+        /// A nipple's (outside) or a threaded socket's (inside) pipe thread, as `G1/2`, and how
+        /// far it runs from the end (default: all its length).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Thread length")]
+        thread_length: Option<Expr>,
+        /// A collar's (bördel's) width beyond the pipe's outside; its bend's inside radius is
+        /// `bend`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Collar width")]
+        width: Option<Expr>,
     },
     /// Sheet metal base flange: a sheet from a closed profile (thickness from the rule).
     SheetBase {
@@ -2358,6 +2384,14 @@ pub enum FittingType {
     Cone,
     /// A mitred elbow.
     Elbow,
+    /// A plate flange (blind without a bore).
+    Flange,
+    /// A socket: a sleeve over a pipe, of sheet (or turned, with a pipe thread inside).
+    Socket,
+    /// A threaded end: a pipe nipple with a pipe thread outside.
+    Nipple,
+    /// A pipe with a turned-out collar (a bördel).
+    Collar,
 }
 
 /// What a Gear feature makes.
@@ -2904,6 +2938,10 @@ impl FeatureKind {
             FeatureKind::Gear { .. } => "Gear",
             FeatureKind::Fitting { fitting: FittingType::Elbow, .. } => "Elbow",
             FeatureKind::Fitting { fitting: FittingType::Cone, .. } => "Cone",
+            FeatureKind::Fitting { fitting: FittingType::Flange, .. } => "PipeFlange",
+            FeatureKind::Fitting { fitting: FittingType::Socket, .. } => "Socket",
+            FeatureKind::Fitting { fitting: FittingType::Nipple, .. } => "Nipple",
+            FeatureKind::Fitting { fitting: FittingType::Collar, .. } => "Collar",
             FeatureKind::Fitting { .. } => "Tee",
             FeatureKind::Rib { web: false, .. } => "Rib",
             FeatureKind::Rib { .. } => "Web",

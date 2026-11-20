@@ -122,6 +122,10 @@ pub struct PickEdge {
     /// The model edge it is (body, edge index) and, for a straight one, its ends in 3D.
     #[serde(skip)]
     model: Option<(String, usize, Vec3, Vec3)>,
+    /// A plane curve seen edge on (a circle seen side on, a mitre's ellipse): drawn as the line
+    /// between its outermost points, which `model` holds.
+    #[serde(skip)]
+    curve: bool,
 }
 
 /// The drawn lines of a view, bucketed, to tell whether a point lies on one (and on a visible one).
@@ -191,9 +195,16 @@ fn reference_snaps(edges: &[PickEdge], basis: &Basis, tol: f64, on: &dyn Fn(Vec2
         radius: None,
         sharp: false,
     };
+    // a curve seen edge on: its outermost points are the ends a dimension measures to
+    for x in edges.iter().filter(|x| x.kind == "line" && x.curve) {
+        let (Some((body, i, a3, b3)), Some(b)) = (x.model.as_ref(), x.b) else { continue };
+        out.push(snap(x.a, body, *i, "far:0".into(), *a3));
+        out.push(snap(b, body, *i, "far:1".into(), *b3));
+        out.push(snap((x.a + b) * 0.5, body, *i, "far:mid".into(), (*a3 + *b3) * 0.5));
+    }
     let lines: Vec<(Vec2, Vec2, &str, usize, Vec3, Vec3)> = edges
         .iter()
-        .filter(|x| x.kind == "line")
+        .filter(|x| x.kind == "line" && !x.curve)
         .filter_map(|x| {
             let (body, i, a3, b3) = x.model.as_ref()?;
             Some((x.a, x.b?, body.as_str(), *i, *a3, *b3))
@@ -318,6 +329,122 @@ fn side_axes(m: &Model, basis: &Basis) -> Vec<(Vec2, Vec2, f64)> {
     groups.into_iter().filter(|g| g.3 - g.2 > 1e-6).map(|(o, a, t0, t1, r)| (basis.project(o + a * t0), basis.project(o + a * t1), r)).collect()
 }
 
+/// A plane curve seen edge on (a circle seen side on, an elbow's mitre ellipse): every point of
+/// it, as the view sees it, on the line between its two outermost points, which it gives (their
+/// indices, in a fixed order: the lower x first, then the lower y). `None`: it is no such curve.
+fn edge_on(e: &[Vec3], basis: &Basis, tol: f64) -> Option<(usize, usize)> {
+    if e.len() < 3 {
+        return None;
+    }
+    let pts: Vec<Vec2> = e.iter().map(|p| basis.project(*p)).collect();
+    let farthest = |from: Vec2| pts.iter().enumerate().max_by(|x, y| x.1.dist(from).total_cmp(&y.1.dist(from))).map(|(k, _)| k);
+    let i = farthest(*pts.first()?)?;
+    let j = farthest(*pts.get(i)?)?;
+    let (a, b) = (*pts.get(i)?, *pts.get(j)?);
+    let len = a.dist(b);
+    if len < tol * 4.0 {
+        return None;
+    }
+    let d = (b - a) * (1.0 / len);
+    let off = |p: &Vec2| ((p.x - a.x) * d.y - (p.y - a.y) * d.x).abs();
+    if pts.iter().any(|p| off(p) > tol) {
+        return None;
+    }
+    let lower = |k: usize, l: usize| {
+        let (p, q) = (pts[k], pts[l]);
+        if (p.x - q.x).abs() > tol { p.x < q.x } else { p.y < q.y }
+    };
+    Some(if lower(i, j) { (i, j) } else { (j, i) })
+}
+
+/// The outermost points, as the view sees them, of the plane curve edge `i` of `edges` is a
+/// piece of, seen edge on: its pieces joined end to end along one line (a circle made of arcs, a
+/// mitre's ellipse), each outermost point found between the points about it (a parabola through
+/// the nearest three), so it is where the curve turns, not the nearest point of its polyline.
+/// In the fixed order of [`edge_on`].
+fn edge_on_line(edges: &[Vec<Vec3>], i: usize, basis: &Basis, tol: f64) -> Option<(Vec3, Vec3)> {
+    let e = edges.get(i)?;
+    let (i0, i1) = edge_on(e, basis, tol)?;
+    let (a, b) = (basis.project(*e.get(i0)?), basis.project(*e.get(i1)?));
+    let d = (b - a) * (1.0 / a.dist(b));
+    let off = |p: Vec3| {
+        let q = basis.project(p) - a;
+        (q.x * d.y - q.y * d.x).abs()
+    };
+    let straight = |f: &[Vec3]| match (f.first(), f.last()) {
+        (Some(p), Some(q)) => f.iter().all(|x| x.dist_to_segment(*p, *q) < tol),
+        _ => true,
+    };
+    // the pieces joined to it end to end, on its line and curved
+    let join = tol.min(1e-6 * (1.0 + a.x.abs().max(a.y.abs())) + 1e-9).max(1e-9);
+    let mut taken = vec![i];
+    let mut ends: Vec<Vec3> = [e.first(), e.last()].into_iter().flatten().copied().collect();
+    loop {
+        let before = taken.len();
+        for (j, f) in edges.iter().enumerate().take(20_000) {
+            if taken.contains(&j) || f.len() < 2 || straight(f) || !f.iter().all(|p| off(*p) <= tol) {
+                continue;
+            }
+            let (Some(p), Some(q)) = (f.first(), f.last()) else { continue };
+            if ends.iter().any(|x| x.dist(*p) < join.max(tol * 1e-3) || x.dist(*q) < join.max(tol * 1e-3)) {
+                taken.push(j);
+                ends.push(*p);
+                ends.push(*q);
+            }
+        }
+        if taken.len() == before || taken.len() > 64 {
+            break;
+        }
+    }
+    let mut pts: Vec<Vec3> = Vec::new();
+    for j in &taken {
+        for p in edges.get(*j).into_iter().flatten() {
+            if !pts.iter().any(|x| x.dist(*p) < 1e-9) {
+                pts.push(*p);
+            }
+        }
+    }
+    let u = |p: Vec3| (basis.project(p) - a).dot(d);
+    // the outermost point one way (`sign` 1: along d, −1: back), refined
+    let extreme = |sign: f64| -> Option<Vec3> {
+        let k = (0..pts.len()).max_by(|x, y| (sign * u(pts[*x])).total_cmp(&(sign * u(pts[*y]))))?;
+        let pk = pts[k];
+        let mut near: Vec<usize> = (0..pts.len()).filter(|x| *x != k).collect();
+        near.sort_by(|x, y| pts[*x].dist(pk).total_cmp(&pts[*y].dist(pk)));
+        let (Some(&m), Some(&n)) = (near.first(), near.get(1)) else { return Some(pk) };
+        let (pm, pn) = (pts[m], pts[n]);
+        // the two neighbours on either side of it (an end of an open curve has them on one side)
+        if (pm - pk).dot(pn - pk) > 0.0 {
+            return Some(pk);
+        }
+        let (s0, s2) = (-pm.dist(pk), pn.dist(pk));
+        let (f0, f1, f2) = (sign * u(pm), sign * u(pk), sign * u(pn));
+        // u(s) through (s0, f0), (0, f1), (s2, f2): its top
+        let den = s0 * s2 * (s0 - s2);
+        if den.abs() < 1e-18 {
+            return Some(pk);
+        }
+        let aa = (s2 * (f0 - f1) - s0 * (f2 - f1)) / den;
+        let bb = (s0 * s0 * (f2 - f1) - s2 * s2 * (f0 - f1)) / den;
+        if aa >= 0.0 {
+            return Some(pk);
+        }
+        let t = (-bb / (2.0 * aa)).clamp(s0, s2);
+        // the point there on the parabola through the three points
+        let l0 = t * (t - s2) / (s0 * (s0 - s2));
+        let l1 = (t - s0) * (t - s2) / (s0 * s2);
+        let l2 = t * (t - s0) / (s2 * (s2 - s0));
+        Some(pm * l0 + pk * l1 + pn * l2)
+    };
+    let (lo, hi) = (extreme(-1.0)?, extreme(1.0)?);
+    let (p, q) = (basis.project(lo), basis.project(hi));
+    if p.dist(q) < tol * 4.0 {
+        return None;
+    }
+    let lower = if (p.x - q.x).abs() > tol { p.x < q.x } else { p.y < q.y };
+    Some(if lower { (lo, hi) } else { (hi, lo) })
+}
+
 /// The points and edges of a view a pointer may pick (view coordinates), each kept only where the
 /// view draws a line (`radius`: the model's, for the tolerance).
 fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mut Vec<Snap>, radius: f64) -> (Vec<PickPoint>, Vec<PickEdge>) {
@@ -336,11 +463,10 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mu
     for ((name, _, mesh), circles) in m.bodies.iter().zip(&m.circles) {
         for (i, e) in mesh.edges.iter().enumerate().take(20_000) {
             let (Some(a3), Some(b3)) = (e.first(), e.last()) else { continue };
-            if let Some(c) = circles.get(i).copied().flatten() {
-                // Only a circle seen face on draws as one.
-                if c.axis.dot(basis.b).abs() < 0.999 {
-                    continue;
-                }
+            // Only a circle seen face on draws as one (seen side on, it is a line below).
+            if let Some(c) = circles.get(i).copied().flatten()
+                && c.axis.dot(basis.b).abs() >= 0.999
+            {
                 let center = basis.project(c.center);
                 let mid = basis.project(e.get(e.len() / 2).copied().unwrap_or(c.start));
                 let vis = on(mid).max(on(basis.project(c.start)));
@@ -362,14 +488,17 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mu
                     full,
                     hidden: vis < 2,
                     model: Some((name.clone(), i, c.center, c.center)),
+                    curve: false,
                 });
                 continue;
             }
-            // A straight edge: every point of it on the line between its ends.
+            // A straight edge: every point of it on the line between its ends; or a plane curve
+            // seen edge on, drawn as the line between its outermost points.
             let straight = e.len() >= 2 && e.iter().all(|p| p.dist_to_segment(*a3, *b3) < tol);
-            if !straight {
-                continue;
-            }
+            let ends = if straight { Some((*a3, *b3)) } else { edge_on_line(&mesh.edges, i, basis, tol) };
+            let Some((a3, b3)) = ends else { continue };
+            let curve = !straight;
+            let (a3, b3) = (&a3, &b3);
             let (a, b) = (basis.project(*a3), basis.project(*b3));
             if a.dist(b) < tol * 4.0 {
                 continue; // seen end on
@@ -384,7 +513,16 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mu
             {
                 continue;
             }
-            edges.push(PickEdge { kind: "line", a, b: Some(b), r: None, full: false, hidden: vis < 2, model: Some((name.clone(), i, *a3, *b3)) });
+            edges.push(PickEdge {
+                kind: "line",
+                a,
+                b: Some(b),
+                r: None,
+                full: false,
+                hidden: vis < 2,
+                model: Some((name.clone(), i, *a3, *b3)),
+                curve,
+            });
         }
     }
     // A whole circle's seam (its one vertex, and the ends of the seam line of a cylinder through
@@ -413,7 +551,7 @@ fn pickables(m: &Model, basis: &Basis, lines: &[(Vec2, Vec2, Style)], snaps: &mu
             "sharp"
         } else if sn.radius.is_some() {
             "center"
-        } else if sn.r.at == "mid" {
+        } else if sn.r.at == "mid" || sn.r.at == "far:mid" {
             "mid"
         } else if sn.r.at.starts_with("quad:") {
             "quad"
@@ -737,7 +875,7 @@ fn fitting_view(body: &str, pat: &solidcraft_doc::fitting::Pattern) -> Result<Vi
         for i in 0..n {
             let (a, b) = (ring[i], ring[(i + 1) % n]);
             lines.push((a - c, b - c, Style::Visible));
-            edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false, model: None });
+            edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false, model: None, curve: false });
             snaps.push(Snap {
                 at: a - c,
                 r: DimRef { body: body.to_string(), edge: None, at: "flat".into(), point: Vec3::new(a.x, a.y, 0.0) },
@@ -891,7 +1029,7 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
         for g in &l.segs {
             match *g {
                 Seg2::Line { a, b } => {
-                    edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false, model: None });
+                    edges.push(PickEdge { kind: "line", a: a - c, b: Some(b - c), r: None, full: false, hidden: false, model: None, curve: false });
                     // Its middle, measured to as a flat point.
                     let m = (a + b) * 0.5;
                     points.push(PickPoint { at: m - c, kind: "mid", hidden: false });
@@ -900,7 +1038,16 @@ fn flat_view(s: &crate::Session, d: &Drawing, body: &str) -> Result<ViewGeom, St
                 Seg2::Arc { center, radius, .. }
                     if !edges.iter().any(|x| x.kind == "circle" && x.a.dist(center - c) < 1e-6 && x.r == Some(radius)) =>
                 {
-                    edges.push(PickEdge { kind: "circle", a: center - c, b: None, r: Some(radius), full: round, hidden: false, model: None });
+                    edges.push(PickEdge {
+                        kind: "circle",
+                        a: center - c,
+                        b: None,
+                        r: Some(radius),
+                        full: round,
+                        hidden: false,
+                        model: None,
+                        curve: false,
+                    });
                 }
                 _ => {}
             }
@@ -1283,6 +1430,15 @@ fn resolve(m: &Model, r: &DimRef, basis: &Basis) -> (Vec3, Option<f64>) {
             "center" => circles.get(i).copied().flatten().map(|c| (c.center, Some(c.radius))),
             "sharp" => virtual_sharp(circles, mesh, i).map(|(.., x)| (x, None)),
             "mid" => Some(((*e.first()? + *e.last()?) * 0.5, None)),
+            q if q.starts_with("far:") => {
+                let (p, q2) = edge_on_line(&mesh.edges, i, basis, 1e-3)?;
+                match q.trim_start_matches("far:") {
+                    "0" => Some((p, None)),
+                    "1" => Some((q2, None)),
+                    "mid" => Some(((p + q2) * 0.5, None)),
+                    _ => None,
+                }
+            }
             q if q.starts_with("quad:") => {
                 let c = circles.get(i).copied().flatten()?;
                 let dir = match q.trim_start_matches("quad:") {

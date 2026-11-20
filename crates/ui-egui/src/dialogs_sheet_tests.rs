@@ -1531,3 +1531,70 @@ fn pipe_fitting_dialogs_make_and_edit_their_fittings() {
         assert_eq!(app.session.model.state().bodies.len(), bodies, "{cmd} rebuilt");
     }
 }
+
+/// A drawing lists every pipe fitting piece with a flat pattern (an elbow's segments) and puts
+/// each one's pattern as a view.
+#[test]
+fn a_drawing_lists_the_fitting_pieces_and_draws_their_patterns() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("fitting.elbow", json!({"diameter": 100, "thickness": 1, "segments": 4})).unwrap();
+    app.run("fitting.nipple", json!({"thread": "G1/2", "height": 30, "thickness": 2})).unwrap();
+    let pieces = crate::dialogs_drawing::fitting_pieces(&app);
+    assert_eq!(pieces.len(), 4, "the elbow's segments; the turned nipple has none");
+    assert!(pieces[2].label.ends_with("segment 3"), "{}", pieces[2].label);
+    let id = app.run("drawing.create", json!({"name": "D", "size": "A1", "views": "none"})).unwrap()["drawing"].as_u64().unwrap();
+    for p in &pieces {
+        app.run("drawing.view.flat", json!({"drawing": id, "body": p.body})).unwrap();
+    }
+    assert_eq!(app.session.doc.drawings[0].views.len(), 4);
+}
+
+/// Export Fitting Patterns as DXF from the ribbon says why when there is nothing to save, and
+/// asks where to save a fitting's pieces.
+#[test]
+fn fitting_dxf_from_the_ribbon_asks_where_to_save() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    assert!(crate::toolbar::start_fitting_dxf(&mut app, "fitting.export_dxf"));
+    assert!(app.status.as_ref().is_some_and(|(_, _, error)| *error), "no fitting yet");
+    app.run("fitting.nipple", json!({"thread": "G1/2", "height": 30, "thickness": 2})).unwrap();
+    app.status = None;
+    assert!(crate::toolbar::start_fitting_dxf(&mut app, "fitting.export_dxf"));
+    assert!(app.status.as_ref().is_some_and(|(_, _, error)| *error), "a turned part has no pattern");
+    assert!(!crate::toolbar::start_fitting_dxf(&mut app, "sheet.export_dxf"), "not its command");
+}
+
+/// The flange, socket, threaded end and collar dialogs make their fittings and reopen to edit
+/// them; a flange of a standard size sends its class and size, a threaded end its thread.
+#[test]
+fn flange_socket_threaded_end_and_collar_dialogs_make_and_edit_their_fittings() {
+    for (cmd, threads) in [("fitting.flange", 0), ("fitting.socket", 0), ("fitting.nipple", 1), ("fitting.collar", 0)] {
+        let mut app = SolveApp::new(Session::default(), Services::default());
+        app.start(cmd);
+        let mut d = app.dialog.clone().unwrap();
+        if cmd == "fitting.flange" {
+            d.extra.insert("pn".into(), json!(10));
+            d.extra.insert("dn".into(), json!(80));
+        }
+        let c = apply_commands(&app, &d).unwrap();
+        assert_eq!(c[0].0, cmd);
+        assert!(c[0].1.get("operation").is_none(), "{}", c[0].1);
+        if cmd == "fitting.flange" {
+            assert_eq!((c[0].1["pn"].clone(), c[0].1["dn"].clone()), (json!(10), json!(80)));
+        }
+        if cmd == "fitting.nipple" {
+            assert_eq!(c[0].1["thread"], "G1/2", "a thread is no length: {}", c[0].1);
+            assert!(c[0].1.get("measured").is_none());
+        }
+        run_all(&mut app, c);
+        assert_eq!(app.session.model.state().bodies.len(), 1, "{cmd}");
+        assert_eq!(app.session.model.state().threads.len(), threads, "{cmd}");
+        let f = app.session.doc.features.last().unwrap().clone();
+        let e = edit_dialog(&app, f.id, None).unwrap();
+        let c = apply_commands(&app, &e).unwrap();
+        assert_eq!(c[0].0, "timeline.redefine");
+        assert_eq!(c[0].1["command"], cmd);
+        run_all(&mut app, c);
+        assert_eq!(app.session.model.state().bodies.len(), 1, "{cmd} rebuilt");
+        assert_eq!(app.session.model.state().threads.len(), threads, "{cmd} rebuilt");
+    }
+}

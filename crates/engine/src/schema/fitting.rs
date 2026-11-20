@@ -1,6 +1,7 @@
 //! Contracts and result types for the pipe fitting commands in `cmd/fitting.rs`: a tee, a cone
-//! (concentric or eccentric, with or without a branch into its mantle) and a mitred elbow, each
-//! made of sheet whose pieces have exact flat patterns, and their DXF export.
+//! (concentric or eccentric, with or without a branch into its mantle), a mitred elbow, a socket
+//! and a collar, made of sheet whose pieces have flat patterns, a plate flange (its pattern the
+//! part), a threaded socket and a threaded end (turned), and the patterns' DXF export.
 //!
 //! The diameters are the sheet's outside unless `measured` says otherwise; the flat patterns
 //! are worked out on the sheet's middle surface.
@@ -154,6 +155,145 @@ pub struct ElbowParams {
     pub common: FeatureCommon,
 }
 
+/// Add a plate flange (EN 1092-1 type 01 by `pn` and `dn`, or any sizes): a ring of plate with
+/// its bolt holes, cut flat (its flat pattern is the part). Blind without a bore.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct FlangeParams {
+    /// The pressure class of the standard sizes: 6, 10 or 16. Default 16.
+    #[serde(default)]
+    pub pn: Option<u16>,
+    /// The nominal size (DN 10…600) of the standard sizes; without it every size is given.
+    #[serde(default)]
+    pub dn: Option<u16>,
+    /// A blind flange: no bore. Default false.
+    #[serde(default)]
+    pub blind: Option<bool>,
+    /// The outside diameter (the standard's, or given).
+    #[serde(default)]
+    pub diameter: Option<LengthExpr>,
+    /// The bore (the standard's: for the pipe's outside, welded in).
+    #[serde(default)]
+    pub bore: Option<LengthExpr>,
+    /// The bolt circle's diameter.
+    #[serde(default)]
+    pub bolt_circle: Option<LengthExpr>,
+    /// The bolt holes' count.
+    #[serde(default)]
+    pub holes: Option<NumberExpr>,
+    /// A bolt hole's diameter.
+    #[serde(default)]
+    pub hole: Option<LengthExpr>,
+    /// The plate's thickness.
+    #[serde(default)]
+    pub thickness: Option<LengthExpr>,
+    /// The centre of the flange's face. Default: the origin.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "PointExpr3")]
+    pub base: Option<PointExpr3>,
+    /// The flange's axis (its plate square to it, its thickness along it). Default: Z.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "AxisDir")]
+    pub axis: Option<AxisDir>,
+    #[serde(flatten, deserialize_with = "feature_common")]
+    pub common: FeatureCommon,
+}
+
+/// Add a socket (a coupling sleeve): of sheet, a sleeve over a pipe with its flat pattern; with
+/// `thread`, a turned socket with a pipe thread inside.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SocketParams {
+    /// Of sheet: the pipe's diameter it goes over (the sleeve's inside, unless `measured` says
+    /// otherwise). Threaded: the socket's outside diameter.
+    pub diameter: LengthExpr,
+    /// The socket's length, along `axis`.
+    pub height: LengthExpr,
+    /// The sheet's (the wall's) thickness.
+    pub thickness: LengthExpr,
+    /// A pipe thread inside, as `G1/2` or `Rp1/2`: a turned socket.
+    #[serde(default)]
+    pub thread: Option<String>,
+    /// How far the thread runs from the top end. Default: all the length.
+    #[serde(default)]
+    pub thread_length: Option<LengthExpr>,
+    /// A threaded socket's bore. Default: the thread's minor diameter.
+    #[serde(default)]
+    pub bore: Option<LengthExpr>,
+    /// Which diameter a sheet socket's `diameter` is. Default: inside.
+    #[serde(default)]
+    pub measured: Option<MeasuredParam>,
+    /// The centre of the bottom. Default: the origin.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "PointExpr3")]
+    pub base: Option<PointExpr3>,
+    /// The axis, from the bottom to the top. Default: Z.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "AxisDir")]
+    pub axis: Option<AxisDir>,
+    #[serde(flatten, deserialize_with = "feature_common")]
+    pub common: FeatureCommon,
+}
+
+/// Add a threaded end (a pipe nipple): a turned tube with a pipe thread outside, from its top.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NippleParams {
+    /// The pipe thread outside, as `G1/2` or `R1/2`; its major diameter is the nipple's.
+    pub thread: String,
+    /// The nipple's length, along `axis`.
+    pub height: LengthExpr,
+    /// The wall's thickness (the bore is the thread's major diameter less twice it).
+    pub thickness: LengthExpr,
+    /// How far the thread runs from the top end. Default: all the length.
+    #[serde(default)]
+    pub thread_length: Option<LengthExpr>,
+    /// The bore, instead of the thickness's.
+    #[serde(default)]
+    pub bore: Option<LengthExpr>,
+    /// The centre of the bottom. Default: the origin.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "PointExpr3")]
+    pub base: Option<PointExpr3>,
+    /// The axis, from the bottom to the threaded top. Default: Z.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "AxisDir")]
+    pub axis: Option<AxisDir>,
+    #[serde(flatten, deserialize_with = "feature_common")]
+    pub common: FeatureCommon,
+}
+
+/// Add a pipe with a turned-out collar at its top (a bördel, a lap-joint stub end).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CollarParams {
+    /// The pipe's diameter.
+    pub diameter: LengthExpr,
+    /// The pipe's height up to where it bends out.
+    pub height: LengthExpr,
+    /// The sheet's thickness.
+    pub thickness: LengthExpr,
+    /// How far the collar reaches beyond the pipe's outside. Default: a quarter of the diameter.
+    #[serde(default)]
+    pub width: Option<LengthExpr>,
+    /// The bend's inside radius. Default: the thickness.
+    #[serde(default)]
+    pub bend: Option<LengthExpr>,
+    /// Which diameter `diameter` is. Default: outside.
+    #[serde(default)]
+    pub measured: Option<MeasuredParam>,
+    /// The centre of the bottom. Default: the origin.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "PointExpr3")]
+    pub base: Option<PointExpr3>,
+    /// The axis, from the bottom to the collar. Default: Z.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "AxisDir")]
+    pub axis: Option<AxisDir>,
+    #[serde(flatten, deserialize_with = "feature_common")]
+    pub common: FeatureCommon,
+}
+
 /// A fitting's flat patterns, or one DXF of them per piece.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -174,7 +314,7 @@ pub struct FittingPatternParams {
 /// One piece's flat pattern.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FittingPiece {
-    /// `body`, `branch` or `segment N`.
+    /// `body`, `branch`, `segment N` or `flange`.
     pub piece: String,
     /// The body the piece is in the model.
     pub body: Option<String>,
@@ -207,6 +347,9 @@ pub struct FittingPatternResult {
     pub feature: u64,
     /// The sheet's thickness in mm.
     pub thickness: f64,
+    /// Whether the patterns are exact developments (false: a collar's blank, which stretches
+    /// as it is turned out).
+    pub exact: bool,
     pub pieces: Vec<FittingPiece>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
@@ -214,7 +357,7 @@ pub struct FittingPatternResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConeParams, ElbowParams, FittingPatternParams, TeeParams};
+    use super::{CollarParams, ConeParams, ElbowParams, FittingPatternParams, FlangeParams, NippleParams, SocketParams, TeeParams};
     use crate::schema::input_schema_for;
 
     fn keys(schema: schemars::Schema) -> Vec<String> {
@@ -227,5 +370,9 @@ mod tests {
         assert!(keys(input_schema_for::<ConeParams>()).contains(&"shift".to_string()));
         assert!(keys(input_schema_for::<ElbowParams>()).contains(&"segments".to_string()));
         assert_eq!(keys(input_schema_for::<FittingPatternParams>()), ["feature", "path", "piece"]);
+        assert!(keys(input_schema_for::<FlangeParams>()).contains(&"dn".to_string()));
+        assert!(keys(input_schema_for::<SocketParams>()).contains(&"thread".to_string()));
+        assert!(keys(input_schema_for::<NippleParams>()).contains(&"thread_length".to_string()));
+        assert!(keys(input_schema_for::<CollarParams>()).contains(&"width".to_string()));
     }
 }

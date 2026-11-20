@@ -749,3 +749,39 @@ fn a_modelled_thread_leaves_the_bar_smooth_and_its_drawing_quick() {
     let lines = r["prims"].as_array().unwrap().iter().filter(|p| p["type"] == "line").count();
     assert!(lines < 20_000, "{lines} lines");
 }
+
+/// An elbow's front view has no straight edges: its ends' circles and its mitres' ellipses are
+/// seen edge on, as lines. Those lines take dimensions: an end's line is the pipe's diameter,
+/// and the dimension follows the elbow when it is made bigger.
+#[test]
+fn a_curve_seen_edge_on_takes_a_dimension_as_a_line() {
+    let mut s = Session::default();
+    run(&mut s, "fitting.elbow", json!({"diameter": 100, "thickness": 1, "segments": 3, "bend": 150, "name": "E"}));
+    let id = run(&mut s, "drawing.create", json!({"name": "D", "size": "A2", "scale": "1:2", "views": "none"}))["drawing"].as_u64().unwrap();
+    let front = run(&mut s, "drawing.view.base", json!({"drawing": id, "orientation": "front", "at": [300, 200]}))["view"].as_u64().unwrap();
+    let r = run(&mut s, "drawing.render", json!({"drawing": id}));
+    let v = r["views"].as_array().and_then(|vs| vs.iter().find(|v| v["id"] == front).cloned()).unwrap();
+    let lines: Vec<([f64; 2], [f64; 2])> = v["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "line")
+        .map(|e| ([e["a"][0].as_f64().unwrap(), e["a"][1].as_f64().unwrap()], [e["b"][0].as_f64().unwrap(), e["b"][1].as_f64().unwrap()]))
+        .collect();
+    assert!(lines.len() >= 3, "the ends and the mitres, seen edge on: {}", v["edges"]);
+    // the end at the start: a line across the pipe, 100 / 2 = 50 sheet mm long at 1:2
+    let len = |l: &([f64; 2], [f64; 2])| (l.0[0] - l.1[0]).hypot(l.0[1] - l.1[1]);
+    let end = lines.iter().find(|l| (len(l) - 50.0).abs() < 0.2).copied().unwrap_or_else(|| panic!("an end's line: {lines:?}"));
+    run(&mut s, "drawing.dimension", json!({"drawing": id, "view": front, "kind": "aligned", "points": [end.0, end.1]}));
+    let t = texts(&run(&mut s, "drawing.render", json!({"drawing": id})));
+    assert!(t.iter().any(|x| x == "100"), "{t:?}");
+    // a bigger pipe: the dimension follows its ends
+    let f = s.doc.features.iter().find(|f| f.name == "E").map(|f| f.id).unwrap();
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": f, "command": "fitting.elbow", "params": {"diameter": 120, "thickness": 1, "segments": 3, "bend": 150}}),
+    );
+    let t = texts(&run(&mut s, "drawing.render", json!({"drawing": id})));
+    assert!(t.iter().any(|x| x == "120"), "{t:?}");
+}

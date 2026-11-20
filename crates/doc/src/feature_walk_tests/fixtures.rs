@@ -145,7 +145,7 @@ pub(super) fn fixtures() -> Vec<(&'static str, Value)> {
         ),
         (
             "fitting",
-            json!({"type": "fitting", "base": ["fitting.x", "fitting.y", "fitting.z"], "axis": [0, 0, 1], "fitting": "tee", "thickness": "fitting.thickness", "diameter": "fitting.diameter", "top": "fitting.top", "height": "fitting.height", "shift": "fitting.shift", "branch": "fitting.branch", "branch_length": "fitting.branch_length", "branch_at": "fitting.branch_at", "branch_angle": "fitting.branch_angle", "branch_offset": "fitting.branch_offset", "bend": "fitting.bend", "angle": "fitting.angle", "segments": "fitting.segments", "straight": "fitting.straight"}),
+            json!({"type": "fitting", "base": ["fitting.x", "fitting.y", "fitting.z"], "axis": [0, 0, 1], "fitting": "tee", "thickness": "fitting.thickness", "diameter": "fitting.diameter", "top": "fitting.top", "height": "fitting.height", "shift": "fitting.shift", "branch": "fitting.branch", "branch_length": "fitting.branch_length", "branch_at": "fitting.branch_at", "branch_angle": "fitting.branch_angle", "branch_offset": "fitting.branch_offset", "bend": "fitting.bend", "angle": "fitting.angle", "segments": "fitting.segments", "straight": "fitting.straight", "bore": "fitting.bore", "pitch": "fitting.pitch", "holes": "fitting.holes", "hole": "fitting.hole", "thread": "G1/2", "thread_length": "fitting.thread_length", "width": "fitting.width"}),
         ),
         ("sheet_base", json!({"type": "sheet_base", "sketch": 1, "profiles": {"type": "all"}})),
         ("sheet_contour", json!({"type": "sheet_contour", "sketch": 1, "curves": ["l1"], "distance": "contour.distance"})),

@@ -600,6 +600,56 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
     enter
 }
 
+/// A flange's standard size: its pressure class and nominal size (EN 1092-1 type 01), which
+/// fill in its sizes; Custom keeps them as they are typed.
+fn flange_standard_rows(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>, fields: &mut [(&'static str, String)]) {
+    use solidcraft_engine::doc::flange_catalog as fc;
+    let classes = ["PN 6", "PN 10", "PN 16"];
+    let pn_before = extra.get("pn").and_then(Value::as_u64).and_then(|pn| fc::CLASSES.iter().position(|c| u64::from(*c) == pn)).unwrap_or(2);
+    let mut pn_i = pn_before;
+    choice_row(ui, "ui.fitting_pn", "flange_pn", &mut pn_i, &classes);
+    let pn = fc::CLASSES.get(pn_i).copied().unwrap_or(16);
+    let dns = fc::sizes(pn);
+    let mut labels: Vec<String> = dns.iter().map(|dn| format!("DN {dn}")).collect();
+    labels.push("ui.fitting_custom".into());
+    let names: Vec<&str> = labels.iter().map(String::as_str).collect();
+    // a new dialog starts at DN 50; one reopened from the timeline at Custom (its own sizes)
+    let dn_before = match extra.get("dn") {
+        Some(v) => v.as_u64().and_then(|dn| dns.iter().position(|d| u64::from(*d) == dn)).unwrap_or(dns.len()),
+        None if !extra.contains_key("base") => dns.iter().position(|d| *d == 50).unwrap_or(dns.len()),
+        None => dns.len(),
+    };
+    let mut dn_i = dn_before;
+    choice_row(ui, "ui.fitting_dn", "flange_dn", &mut dn_i, &names);
+    if pn_i != pn_before {
+        extra.insert("pn".into(), json!(pn));
+    }
+    match dns.get(dn_i).copied() {
+        Some(dn) => {
+            let changed = pn_i != pn_before || dn_i != dn_before || !extra.contains_key("dn");
+            extra.insert("pn".into(), json!(pn));
+            extra.insert("dn".into(), json!(dn));
+            if changed && let Some(size) = fc::size(pn, dn) {
+                for (k, v) in fields.iter_mut() {
+                    let value = match *k {
+                        "diameter" => size.outside,
+                        "bore" => size.bore,
+                        "bolt_circle" => size.pitch,
+                        "holes" => f64::from(size.holes),
+                        "hole" => size.hole,
+                        "thickness" => size.thickness,
+                        _ => continue,
+                    };
+                    *v = if *k == "holes" { format!("{value}") } else { format!("{value} mm") };
+                }
+            }
+        }
+        None => {
+            extra.remove("dn");
+        }
+    }
+}
+
 fn extra_segments(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>, key: &str, choices: &[(&str, &str)]) {
     let current = extra.get(key).and_then(Value::as_str).and_then(|value| choices.iter().position(|(_, key)| *key == value)).unwrap_or(0);
     let mut selected = current;
@@ -665,6 +715,12 @@ pub(crate) fn primitive_label(key: &str) -> &str {
         "branch_at" => "ui.fitting_branch_at",
         "branch_angle" => "ui.fitting_branch_angle",
         "branch_offset" => "ui.fitting_branch_offset",
+        "bore" => "ui.fitting_bore",
+        "bolt_circle" => "ui.fitting_bolt_circle",
+        "holes" => "ui.fitting_holes",
+        "hole" => "ui.fitting_hole",
+        "thread" => "ui.fitting_thread",
+        "thread_length" => "ui.fitting_thread_length",
         _ => key,
     }
 }
@@ -920,6 +976,9 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         }
         Kind::Primitive { cmd, fields, operation, at, .. } => {
             let from_sketch = *cmd == "solid.coil" && d.inputs.first().is_some_and(|i| i.accept & selection::PROFILES != 0 && !i.items.is_empty());
+            if *cmd == "fitting.flange" {
+                flange_standard_rows(ui, &mut d.extra, fields);
+            }
             for (k, v) in fields.iter_mut() {
                 if *k == "chain" {
                     // The chain catalogue: its number with pitch, roller and width; or a chain of
@@ -979,9 +1038,16 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                 });
             }
             if crate::dialogs::is_fitting(cmd) {
-                form_row(ui, "ui.fitting_measured", |ui| {
-                    extra_segments(ui, &mut d.extra, "measured", &[("Outside", "outside"), ("Inside", "inside"), ("ui.fitting_middle", "middle")])
-                });
+                // a flange's and a threaded end's sizes are their own: nothing to measure on a sheet
+                // a socket's diameter is the pipe's it goes over: inside first (its default)
+                let choices: &[(&str, &str)] = if *cmd == "fitting.socket" {
+                    &[("Inside", "inside"), ("Outside", "outside"), ("ui.fitting_middle", "middle")]
+                } else {
+                    &[("Outside", "outside"), ("Inside", "inside"), ("ui.fitting_middle", "middle")]
+                };
+                if !matches!(*cmd, "fitting.flange" | "fitting.nipple") {
+                    form_row(ui, "ui.fitting_measured", |ui| extra_segments(ui, &mut d.extra, "measured", choices));
+                }
             } else {
                 crate::op_auto::op_row(ui, "pr_op", operation);
             }

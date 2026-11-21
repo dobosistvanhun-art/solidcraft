@@ -7,6 +7,7 @@
 use serde_json::{Value, json};
 use solidcraft_doc::expr::{Expr, Kind};
 use solidcraft_doc::fitting::{Measured, Pattern};
+use solidcraft_doc::pipe_standards::{self as ps, Standard};
 use solidcraft_doc::{Dir, FeatureKind, FittingType};
 use solidcraft_geom::{Vec2, Vec3};
 
@@ -36,9 +37,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&COLLAR_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params(
-            "diameter, height (to the bend), thickness; width? (beyond the pipe's outside, default a quarter of the diameter); \
-             bend? (inside radius, default the thickness); measured?; base?, axis?, name? — a pipe with its top turned out into a collar \
-             (a bördel); its pattern is the blank to turn it from (the collar stretches: not an exact development)",
+            "pn? (10 | 16, default 16), dn (10…600), standard? (EN | ISO | DIN), height (the pipe up to the collar): an EN 1092-1 \
+             type 33 lapped pipe end for a type 02 loose flange, its pipe, wall and collar face from the tables; or of its own sizes: \
+             diameter, height, thickness, width?, bend?, measured?; base?, axis?, name?",
         ),
     CommandSpec::new("fitting.cone", "Cone Fitting", crate::checked!("fitting.cone", cone))
         .at("SHEET METAL", "FITTINGS")
@@ -78,10 +79,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&FLANGE_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params(
-            "pn? (6 | 10 | 16, default 16) and dn? (10…600): an EN 1092-1 type 01 plate flange's sizes, any of them overridden by \
-             diameter?, bore? (0: blind), bolt_circle?, holes?, hole? (bolt hole diameter), thickness?; without dn all of diameter, pitch, \
-             holes, hole and thickness; blind?: bool (no bore); base? (the centre of its face), axis?, name? — the plate is its own flat \
-             pattern (fitting.export_dxf: piece `flange`)",
+            "type? (01 plate, the default | 02 loose, with its type 32 collar | 11 weld neck), pn? (default 16), dn (10…600), \
+             standard? (EN, the default | ISO: the same | DIN: DN 65 PN 10/16 with 4 holes): every size from EN 1092-1's tables; a plate \
+             flange may instead take its own: diameter, bore? (0: blind), bolt_circle, holes, hole, thickness, blind?; base? (the \
+             centre of its face), axis? (along its neck), name? — plate flanges and loose flanges with their collars cut flat \
+             (fitting.export_dxf)",
         ),
     CommandSpec::new("fitting.nipple", "Threaded End", crate::checked!("fitting.nipple", nipple))
         .at("SHEET METAL", "FITTINGS")
@@ -89,8 +91,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&NIPPLE_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params(
-            "thread (a pipe thread: G1/2, R1/2, …), height (its length), thickness (the wall); thread_length? (from the top, default all); \
-             bore?; base?, axis?, name? — a turned pipe nipple, its outside the thread's major diameter, the thread a cosmetic thread on it",
+            "size (a thread size, 1/4…6), height (its length); base?, axis? (towards the thread), name? — medium steel pipe \
+             (EN 10255) with its R thread (ISO 7-1) cut at its top; or of its own sizes: thread (G1/2, …), height, thickness, \
+             thread_length?, bore?",
         ),
     CommandSpec::new("fitting.patterns", "Fitting Flat Patterns", crate::checked!("fitting.patterns", patterns))
         .icon("flat")
@@ -105,9 +108,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&SOCKET_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
         .params(
-            "diameter, height, thickness; measured? (default inside: the pipe it goes over); thread? (G1/2, Rp1/2, …: a turned socket, \
-             diameter its outside, the thread inside), thread_length?, bore?; base?, axis?, name? — a socket of sheet with its flat \
-             pattern, or a threaded socket",
+            "size (a thread size, 3/8…6), form? (full, the default | half); base?, axis?, name? — an EN 10241 socket, its Rp \
+             thread cut inside; or of its own sizes: diameter, height, thickness, measured? (of sheet, with its flat pattern), \
+             thread?, thread_length?, bore? (turned)",
         ),
     CommandSpec::new("fitting.tee", "Tee", crate::checked!("fitting.tee", tee))
         .at("SHEET METAL", "FITTINGS")
@@ -196,19 +199,107 @@ fn add(s: &mut Session, p: &Value, fitting: FittingType, cmd: &str) -> Result<Va
         pitch: given(s, p, "bolt_circle", l, cmd)?,
         holes: given(s, p, "holes", Kind::Unitless, cmd)?,
         hole: given(s, p, "hole", l, cmd)?,
-        thread,
+        size: thread,
         thread_length: given(s, p, "thread_length", l, cmd)?,
         width: given(s, p, "width", l, cmd)?,
     };
     add_feature(s, p, kind)
 }
 
+/// A standard fitting: its size's designation (every size from the standard's tables), its
+/// outside diameter and wall shown as its own (the timeline's), its length where it has one.
+fn add_standard(s: &mut Session, p: &Value, fitting: FittingType, size: String, diameter: f64, thickness: f64, cmd: &str) -> Result<Value> {
+    let base = point_param(s, p, "base", cmd)?.unwrap_or_else(|| solidcraft_doc::point_expr(Vec3::ZERO));
+    let axis = axis_dir_param(p, cmd)?;
+    let height = match fitting {
+        FittingType::Nipple | FittingType::Collar => Some(needed(s, p, "height", Kind::Length, cmd)?),
+        _ => None,
+    };
+    let mm = |v: f64| Expr::new(format!("{} mm", round(v)));
+    let kind = FeatureKind::Fitting {
+        base,
+        axis: Dir(axis),
+        fitting,
+        measured: Measured::Outside,
+        thickness: mm(thickness),
+        diameter: mm(diameter),
+        top: None,
+        height,
+        shift: None,
+        branch: None,
+        branch_length: None,
+        branch_at: None,
+        branch_angle: None,
+        branch_offset: None,
+        bend: None,
+        angle: None,
+        segments: None,
+        straight: None,
+        bore: None,
+        pitch: None,
+        holes: None,
+        hole: None,
+        size: Some(size),
+        thread_length: None,
+        width: None,
+    };
+    add_feature(s, p, kind)
+}
+
+/// A whole number given as a number or as text.
+fn whole(v: &Value) -> Option<u16> {
+    v.as_u64().or_else(|| v.as_str().and_then(|t| t.trim().parse::<u64>().ok())).map(|v| v.min(u64::from(u16::MAX)) as u16)
+}
+
+/// A standard flange's or collar's class and size: `pn` (default 16) and `dn`, checked against
+/// the type's tables (`01`, `02`, `11`), and the standard (`EN`, `ISO`: EN 1092-1's sizes;
+/// `DIN`: DIN 2501's).
+fn class_and_size(p: &Value, kind: &str, cmd: &str) -> Result<(u16, u16, Standard)> {
+    let pn = p.get("pn").filter(|v| !v.is_null()).map_or(Some(16), whole).unwrap_or(0);
+    let classes = ps::flange_classes(kind);
+    if !classes.contains(&pn) {
+        let have: Vec<String> = classes.iter().map(u16::to_string).collect();
+        return Err(bad(cmd, format!("type {kind} comes in PN {}", have.join(", "))));
+    }
+    let dn = p.get("dn").and_then(whole).unwrap_or(0);
+    let dns = ps::flange_sizes(kind, pn);
+    if !dns.contains(&dn) {
+        let have: Vec<String> = dns.iter().map(u16::to_string).collect();
+        return Err(bad(cmd, format!("type {kind} PN {pn} has no DN {dn} (DN {})", have.join(", "))));
+    }
+    let standard = match str_(p, "standard").map(|t| t.trim().to_ascii_uppercase()).as_deref() {
+        None | Some("" | "EN" | "ISO" | "EN 1092-1" | "ISO 7005-1") => Standard::En,
+        Some("DIN" | "DIN 2501") => Standard::Din,
+        Some(other) => return Err(bad(cmd, format!("unknown standard `{other}` (EN, ISO, DIN)"))),
+    };
+    Ok((pn, dn, standard))
+}
+
 /// A plate flange: the standard's sizes for `pn`, `dn`, each overridden by the call's own.
 fn flange(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "fitting.flange";
+    let kind = str_(p, "type").map(str::trim).unwrap_or("01");
+    if !matches!(kind, "01" | "02" | "11") {
+        return Err(bad(cmd, format!("unknown flange type `{kind}` (01 plate, 02 loose, 11 weld neck)")));
+    }
+    // a standard flange: every size from its tables (a plate flange may take its own instead)
+    let own = ["diameter", "bore", "bolt_circle", "holes", "hole", "thickness", "blind"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    if p.get("dn").is_some_and(|v| !v.is_null()) && !(kind == "01" && own) {
+        let (pn, dn, standard) = class_and_size(p, kind, cmd)?;
+        let (outside, thickness) = match kind {
+            "11" => ps::weld_neck(pn, dn, standard).map(|w| (w.outside, w.thickness)),
+            "02" => ps::loose(pn, dn, standard).map(|l| (l.outside, l.thickness)),
+            _ => solidcraft_doc::flange_catalog::size(pn, dn).map(|z| (z.outside, z.thickness)),
+        }
+        .ok_or_else(|| bad(cmd, format!("type {kind} PN {pn} DN {dn}")))?;
+        let din = if standard == Standard::Din { " DIN" } else { "" };
+        return add_standard(s, p, FittingType::Flange, format!("{kind} PN{pn} DN{dn}{din}"), outside, thickness, cmd);
+    }
+    if kind != "01" {
+        return Err(bad(cmd, format!("a type {kind} flange is made to its standard: give its `dn` (and `pn`)")));
+    }
     let mut q = p.clone();
     let Some(m) = q.as_object_mut() else { return Err(bad(cmd, "the parameters must be an object")) };
-    let whole = |v: &Value| v.as_u64().or_else(|| v.as_str().and_then(|t| t.trim().parse::<u64>().ok())).map(|v| v.min(u64::from(u16::MAX)) as u16);
     let pn = p.get("pn").filter(|v| !v.is_null()).map_or(Some(16), whole).unwrap_or(0);
     if !solidcraft_doc::flange_catalog::CLASSES.contains(&pn) {
         return Err(bad(cmd, "`pn` must be 6, 10 or 16"));
@@ -240,22 +331,53 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("blind").and_then(Value::as_bool).unwrap_or(false) {
         m.remove("bore");
     }
-    m.remove("pn");
-    m.remove("dn");
-    m.remove("blind");
+    for k in ["pn", "dn", "blind", "type", "standard"] {
+        m.remove(k);
+    }
     add(s, &q, FittingType::Flange, cmd)
 }
 
+/// A socket: a standard threaded one (EN 10241, `size` and `form`), or one of sheet (or turned,
+/// with a pipe thread inside) of its own sizes.
 fn socket(s: &mut Session, p: &Value) -> Result<Value> {
-    add(s, p, FittingType::Socket, "fitting.socket")
+    let cmd = "fitting.socket";
+    let Some(size) = str_(p, "size").map(str::trim).filter(|t| !t.is_empty()) else { return add(s, p, FittingType::Socket, cmd) };
+    let Some(k) = ps::socket(size) else {
+        return Err(bad(cmd, format!("no EN 10241 socket of size `{size}` ({})", ps::socket_sizes().join(", "))));
+    };
+    let form = str_(p, "form").map(str::trim).unwrap_or("full");
+    if !matches!(form, "full" | "half") {
+        return Err(bad(cmd, "`form` is full or half"));
+    }
+    let size = ps::thread_size(size).unwrap_or_default();
+    let minor = solidcraft_doc::thread_spec::parse(&ps::thread_name("Rp", size)).map_or(0.0, |t| t.minor());
+    add_standard(s, p, FittingType::Socket, format!("{size} {form}"), k.outside, (k.outside - minor) / 2.0, cmd)
 }
 
+/// A threaded end: medium steel pipe (EN 10255) of thread size `size`, `height` long, its R thread
+/// (ISO 7-1) at its top.
 fn nipple(s: &mut Session, p: &Value) -> Result<Value> {
-    add(s, p, FittingType::Nipple, "fitting.nipple")
+    let cmd = "fitting.nipple";
+    let Some(size) = str_(p, "size").map(str::trim).filter(|t| !t.is_empty()) else { return add(s, p, FittingType::Nipple, cmd) };
+    let Some(pipe) = ps::pipe(size) else {
+        return Err(bad(cmd, format!("no EN 10255 pipe of thread size `{size}` ({})", ps::pipe_sizes().join(", "))));
+    };
+    add_standard(s, p, FittingType::Nipple, pipe.size.to_string(), pipe.outside, pipe.wall, cmd)
 }
 
+/// A collar (bördel): a standard lapped pipe end (EN 1092-1 type 33, by `pn` and `dn`, for a type
+/// 02 loose flange), or one of its own sizes.
 fn collar(s: &mut Session, p: &Value) -> Result<Value> {
-    add(s, p, FittingType::Collar, "fitting.collar")
+    let cmd = "fitting.collar";
+    if p.get("dn").is_some_and(|v| !v.is_null()) {
+        let (pn, dn, standard) = class_and_size(p, "02", cmd)?;
+        let (Some(l), Some(w)) = (ps::loose(pn, dn, standard), ps::weld_neck(16, dn, Standard::En)) else {
+            return Err(bad(cmd, format!("PN {pn} DN {dn}")));
+        };
+        let din = if standard == Standard::Din { " DIN" } else { "" };
+        return add_standard(s, p, FittingType::Collar, format!("PN{pn} DN{dn}{din}"), l.pipe, w.wall, cmd);
+    }
+    add(s, p, FittingType::Collar, cmd)
 }
 
 fn tee(s: &mut Session, p: &Value) -> Result<Value> {
@@ -290,18 +412,20 @@ fn fitting_feature(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
 }
 
 /// The pieces a call asks for, each with its pattern and the body it is in the model.
-fn pieces(s: &Session, p: &Value, cmd: &str) -> Result<(u64, f64, Vec<(String, Pattern, Option<String>)>)> {
+fn pieces(s: &Session, p: &Value, cmd: &str) -> Result<(u64, f64, Vec<(String, Pattern, Option<String>, f64)>)> {
     let id = fitting_feature(s, p, cmd)?;
     let all = s.doc.fitting_patterns(id).map_err(|e| bad(cmd, e.to_string()))?;
     let thickness = s.doc.fitting_thickness(id).map_err(|e| bad(cmd, e.to_string()))?;
+    let each = s.doc.fitting_piece_thicknesses(id).map_err(|e| bad(cmd, e.to_string()))?;
     // the bodies the feature made, in the order of its pieces
     let st = s.model.state();
     let bodies: Vec<String> = st.bodies.iter().filter(|b| b.feature == id).map(|b| b.name.clone()).collect();
-    let mut out: Vec<(String, Pattern, Option<String>)> =
-        all.into_iter().enumerate().map(|(i, (name, pat))| (name, pat, bodies.get(i).cloned())).collect();
+    let mut out: Vec<(String, Pattern, Option<String>, f64)> =
+        all.into_iter().enumerate().map(|(i, (name, pat))| (name, pat, bodies.get(i).cloned(), each.get(i).copied().unwrap_or(thickness))).collect();
     if let Some(want) = str_(p, "piece").map(|w| w.trim().to_lowercase()).filter(|w| !w.is_empty()) {
         let number = want.parse::<usize>().ok();
-        let picked: Vec<_> = out.into_iter().enumerate().filter(|(i, (name, _, _))| *name == want || number == Some(i + 1)).map(|(_, x)| x).collect();
+        let picked: Vec<_> =
+            out.into_iter().enumerate().filter(|(i, (name, _, _, _))| *name == want || number == Some(i + 1)).map(|(_, x)| x).collect();
         if picked.is_empty() {
             return Err(bad(cmd, format!("the fitting has no piece `{want}`")));
         }
@@ -325,11 +449,12 @@ fn xy(q: Vec2) -> [f64; 2] {
     [round(q.x), round(q.y)]
 }
 
-fn piece_json(name: &str, pat: &Pattern, body: &Option<String>) -> serde_json::Map<String, Value> {
+fn piece_json(name: &str, pat: &Pattern, body: &Option<String>, thickness: f64) -> serde_json::Map<String, Value> {
     let (w, h) = size(pat);
     let mut m = serde_json::Map::new();
     m.insert("piece".into(), json!(name));
     m.insert("body".into(), json!(body));
+    m.insert("thickness".into(), json!(round(thickness)));
     m.insert("width".into(), json!(round(w)));
     m.insert("height".into(), json!(round(h)));
     m.insert("area".into(), json!(round(pat.area())));
@@ -341,8 +466,8 @@ fn patterns(s: &mut Session, p: &Value) -> Result<Value> {
     let (id, thickness, list) = pieces(s, p, cmd)?;
     let pieces: Vec<Value> = list
         .iter()
-        .map(|(name, pat, body)| {
-            let mut m = piece_json(name, pat, body);
+        .map(|(name, pat, body, t)| {
+            let mut m = piece_json(name, pat, body, *t);
             m.insert("outline".into(), json!(pat.outline.iter().map(|q| xy(*q)).collect::<Vec<_>>()));
             m.insert("holes".into(), json!(pat.holes.iter().map(|h| h.iter().map(|q| xy(*q)).collect::<Vec<_>>()).collect::<Vec<_>>()));
             m.insert("marks".into(), json!(pat.marks.iter().map(|(a, b)| [xy(*a), xy(*b)]).collect::<Vec<_>>()));
@@ -391,10 +516,10 @@ fn export_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     let (id, thickness, list) = pieces(s, p, cmd)?;
     let path = str_(p, "path").map(str::trim).filter(|x| !x.is_empty());
     // every file is made before the first is written
-    let texts = list.iter().map(|(_, pat, _)| pattern_dxf(pat)).collect::<Result<Vec<_>>>()?;
+    let texts = list.iter().map(|(_, pat, _, _)| pattern_dxf(pat)).collect::<Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for ((name, pat, body), text) in list.iter().zip(texts) {
-        let mut m = piece_json(name, pat, body);
+    for ((name, pat, body, t), text) in list.iter().zip(texts) {
+        let mut m = piece_json(name, pat, body, *t);
         match path {
             Some(path) => {
                 let file = piece_path(path, name);

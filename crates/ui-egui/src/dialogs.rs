@@ -5317,12 +5317,11 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                 if let Some(a) = d.extra.get("axis").filter(|_| at.is_none()) {
                     p.insert("axis".into(), a.clone());
                 }
-                // a flange of a standard size: its class and size (the sizes shown are its own)
-                if *cmd == "fitting.flange" {
-                    for k in ["pn", "dn"] {
-                        if let Some(v) = d.extra.get(k).filter(|v| v.is_u64()) {
-                            p.insert(k.into(), v.clone());
-                        }
+                // a standard fitting: its size as chosen (or the dialog's first choice)
+                if is_standard_fitting(cmd) && !d.extra.contains_key("custom") {
+                    p.remove("measured");
+                    for (k, v) in standard_choices(cmd, &d.extra) {
+                        p.insert(k.into(), v);
                     }
                 }
             } else {
@@ -6451,11 +6450,12 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             pitch,
             holes,
             hole,
-            thread,
+            size,
             thread_length,
             width,
         } => {
             use solidcraft_engine::doc::FittingType;
+            let thread = size;
             let cmd = match fitting {
                 FittingType::Tee => "fitting.tee",
                 FittingType::Cone => "fitting.cone",
@@ -6520,6 +6520,20 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     ("branch_offset", e(branch_offset)),
                 ],
             };
+            // a standard fitting reopens on its size's choices; one of its own sizes on its sizes
+            let standard = size.as_deref().and_then(|t| standard_extras(cmd, t));
+            let fields = match (&standard, fitting) {
+                (Some(_), FittingType::Nipple | FittingType::Collar) => vec![("height", e(height))],
+                (Some(_), _) => Vec::new(),
+                (None, _) => fields,
+            };
+            match standard {
+                Some(extras) => d.extra.extend(extras),
+                None if is_standard_fitting(cmd) => {
+                    d.extra.insert("custom".into(), json!(true));
+                }
+                None => {}
+            }
             d.kind = Kind::Primitive { cmd, fields, operation: 0, at: None, refs: Default::default() };
             d.extra.insert("base".into(), pt_expr(base));
             d.extra.insert("axis".into(), pt3(axis.0));
@@ -7897,36 +7911,68 @@ pub(crate) fn is_fitting(cmd: &str) -> bool {
     cmd.starts_with("fitting.")
 }
 
+/// Whether a fitting dialog is a standard fitting's: its sizes chosen from the standard's tables.
+pub(crate) fn is_standard_fitting(cmd: &str) -> bool {
+    matches!(cmd, "fitting.flange" | "fitting.socket" | "fitting.nipple" | "fitting.collar")
+}
+
+/// A standard fitting's choices as the command takes them: what the dialog keeps in `extra`, or
+/// its first choice (a plate flange PN 16 DN 50 to EN 1092-1, a full 1/2" socket, a 1/2"
+/// threaded end, a PN 16 DN 50 collar).
+pub(crate) fn standard_choices(cmd: &str, extra: &serde_json::Map<String, Value>) -> Vec<(&'static str, Value)> {
+    let get = |k: &str, d: Value| extra.get(k).cloned().unwrap_or(d);
+    match cmd {
+        "fitting.flange" => vec![
+            ("type", get("type", json!("01"))),
+            ("pn", get("pn", json!(16))),
+            ("dn", get("dn", json!(50))),
+            ("standard", get("standard", json!("EN"))),
+        ],
+        "fitting.collar" => vec![("pn", get("pn", json!(16))), ("dn", get("dn", json!(50))), ("standard", get("standard", json!("EN")))],
+        "fitting.socket" => vec![("size", get("size", json!("1/2"))), ("form", get("form", json!("full")))],
+        "fitting.nipple" => vec![("size", get("size", json!("1/2")))],
+        _ => Vec::new(),
+    }
+}
+
+/// A standard fitting's stored size read back into the dialog's choices; `None` when it is a
+/// fitting of its own sizes.
+fn standard_extras(cmd: &str, size: &str) -> Option<serde_json::Map<String, Value>> {
+    use solidcraft_engine::doc::pipe_standards as ps;
+    let d = ps::designation(size);
+    let standard = if d.standard == ps::Standard::Din { "DIN" } else { "EN" };
+    let mut m = serde_json::Map::new();
+    match cmd {
+        "fitting.flange" | "fitting.collar" => {
+            let (pn, dn) = (d.pn?, d.dn?);
+            if cmd == "fitting.flange" {
+                m.insert("type".into(), json!(if d.kind.is_empty() { "01" } else { d.kind.as_str() }));
+            }
+            m.insert("pn".into(), json!(pn));
+            m.insert("dn".into(), json!(dn));
+            m.insert("standard".into(), json!(standard));
+        }
+        "fitting.socket" if matches!(d.kind.as_str(), "full" | "half") => {
+            m.insert("size".into(), json!(d.thread?));
+            m.insert("form".into(), json!(d.kind));
+        }
+        "fitting.nipple" if size.starts_with(|c: char| c.is_ascii_digit()) => {
+            m.insert("size".into(), json!(d.thread?));
+        }
+        _ => return None,
+    }
+    Some(m)
+}
+
 /// A new fitting dialog's fields, in the order they show.
 fn fitting_fields(s: &Session, id: &str) -> Vec<(&'static str, String)> {
     let l = |v: &str| length_default(s, v);
     match id {
-        // DN 50 PN 16 to start with (its class and size chosen in the dialog)
-        "fitting.flange" => {
-            let size = solidcraft_engine::doc::flange_catalog::size(16, 50);
-            let v =
-                |f: fn(&solidcraft_engine::doc::flange_catalog::FlangeSize) -> f64| size.as_ref().map(|z| l(&f(z).to_string())).unwrap_or_default();
-            vec![
-                ("diameter", v(|z| z.outside)),
-                ("bore", v(|z| z.bore)),
-                ("bolt_circle", v(|z| z.pitch)),
-                ("holes", size.map(|z| z.holes.to_string()).unwrap_or_default()),
-                ("hole", v(|z| z.hole)),
-                ("thickness", v(|z| z.thickness)),
-            ]
-        }
-        "fitting.socket" => vec![
-            ("diameter", l("60.3")),
-            ("height", l("80")),
-            ("thickness", l("2")),
-            ("thread", String::new()),
-            ("thread_length", String::new()),
-            ("bore", String::new()),
-        ],
-        "fitting.nipple" => {
-            vec![("thread", "G1/2".into()), ("height", l("40")), ("thickness", l("2.6")), ("thread_length", l("15")), ("bore", String::new())]
-        }
-        "fitting.collar" => vec![("diameter", l("100")), ("height", l("80")), ("thickness", l("1.5")), ("width", l("25")), ("bend", l("3"))],
+        // standard fittings: their sizes from the standard, chosen in the dialog; a threaded
+        // end's and a collar's pipe its length
+        "fitting.flange" | "fitting.socket" => Vec::new(),
+        "fitting.nipple" => vec![("height", l("60"))],
+        "fitting.collar" => vec![("height", l("80"))],
         "fitting.elbow" => vec![
             ("diameter", l("100")),
             ("thickness", l("1")),

@@ -600,53 +600,59 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
     enter
 }
 
-/// A flange's standard size: its pressure class and nominal size (EN 1092-1 type 01), which
-/// fill in its sizes; Custom keeps them as they are typed.
-fn flange_standard_rows(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>, fields: &mut [(&'static str, String)]) {
-    use solidcraft_engine::doc::flange_catalog as fc;
-    let classes = ["PN 6", "PN 10", "PN 16"];
-    let pn_before = extra.get("pn").and_then(Value::as_u64).and_then(|pn| fc::CLASSES.iter().position(|c| u64::from(*c) == pn)).unwrap_or(2);
-    let mut pn_i = pn_before;
-    choice_row(ui, "ui.fitting_pn", "flange_pn", &mut pn_i, &classes);
-    let pn = fc::CLASSES.get(pn_i).copied().unwrap_or(16);
-    let dns = fc::sizes(pn);
-    let mut labels: Vec<String> = dns.iter().map(|dn| format!("DN {dn}")).collect();
-    labels.push("ui.fitting_custom".into());
-    let names: Vec<&str> = labels.iter().map(String::as_str).collect();
-    // a new dialog starts at DN 50; one reopened from the timeline at Custom (its own sizes)
-    let dn_before = match extra.get("dn") {
-        Some(v) => v.as_u64().and_then(|dn| dns.iter().position(|d| u64::from(*d) == dn)).unwrap_or(dns.len()),
-        None if !extra.contains_key("base") => dns.iter().position(|d| *d == 50).unwrap_or(dns.len()),
-        None => dns.len(),
+/// A standard fitting's choices, from the standard's tables: a flange's type, class, size and
+/// standard; a collar's class, size and standard; a socket's thread size and form; a threaded
+/// end's thread size. Each kept in `extra` as the command takes it.
+fn standard_fitting_rows(ui: &mut egui::Ui, cmd: &str, extra: &mut serde_json::Map<String, Value>) {
+    use solidcraft_engine::doc::pipe_standards as ps;
+    let current = crate::dialogs::standard_choices(cmd, extra);
+    let get = |k: &str| current.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone()).unwrap_or(Value::Null);
+    // one row of choices: their labels, the values they keep, the one kept now
+    let row = |ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>, label: &str, key: &str, labels: &[String], values: &[Value]| {
+        let now = extra.get(key).cloned().unwrap_or_else(|| get(key));
+        let mut i = values.iter().position(|v| *v == now).unwrap_or(0);
+        let names: Vec<&str> = labels.iter().map(String::as_str).collect();
+        choice_row(ui, label, key, &mut i, &names);
+        if let Some(v) = values.get(i) {
+            extra.insert(key.into(), v.clone());
+        }
     };
-    let mut dn_i = dn_before;
-    choice_row(ui, "ui.fitting_dn", "flange_dn", &mut dn_i, &names);
-    if pn_i != pn_before {
-        extra.insert("pn".into(), json!(pn));
+    let flange = cmd == "fitting.flange";
+    if flange {
+        let kinds = ["01", "02", "11"];
+        let labels: Vec<String> = ["ui.fitting_type_plate", "ui.fitting_type_loose", "ui.fitting_type_weld_neck"].map(String::from).to_vec();
+        row(ui, extra, "ui.fitting_type", "type", &labels, &kinds.map(|k| json!(k)));
     }
-    match dns.get(dn_i).copied() {
-        Some(dn) => {
-            let changed = pn_i != pn_before || dn_i != dn_before || !extra.contains_key("dn");
-            extra.insert("pn".into(), json!(pn));
-            extra.insert("dn".into(), json!(dn));
-            if changed && let Some(size) = fc::size(pn, dn) {
-                for (k, v) in fields.iter_mut() {
-                    let value = match *k {
-                        "diameter" => size.outside,
-                        "bore" => size.bore,
-                        "bolt_circle" => size.pitch,
-                        "holes" => f64::from(size.holes),
-                        "hole" => size.hole,
-                        "thickness" => size.thickness,
-                        _ => continue,
-                    };
-                    *v = if *k == "holes" { format!("{value}") } else { format!("{value} mm") };
-                }
-            }
+    if flange || cmd == "fitting.collar" {
+        let kind = if flange { extra.get("type").and_then(Value::as_str).unwrap_or("01").to_string() } else { "02".into() };
+        let classes = ps::flange_classes(&kind);
+        let labels: Vec<String> = classes.iter().map(|pn| format!("PN {pn}")).collect();
+        let values: Vec<Value> = classes.iter().map(|pn| json!(pn)).collect();
+        row(ui, extra, "ui.fitting_pn", "pn", &labels, &values);
+        let pn = extra.get("pn").and_then(Value::as_u64).map_or(16, |v| v as u16);
+        let dns = ps::flange_sizes(&kind, pn);
+        // a size the class lacks: the nearest it has
+        if let Some(dn) = extra.get("dn").and_then(Value::as_u64)
+            && !dns.iter().any(|d| u64::from(*d) == dn)
+            && let Some(near) = dns.iter().min_by_key(|d| (i64::from(**d) - dn as i64).abs())
+        {
+            extra.insert("dn".into(), json!(near));
         }
-        None => {
-            extra.remove("dn");
-        }
+        let labels: Vec<String> = dns.iter().map(|dn| format!("DN {dn}")).collect();
+        let values: Vec<Value> = dns.iter().map(|dn| json!(dn)).collect();
+        row(ui, extra, "ui.fitting_dn", "dn", &labels, &values);
+        let labels: Vec<String> = ["EN 1092-1", "ISO 7005-1", "DIN 2501"].map(String::from).to_vec();
+        row(ui, extra, "ui.fitting_standard", "standard", &labels, &["EN", "ISO", "DIN"].map(|k| json!(k)));
+    }
+    if matches!(cmd, "fitting.socket" | "fitting.nipple") {
+        let sizes = if cmd == "fitting.socket" { ps::socket_sizes() } else { ps::pipe_sizes() };
+        let labels: Vec<String> = sizes.iter().map(|z| format!("{z}\"")).collect();
+        let values: Vec<Value> = sizes.iter().map(|z| json!(z)).collect();
+        row(ui, extra, "ui.fitting_size", "size", &labels, &values);
+    }
+    if cmd == "fitting.socket" {
+        let labels: Vec<String> = ["ui.fitting_full", "ui.fitting_half"].map(String::from).to_vec();
+        row(ui, extra, "ui.fitting_form", "form", &labels, &["full", "half"].map(|k| json!(k)));
     }
 }
 
@@ -976,8 +982,8 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         }
         Kind::Primitive { cmd, fields, operation, at, .. } => {
             let from_sketch = *cmd == "solid.coil" && d.inputs.first().is_some_and(|i| i.accept & selection::PROFILES != 0 && !i.items.is_empty());
-            if *cmd == "fitting.flange" {
-                flange_standard_rows(ui, &mut d.extra, fields);
+            if crate::dialogs::is_standard_fitting(cmd) && !d.extra.contains_key("custom") {
+                standard_fitting_rows(ui, cmd, &mut d.extra);
             }
             for (k, v) in fields.iter_mut() {
                 if *k == "chain" {
@@ -1045,7 +1051,8 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                 } else {
                     &[("Outside", "outside"), ("Inside", "inside"), ("ui.fitting_middle", "middle")]
                 };
-                if !matches!(*cmd, "fitting.flange" | "fitting.nipple") {
+                // a standard fitting's sizes are the standard's: nothing to measure
+                if !crate::dialogs::is_standard_fitting(cmd) {
                     form_row(ui, "ui.fitting_measured", |ui| extra_segments(ui, &mut d.extra, "measured", choices));
                 }
             } else {

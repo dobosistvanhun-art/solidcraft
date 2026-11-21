@@ -1338,15 +1338,18 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Bolt hole")]
         hole: Option<Expr>,
-        /// A nipple's (outside) or a threaded socket's (inside) pipe thread, as `G1/2`, and how
-        /// far it runs from the end (default: all its length).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        thread: Option<String>,
+        /// A standard fitting's size, its sizes all from the standard's tables
+        /// ([`crate::pipe_standards::designation`]): a flange's `11 PN16 DN50`, a collar's
+        /// `PN16 DN50`, a socket's `1/2 full`, a threaded end's `3/4`. Without one, a fitting is
+        /// made to its own sizes; a socket's or nipple's pipe thread then as `G1/2`.
+        #[serde(default, alias = "thread", skip_serializing_if = "Option::is_none")]
+        size: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Thread length")]
         thread_length: Option<Expr>,
-        /// A collar's (bördel's) width beyond the pipe's outside; its bend's inside radius is
-        /// `bend`.
+        /// How far a nipple's or socket's own pipe thread runs from the end (default: all its
+        /// length). A collar's (bördel's) width beyond the pipe's outside; its bend's inside
+        /// radius is `bend`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "Collar width")]
         width: Option<Expr>,

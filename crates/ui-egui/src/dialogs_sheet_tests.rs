@@ -1563,38 +1563,40 @@ fn fitting_dxf_from_the_ribbon_asks_where_to_save() {
     assert!(!crate::toolbar::start_fitting_dxf(&mut app, "sheet.export_dxf"), "not its command");
 }
 
-/// The flange, socket, threaded end and collar dialogs make their fittings and reopen to edit
-/// them; a flange of a standard size sends its class and size, a threaded end its thread.
+/// The flange, socket, threaded end and collar dialogs make standard fittings from their choices
+/// (a loose flange: two bodies, the flange and its collar) and reopen on those choices to edit them.
 #[test]
 fn flange_socket_threaded_end_and_collar_dialogs_make_and_edit_their_fittings() {
-    for (cmd, threads) in [("fitting.flange", 0), ("fitting.socket", 0), ("fitting.nipple", 1), ("fitting.collar", 0)] {
+    for (cmd, bodies) in [("fitting.flange", 2), ("fitting.socket", 1), ("fitting.nipple", 1), ("fitting.collar", 1)] {
         let mut app = SolveApp::new(Session::default(), Services::default());
         app.start(cmd);
         let mut d = app.dialog.clone().unwrap();
         if cmd == "fitting.flange" {
+            d.extra.insert("type".into(), json!("02"));
             d.extra.insert("pn".into(), json!(10));
             d.extra.insert("dn".into(), json!(80));
         }
         let c = apply_commands(&app, &d).unwrap();
         assert_eq!(c[0].0, cmd);
-        assert!(c[0].1.get("operation").is_none(), "{}", c[0].1);
-        if cmd == "fitting.flange" {
-            assert_eq!((c[0].1["pn"].clone(), c[0].1["dn"].clone()), (json!(10), json!(80)));
-        }
-        if cmd == "fitting.nipple" {
-            assert_eq!(c[0].1["thread"], "G1/2", "a thread is no length: {}", c[0].1);
-            assert!(c[0].1.get("measured").is_none());
+        assert!(c[0].1.get("operation").is_none() && c[0].1.get("measured").is_none(), "{}", c[0].1);
+        match cmd {
+            "fitting.flange" => assert_eq!((c[0].1["type"].clone(), c[0].1["pn"].clone(), c[0].1["dn"].clone()), (json!("02"), json!(10), json!(80))),
+            "fitting.socket" => assert_eq!((c[0].1["size"].clone(), c[0].1["form"].clone()), (json!("1/2"), json!("full"))),
+            "fitting.nipple" => assert_eq!(c[0].1["size"], "1/2", "{}", c[0].1),
+            _ => assert_eq!((c[0].1["pn"].clone(), c[0].1["dn"].clone()), (json!(16), json!(50))),
         }
         run_all(&mut app, c);
-        assert_eq!(app.session.model.state().bodies.len(), 1, "{cmd}");
-        assert_eq!(app.session.model.state().threads.len(), threads, "{cmd}");
+        assert_eq!(app.session.model.state().bodies.len(), bodies, "{cmd}");
         let f = app.session.doc.features.last().unwrap().clone();
         let e = edit_dialog(&app, f.id, None).unwrap();
+        assert!(!e.extra.contains_key("custom"), "{cmd} reopens on its choices");
+        if cmd == "fitting.flange" {
+            assert_eq!(e.extra.get("dn"), Some(&json!(80)));
+        }
         let c = apply_commands(&app, &e).unwrap();
         assert_eq!(c[0].0, "timeline.redefine");
         assert_eq!(c[0].1["command"], cmd);
         run_all(&mut app, c);
-        assert_eq!(app.session.model.state().bodies.len(), 1, "{cmd} rebuilt");
-        assert_eq!(app.session.model.state().threads.len(), threads, "{cmd} rebuilt");
+        assert_eq!(app.session.model.state().bodies.len(), bodies, "{cmd} rebuilt");
     }
 }

@@ -160,12 +160,20 @@ pub struct ElbowParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct FlangeParams {
-    /// The pressure class of the standard sizes: 6, 10 or 16. Default 16.
+    /// The flange's type (EN 1092-1): `01` a plate flange (the default), `02` a loose flange
+    /// behind its plate collar (type 32), `11` a weld neck flange.
+    #[serde(default, rename = "type")]
+    pub kind: Option<FlangeType>,
+    /// The pressure class: 6, 10, 16 (type 01); 10, 16 (02); 10, 16, 25, 40 (11). Default 16.
     #[serde(default)]
     pub pn: Option<u16>,
-    /// The nominal size (DN 10…600) of the standard sizes; without it every size is given.
+    /// The nominal size, DN 10…600; without it (a plate flange only) every size is given.
     #[serde(default)]
     pub dn: Option<u16>,
+    /// Whose sizes: `EN` (EN 1092-1, the default), `ISO` (ISO 7005-1: the same), `DIN` (DIN
+    /// 2501: DN 65 PN 10/16 with 4 bolt holes).
+    #[serde(default)]
+    pub standard: Option<FlangeStandard>,
     /// A blind flange: no bore. Default false.
     #[serde(default)]
     pub blind: Option<bool>,
@@ -199,18 +207,27 @@ pub struct FlangeParams {
     pub common: FeatureCommon,
 }
 
-/// Add a socket (a coupling sleeve): of sheet, a sleeve over a pipe with its flat pattern; with
-/// `thread`, a turned socket with a pipe thread inside.
+/// Add a socket: a standard threaded socket (EN 10241, by `size`, its Rp thread cut inside), or
+/// one of its own sizes: of sheet, a sleeve over a pipe; with `thread`, turned and threaded.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SocketParams {
-    /// Of sheet: the pipe's diameter it goes over (the sleeve's inside, unless `measured` says
-    /// otherwise). Threaded: the socket's outside diameter.
-    pub diameter: LengthExpr,
-    /// The socket's length, along `axis`.
-    pub height: LengthExpr,
-    /// The sheet's (the wall's) thickness.
-    pub thickness: LengthExpr,
+    /// A standard socket's thread size: `3/8` … `6` (as `1/2`, `1 1/4`, `Rp1/2`).
+    #[serde(default)]
+    pub size: Option<String>,
+    /// A standard socket's form: `full` (the default) or `half` (for welding on).
+    #[serde(default)]
+    pub form: Option<SocketForm>,
+    /// Of its own sizes, of sheet: the pipe's diameter it goes over (the sleeve's inside, unless
+    /// `measured` says otherwise); threaded: its outside diameter.
+    #[serde(default)]
+    pub diameter: Option<LengthExpr>,
+    /// Of its own sizes: its length, along `axis`.
+    #[serde(default)]
+    pub height: Option<LengthExpr>,
+    /// Of its own sizes: the sheet's (the wall's) thickness.
+    #[serde(default)]
+    pub thickness: Option<LengthExpr>,
     /// A pipe thread inside, as `G1/2` or `Rp1/2`: a turned socket.
     #[serde(default)]
     pub thread: Option<String>,
@@ -235,16 +252,22 @@ pub struct SocketParams {
     pub common: FeatureCommon,
 }
 
-/// Add a threaded end (a pipe nipple): a turned tube with a pipe thread outside, from its top.
+/// Add a threaded end: medium steel pipe (EN 10255) of a thread size with its R thread (ISO 7-1)
+/// cut at its top, or a tube of its own sizes with a pipe thread outside.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct NippleParams {
-    /// The pipe thread outside, as `G1/2` or `R1/2`; its major diameter is the nipple's.
-    pub thread: String,
-    /// The nipple's length, along `axis`.
+    /// The thread size: `1/4` … `6` (as `1/2`, `1 1/4`, `R1/2`).
+    #[serde(default)]
+    pub size: Option<String>,
+    /// The threaded end's length, along `axis`.
     pub height: LengthExpr,
-    /// The wall's thickness (the bore is the thread's major diameter less twice it).
-    pub thickness: LengthExpr,
+    /// Of its own sizes: the pipe thread outside, as `G1/2`, its major diameter the tube's.
+    #[serde(default)]
+    pub thread: Option<String>,
+    /// Of its own sizes: the wall's thickness.
+    #[serde(default)]
+    pub thickness: Option<LengthExpr>,
     /// How far the thread runs from the top end. Default: all the length.
     #[serde(default)]
     pub thread_length: Option<LengthExpr>,
@@ -263,16 +286,28 @@ pub struct NippleParams {
     pub common: FeatureCommon,
 }
 
-/// Add a pipe with a turned-out collar at its top (a bördel, a lap-joint stub end).
+/// Add a pipe with a turned-out collar at its top (a bördel): a standard lapped pipe end (EN
+/// 1092-1 type 33, for a type 02 loose flange, by `pn` and `dn`), or one of its own sizes.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct CollarParams {
-    /// The pipe's diameter.
-    pub diameter: LengthExpr,
+    /// The loose flange's pressure class: 10 or 16. Default 16.
+    #[serde(default)]
+    pub pn: Option<u16>,
+    /// The nominal size, DN 10…600: the pipe, its wall and the collar's face from the tables.
+    #[serde(default)]
+    pub dn: Option<u16>,
+    /// Whose sizes: `EN` (the default), `ISO`, `DIN`.
+    #[serde(default)]
+    pub standard: Option<FlangeStandard>,
+    /// Of its own sizes: the pipe's diameter.
+    #[serde(default)]
+    pub diameter: Option<LengthExpr>,
     /// The pipe's height up to where it bends out.
     pub height: LengthExpr,
-    /// The sheet's thickness.
-    pub thickness: LengthExpr,
+    /// Of its own sizes: the sheet's thickness.
+    #[serde(default)]
+    pub thickness: Option<LengthExpr>,
     /// How far the collar reaches beyond the pipe's outside. Default: a quarter of the diameter.
     #[serde(default)]
     pub width: Option<LengthExpr>,
@@ -292,6 +327,36 @@ pub struct CollarParams {
     pub axis: Option<AxisDir>,
     #[serde(flatten, deserialize_with = "feature_common")]
     pub common: FeatureCommon,
+}
+
+/// An EN 1092-1 flange type.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub enum FlangeType {
+    #[serde(rename = "01")]
+    Plate,
+    #[serde(rename = "02")]
+    Loose,
+    #[serde(rename = "11")]
+    WeldNeck,
+}
+
+/// Whose flange sizes.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub enum FlangeStandard {
+    #[serde(rename = "EN")]
+    En,
+    #[serde(rename = "ISO")]
+    Iso,
+    #[serde(rename = "DIN")]
+    Din,
+}
+
+/// A standard socket's form.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SocketForm {
+    Full,
+    Half,
 }
 
 /// A fitting's flat patterns, or one DXF of them per piece.
@@ -318,6 +383,8 @@ pub struct FittingPiece {
     pub piece: String,
     /// The body the piece is in the model.
     pub body: Option<String>,
+    /// The sheet thickness it is cut from, in mm.
+    pub thickness: f64,
     /// The flat pattern's size in mm, along its x and y.
     pub width: f64,
     pub height: f64,

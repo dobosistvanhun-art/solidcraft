@@ -12,6 +12,7 @@ use crate::document::{FeatureKind, FittingType};
 use crate::eval::val;
 use crate::expr::{Expr, Kind, Value};
 use crate::fitting::{Branch, Collar, Elbow, Flange, Mantle, Pattern};
+use crate::pipe_standards::{self as ps, Loose, WeldNeck};
 use crate::{DocError, Result};
 
 /// A fitting's sizes, worked out: middle-surface radii, the sheet's thickness, where it stands.
@@ -32,6 +33,8 @@ pub struct FittingThread {
     pub length: Option<f64>,
     /// A point on the threaded face, near the end the thread runs from, in the fitting's frame.
     pub at: Vec3,
+    /// Cut into the body, to be seen (a standard fitting's), or only marked (cosmetic).
+    pub modeled: bool,
 }
 
 pub(crate) enum Shape {
@@ -41,11 +44,17 @@ pub(crate) enum Shape {
     },
     Elbow(Elbow),
     Flange(Flange),
-    /// A turned tube (a threaded socket or a nipple): its outside and inside radii, its height.
+    /// A standard weld neck flange (EN 1092-1 type 11).
+    WeldNeck(WeldNeck),
+    /// A standard loose flange (type 02) behind its plate collar (type 32).
+    Loose(Loose),
+    /// A turned tube (a threaded socket or a nipple): its outside and inside radii, its height,
+    /// and a top turned down to a radius over a length (a threaded end's thread).
     Tube {
         outside: f64,
         inside: f64,
         height: f64,
+        top: Option<(f64, f64)>,
     },
     Collar(Collar),
 }
@@ -79,7 +88,7 @@ pub(crate) fn sized(vals: &BTreeMap<String, Value>, kind: &FeatureKind) -> Resul
         pitch,
         holes,
         hole,
-        thread,
+        size,
         thread_length,
         width,
     } = kind
@@ -102,6 +111,13 @@ pub(crate) fn sized(vals: &BTreeMap<String, Value>, kind: &FeatureKind) -> Resul
     let d0 = len(diameter)?;
     let base = crate::eval::point(vals, base)?;
     let axis = axis.0.normalized().ok_or_else(|| DocError::Invalid("the fitting's axis".into()))?;
+    // a standard fitting: every size from the standard's tables
+    if let Some(name) = size.as_deref().map(str::trim).filter(|x| !x.is_empty())
+        && let Some(s) = standard(*fitting, name, height.as_ref().map(len).transpose()?, base, axis)?
+    {
+        return Ok(Some(s));
+    }
+    let thread = size;
     let shape = match fitting {
         FittingType::Elbow => {
             let seg = opt(segments, Kind::Unitless, 5.0)?;
@@ -181,8 +197,14 @@ pub(crate) fn sized(vals: &BTreeMap<String, Value>, kind: &FeatureKind) -> Resul
                 None => None,
             };
             let r = if inside_thread { inside } else { outside };
-            let thread = FittingThread { designation: name.to_string(), inside: inside_thread, length, at: Vec3::new(r, 0.0, h - h.min(1.0) * 0.5) };
-            return Ok(Some(Sized { thickness: t, shape: Shape::Tube { outside, inside, height: h }, base, axis, thread: Some(thread) }));
+            let thread = FittingThread {
+                designation: name.to_string(),
+                inside: inside_thread,
+                length,
+                at: Vec3::new(r, 0.0, h - h.min(1.0) * 0.5),
+                modeled: false,
+            };
+            return Ok(Some(Sized { thickness: t, shape: Shape::Tube { outside, inside, height: h, top: None }, base, axis, thread: Some(thread) }));
         }
         FittingType::Tee | FittingType::Cone | FittingType::Socket | FittingType::Nipple => {
             let d1 = opt(top, Kind::Length, d0)?;
@@ -224,9 +246,19 @@ impl Sized {
             }
             Shape::Elbow(e) => (0..e.segments).map(|k| (format!("segment {}", k + 1), e.pattern(k))).collect(),
             Shape::Flange(f) => vec![("flange".into(), f.pattern())],
-            Shape::Collar(c) => vec![("body".into(), c.pattern(self.thickness))],
-            // a turned part: no sheet to cut
-            Shape::Tube { .. } => Vec::new(),
+            // a loose flange and its collar are flat rings, cut as they are
+            Shape::Loose(l) => vec![("flange".into(), loose_plate(l).pattern()), ("collar".into(), collar_plate(l).pattern())],
+            // a collar is turned out of a pipe; a weld neck and a tube are turned or forged
+            Shape::Collar(_) | Shape::WeldNeck(_) | Shape::Tube { .. } => Vec::new(),
+        }
+    }
+
+    /// Each piece's sheet thickness, in the order of [`Sized::patterns`]: a loose flange's plate
+    /// and its collar are cut from plates of their own.
+    pub fn piece_thicknesses(&self) -> Vec<f64> {
+        match &self.shape {
+            Shape::Loose(l) => vec![l.thickness, l.collar_thickness],
+            _ => vec![self.thickness; self.patterns().len()],
         }
     }
 
@@ -263,7 +295,27 @@ impl Sized {
             Shape::Body { mantle, branch } => body_pieces(mantle, branch.as_ref(), self.thickness)?,
             Shape::Elbow(e) => elbow_pieces(e, self.thickness)?,
             Shape::Flange(f) => vec![flange_plate(f, self.thickness)?],
-            Shape::Tube { outside, inside, height } => vec![ring(*outside, *inside, 0.0, *height)?],
+            Shape::WeldNeck(w) => vec![weld_neck_solid(w)?],
+            Shape::Loose(l) => {
+                // the collar against the face, the flange behind it
+                let collar = flange_plate_at(&collar_plate(l), 0.0, l.collar_thickness)?;
+                let flange = flange_plate_at(&loose_plate(l), l.collar_thickness, l.collar_thickness + l.thickness)?;
+                vec![flange, collar]
+            }
+            Shape::Tube { outside, inside, height, top: None } => vec![ring(*outside, *inside, 0.0, *height)?],
+            Shape::Tube { outside, inside, height, top: Some((r, l)) } => {
+                // turned down at its top to the thread's major diameter
+                let z = height - l;
+                let pts = [
+                    Vec2::new(*inside, 0.0),
+                    Vec2::new(*outside, 0.0),
+                    Vec2::new(*outside, z),
+                    Vec2::new(*r, z),
+                    Vec2::new(*r, *height),
+                    Vec2::new(*inside, *height),
+                ];
+                vec![revolved(Loop2::polygon(&pts).segs, "threaded end")?]
+            }
             Shape::Collar(c) => vec![collar_solid(c, self.thickness)?],
         };
         let m = self.frame()?;
@@ -287,6 +339,11 @@ fn ring(outside: f64, inside: f64, z0: f64, z1: f64) -> Result<Body> {
 
 /// A plate flange `t` thick: its plate on the XY plane, up along Z.
 fn flange_plate(f: &Flange, t: f64) -> Result<Body> {
+    flange_plate_at(f, 0.0, t)
+}
+
+/// A plate flange (a ring of plate with its bolt holes) from height `z0` to `z1`.
+fn flange_plate_at(f: &Flange, z0: f64, z1: f64) -> Result<Body> {
     let o = Vec2::new(0.0, 0.0);
     let mut holes: Vec<Loop2> = f.hole_centres().into_iter().map(|c| Loop2::circle(c, f.hole)).collect();
     if f.bore > 0.0 {
@@ -294,8 +351,155 @@ fn flange_plate(f: &Flange, t: f64) -> Result<Body> {
     }
     let region = Region2 { outer: Loop2::circle(o, f.outside), holes };
     let plane = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Y };
-    let mut b = kernel::extrude(&plane, &[region], 0.0, t)?;
+    let mut b = kernel::extrude(&plane, &[region], z0, z1)?;
     if b.len() == 1 { Ok(b.remove(0)) } else { bad("the flange came out in pieces") }
+}
+
+/// A loose flange's plate: a ring round its collar's pipe, its bolt holes.
+fn loose_plate(l: &Loose) -> Flange {
+    Flange { outside: l.outside / 2.0, bore: l.bore / 2.0, pitch: l.pitch / 2.0, holes: usize::from(l.holes), hole: l.hole / 2.0 }
+}
+
+/// A loose flange's plate collar (type 32): a ring on the pipe, its face the joint's.
+fn collar_plate(l: &Loose) -> Flange {
+    Flange { outside: l.collar / 2.0, bore: l.pipe / 2.0, pitch: 0.0, holes: 0, hole: 0.0 }
+}
+
+/// A weld neck flange (type 11), its raised face at the base, its neck up the axis: the plate
+/// with its raised face, the hub narrowing to the neck, the neck's straight end, bored to the
+/// pipe's inside; its bolt holes through the plate.
+fn weld_neck_solid(w: &WeldNeck) -> Result<Body> {
+    use solidcraft_geom::Seg2;
+    let rb = w.neck / 2.0 - w.wall;
+    let p = |x: f64, z: f64| Vec2::new(x, z);
+    let pts = [
+        p(rb, 0.0),
+        p(w.face / 2.0, 0.0),
+        p(w.face / 2.0, w.face_height),
+        p(w.outside / 2.0, w.face_height),
+        p(w.outside / 2.0, w.thickness),
+        p(w.hub / 2.0, w.thickness),
+        p(w.neck / 2.0, w.length - w.straight),
+        p(w.neck / 2.0, w.length),
+        p(rb, w.length),
+    ];
+    let segs: Vec<Seg2> = (0..pts.len()).map(|k| Seg2::Line { a: pts[k], b: pts[(k + 1) % pts.len()] }).collect();
+    let mut body = revolved(segs, "weld neck")?;
+    // the bolt holes: through the plate, from its raised face's height to its back
+    let f = Flange { outside: w.outside / 2.0, bore: 0.0, pitch: w.pitch / 2.0, holes: usize::from(w.holes), hole: w.hole / 2.0 };
+    let regions: Vec<Region2> = f.hole_centres().into_iter().map(|c| Region2 { outer: Loop2::circle(c, f.hole), holes: Vec::new() }).collect();
+    let plane = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Y };
+    for tool in kernel::extrude(&plane, &regions, -1.0, w.thickness + 1.0)? {
+        body = some(kernel::boolean(&body, &tool, BoolOp::Cut)?, "weld neck")?;
+    }
+    Ok(body)
+}
+
+/// A standard fitting from its size's designation (see [`ps::designation`]); `None` when the
+/// designation names no standard size of this kind of fitting (a fitting of its own sizes).
+fn standard(fitting: FittingType, name: &str, height: Option<f64>, base: Vec3, axis: Vec3) -> Result<Option<Sized>> {
+    let d = ps::designation(name);
+    let length = || -> Result<f64> {
+        match height {
+            Some(h) if h.is_finite() && h > 0.0 => Ok(h),
+            Some(_) => bad("the fitting's length must be positive"),
+            None => bad("the fitting needs its length"),
+        }
+    };
+    let unknown = |what: &str| -> Result<Option<Sized>> { bad(format!("`{name}` is no standard {what} this knows")) };
+    let done = |t: f64, shape: Shape, thread: Option<FittingThread>| Ok(Some(Sized { thickness: t, shape, base, axis, thread }));
+    match fitting {
+        FittingType::Flange => {
+            let (Some(pn), Some(dn)) = (d.pn, d.dn) else { return Ok(None) };
+            match d.kind.as_str() {
+                "11" => match ps::weld_neck(pn, dn, d.standard) {
+                    Some(w) => done(w.thickness, Shape::WeldNeck(w), None),
+                    None => unknown("weld neck flange (EN 1092-1 type 11)"),
+                },
+                "02" => match ps::loose(pn, dn, d.standard) {
+                    Some(l) => done(l.thickness, Shape::Loose(l), None),
+                    None => unknown("loose flange (EN 1092-1 type 02)"),
+                },
+                "" | "01" => match crate::flange_catalog::size(pn, dn) {
+                    Some(z) => {
+                        let holes = if d.standard == ps::Standard::Din && dn == 65 && matches!(pn, 10 | 16) { 4 } else { z.holes };
+                        let f = Flange {
+                            outside: z.outside / 2.0,
+                            bore: z.bore / 2.0,
+                            pitch: z.pitch / 2.0,
+                            holes: usize::from(holes),
+                            hole: z.hole / 2.0,
+                        };
+                        done(z.thickness, Shape::Flange(f), None)
+                    }
+                    None => unknown("plate flange (EN 1092-1 type 01)"),
+                },
+                _ => unknown("flange"),
+            }
+        }
+        // a lapped pipe end (type 33): the pipe turned out to the collar's face, its wall the
+        // series' (type 11's neck wall)
+        FittingType::Collar => {
+            let (Some(pn), Some(dn)) = (d.pn, d.dn) else { return Ok(None) };
+            let (Some(l), Some(w)) = (ps::loose(pn, dn, d.standard), ps::weld_neck(16, dn, ps::Standard::En)) else {
+                return unknown("lapped pipe end (EN 1092-1 type 33)");
+            };
+            let t = w.wall;
+            let c = Collar { radius: (l.pipe - t) / 2.0, height: length()?, bend: t, width: (l.collar - l.pipe) / 2.0 };
+            c.check(t).map_err(DocError::Invalid)?;
+            done(t, Shape::Collar(c), None)
+        }
+        // a threaded socket (EN 10241), Rp inside all through
+        FittingType::Socket => {
+            // of its own sizes, a socket keeps its pipe thread (`G2`): a standard one its form
+            let (Some(size), true) = (d.thread, matches!(d.kind.as_str(), "full" | "half")) else { return Ok(None) };
+            let Some(k) = ps::socket(size) else { return unknown("socket (EN 10241)") };
+            let thread = ps::thread_name("Rp", size);
+            let Some(spec) = crate::thread_spec::parse(&thread) else { return unknown("socket thread") };
+            let h = if d.kind == "half" { k.half } else { k.full };
+            let (outside, inside) = (k.outside / 2.0, spec.minor() / 2.0);
+            let th = FittingThread { designation: thread, inside: true, length: None, at: Vec3::new(inside, 0.0, h / 2.0), modeled: modeled(&spec) };
+            done(outside - inside, Shape::Tube { outside, inside, height: h, top: None }, Some(th))
+        }
+        // a threaded end: medium pipe (EN 10255) with its R thread at its top
+        FittingType::Nipple => {
+            // of its own sizes, a threaded end keeps its pipe thread (`G1/2`): a standard one its size
+            let (Some(size), true) = (d.thread, name.starts_with(|c: char| c.is_ascii_digit())) else { return Ok(None) };
+            let Some(pipe) = ps::pipe(size) else { return unknown("threaded end (EN 10255)") };
+            let h = length()?;
+            if h <= pipe.thread {
+                return bad(format!("a {size} threaded end must be longer than its thread, {} mm", pipe.thread));
+            }
+            // R (ISO 7-1, taper 1:16) is cut as its parallel twin of the same pitch and form (G):
+            // over a thread's length the taper is a few tenths of a millimetre, and the kernel cuts
+            // a parallel thread reliably
+            let thread = ps::thread_name("G", size);
+            let Some(spec) = crate::thread_spec::parse(&thread) else { return unknown("threaded end's thread") };
+            let (outside, inside) = (pipe.outside / 2.0, pipe.outside / 2.0 - pipe.wall);
+            // turned down to the thread's major diameter a pitch further than the thread runs, so
+            // the thread runs out before the shoulder
+            let major = (spec.major / 2.0).min(outside);
+            let top = (major < outside - 1e-6).then_some((major, pipe.thread + spec.pitch));
+            if h <= pipe.thread + spec.pitch {
+                return bad(format!("a {size} threaded end must be longer than its thread, {} mm", pipe.thread));
+            }
+            let th = FittingThread {
+                designation: thread,
+                inside: false,
+                length: Some(pipe.thread),
+                at: Vec3::new(major, 0.0, h - pipe.thread / 2.0),
+                modeled: modeled(&spec),
+            };
+            done(pipe.wall, Shape::Tube { outside, inside, height: h, top }, Some(th))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// A standard fitting's thread is cut into the model up to 2" (G2, 59.6 mm): a larger one takes
+/// minutes to cut, and is shown as a cosmetic thread (the same designation and length).
+fn modeled(spec: &crate::thread_spec::ThreadSpec) -> bool {
+    spec.major <= 60.0
 }
 
 /// A pipe with its top turned out into a collar: the wall up to the bend, round the bend (a
@@ -421,6 +625,15 @@ impl crate::Document {
         let vals = self.evaluation_values();
         match sized(&vals, &f.kind)? {
             Some(s) => Ok(s.patterns()),
+            None => bad("not a pipe fitting"),
+        }
+    }
+
+    /// Each piece's sheet thickness of a Fitting feature, in the order of its patterns.
+    pub fn fitting_piece_thicknesses(&self, feature: u64) -> Result<Vec<f64>> {
+        let f = self.features.iter().find(|f| f.id == feature).ok_or_else(|| DocError::Unknown(format!("feature {feature}")))?;
+        match sized(&self.evaluation_values(), &f.kind)? {
+            Some(s) => Ok(s.piece_thicknesses()),
             None => bad("not a pipe fitting"),
         }
     }

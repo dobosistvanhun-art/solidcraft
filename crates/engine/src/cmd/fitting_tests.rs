@@ -24,7 +24,7 @@ fn pieces_match_their_patterns(s: &mut Session, count: usize, tol: f64) -> Value
     for p in &pieces {
         let body = p["body"].as_str().unwrap_or_else(|| panic!("a piece without its body: {p}"));
         let v = volume(s, body);
-        let want = p["area"].as_f64().unwrap_or(0.0) * t;
+        let want = p["area"].as_f64().unwrap_or(0.0) * p["thickness"].as_f64().unwrap_or(t);
         assert!((v - want).abs() / want < tol, "{}: body {v} mm³, pattern × t {want} mm³", p["piece"]);
     }
     pats
@@ -192,22 +192,76 @@ fn a_threaded_end_carries_its_pipe_thread() {
     assert!((v - want).abs() / want < 0.01, "{v} vs {want}");
 }
 
-/// A collar (bördel): a pipe turned out at its top; its pattern is the blank, not exact.
+/// A collar (bördel) of its own sizes: a pipe turned out at its top, with no flat pattern.
 #[test]
 fn a_collar_turns_out_its_pipe() {
     let mut s = Session::default();
     let r = run(&mut s, "fitting.collar", json!({"diameter": 100, "height": 80, "thickness": 1.5, "width": 25, "bend": 3}));
     assert_eq!(r["created_bodies"].as_array().map(Vec::len), Some(1), "{r}");
+    let v = volume(&mut s, r["created_bodies"][0].as_str().unwrap_or_default());
+    // the pipe's wall, the bend and the collar: more than the straight pipe alone
+    let pipe = std::f64::consts::PI * 2.0 * 49.25 * 1.5 * 80.0;
+    assert!(v > pipe && v < pipe * 2.0, "{v} vs the pipe's {pipe}");
     let pats = run(&mut s, "fitting.patterns", json!({}));
-    assert_eq!(pats["exact"], false, "{pats}");
-    let p = &pats["pieces"][0];
-    let body = p["body"].as_str().unwrap_or_default().to_string();
-    let v = volume(&mut s, &body);
-    // the collar's sheet spreads round as it turns out: the body holds more than its blank
-    let blank = p["area"].as_f64().unwrap_or(0.0) * 1.5;
-    assert!(v > blank && v < blank * 1.4, "{v} vs the blank's {blank}");
-    let bb = run(&mut s, "inspect.measure", json!({"bodies": [body]}));
-    assert!(bb.to_string().contains("volume"), "{bb}");
+    assert_eq!(pats["pieces"].as_array().map(Vec::len), Some(0), "{pats}");
+}
+
+/// Standard flanges, every size from EN 1092-1's tables: a weld neck (type 11), a loose flange
+/// with its plate collar (02 + 32: two flat pieces), a plate flange to DIN (DN 65: 4 holes).
+#[test]
+fn standard_flanges_are_made_to_their_tables() {
+    use std::f64::consts::PI;
+    let mut s = Session::default();
+    let r = run(&mut s, "fitting.flange", json!({"type": "11", "pn": 16, "dn": 50}));
+    let wn = r["created_bodies"][0].as_str().unwrap_or_default().to_string();
+    let v = volume(&mut s, &wn);
+    // DN 50 PN 16: bored to 60.3 − 2 × 2.9; the face (102 across) the plate's 18 thick, the rim
+    // 15 (behind the 3 high raised face) less 4 holes of 18; the hub from 74 to the neck's 60.3
+    // over 19, the neck's straight 8
+    let rb = 60.3 / 2.0 - 2.9;
+    let hub = PI * 19.0 / 3.0 * (37.0f64.powi(2) + 37.0 * 30.15 + 30.15f64.powi(2)) - PI * rb * rb * 19.0;
+    let want = PI * (51.0f64.powi(2) - rb * rb) * 18.0 + PI * (82.5f64.powi(2) - 51.0f64.powi(2)) * 15.0 - 4.0 * PI * 81.0 * 15.0
+        + hub
+        + PI * (30.15f64.powi(2) - rb * rb) * 8.0;
+    assert!((v - want).abs() / want < 0.002, "{v} vs {want}");
+    let pats = run(&mut s, "fitting.patterns", json!({}));
+    assert_eq!(pats["pieces"].as_array().map(Vec::len), Some(0), "a weld neck is forged: {pats}");
+    let r = run(&mut s, "fitting.flange", json!({"type": "02", "pn": 16, "dn": 200}));
+    assert_eq!(r["created_bodies"].as_array().map(Vec::len), Some(2), "the flange and its collar: {r}");
+    let pats = pieces_match_their_patterns(&mut s, 2, 0.002);
+    let names: Vec<&str> = pats["pieces"].as_array().into_iter().flatten().filter_map(|p| p["piece"].as_str()).collect();
+    assert_eq!(names, ["flange", "collar"]);
+    assert_eq!(pats["pieces"][0]["holes"].as_array().map(Vec::len), Some(13), "the bore and 12 holes");
+    assert!((pats["pieces"][1]["width"].as_f64().unwrap_or(0.0) - 268.0).abs() < 0.01, "the collar's face: {pats}");
+    run(&mut s, "fitting.flange", json!({"pn": 10, "dn": 65, "standard": "DIN"}));
+    let pats = run(&mut s, "fitting.patterns", json!({}));
+    assert_eq!(pats["pieces"][0]["holes"].as_array().map(Vec::len), Some(5), "DIN: the bore and 4 holes");
+    run(&mut s, "fitting.collar", json!({"pn": 16, "dn": 100, "height": 60}));
+}
+
+/// Standard threaded parts: their threads cut, to be seen (no cosmetic thread), so each holds
+/// less than its plain tube.
+#[test]
+fn standard_sockets_and_threaded_ends_have_their_threads_cut() {
+    use std::f64::consts::PI;
+    let mut s = Session::default();
+    let r = run(&mut s, "fitting.socket", json!({"size": "1/2"}));
+    let v = volume(&mut s, r["created_bodies"][0].as_str().unwrap_or_default());
+    // EN 10241 1/2": 27 across, 37 long, bored to the Rp thread's minor diameter
+    let plain = PI * (13.5f64.powi(2) - (18.631f64 / 2.0).powi(2)) * 37.0;
+    assert!(v < plain * 0.995 && v > plain * 0.8, "the thread cut inside: {v} vs {plain}");
+    assert!(s.model.state().threads.is_empty(), "cut, not marked");
+    let r = run(&mut s, "fitting.nipple", json!({"size": "R3/4", "height": 60}));
+    let v = volume(&mut s, r["created_bodies"][0].as_str().unwrap_or_default());
+    let plain = PI * (13.45f64.powi(2) - (13.45f64 - 2.65).powi(2)) * 60.0;
+    assert!(v < plain * 0.995 && v > plain * 0.8, "the thread cut outside: {v} vs {plain}");
+    let half = run(&mut s, "fitting.socket", json!({"size": "1 1/4", "form": "half"}));
+    assert_eq!(half["created_bodies"].as_array().map(Vec::len), Some(1));
+    // past 2" the thread would take minutes to cut: it is marked, cosmetic, at its standard size
+    let mut s = Session::default();
+    run(&mut s, "fitting.socket", json!({"size": "3"}));
+    let threads = &s.model.state().threads;
+    assert_eq!(threads.iter().map(|t| t.designation.as_str()).collect::<Vec<_>>(), ["Rp3"], "marked, not cut");
 }
 
 #[test]
@@ -222,8 +276,31 @@ fn flanges_and_threaded_ends_refuse_what_they_cannot_make() {
         ("fitting.nipple", json!({"height": 20, "thickness": 2})),
         ("fitting.socket", json!({"diameter": 20, "height": 30, "thickness": 2, "thread": "G1"})),
         ("fitting.collar", json!({"diameter": 100, "height": 50, "thickness": 2, "width": 3, "bend": 2})),
+        ("fitting.flange", json!({"type": "11", "pn": 6, "dn": 50})),
+        ("fitting.flange", json!({"type": "02", "pn": 16, "dn": 700})),
+        ("fitting.flange", json!({"type": "11"})),
+        ("fitting.socket", json!({"size": "1/8"})),
+        ("fitting.nipple", json!({"size": "1/2", "height": 10})),
+        ("fitting.collar", json!({"pn": 25, "dn": 50, "height": 50})),
     ] {
         assert!(s.execute(cmd, &p).is_err(), "{cmd} {p}");
     }
     assert!(s.doc.features.is_empty(), "nothing was made");
+}
+
+/// What the fitting dialogs make with their first choices, and the edits a dialog reopens on.
+#[test]
+fn the_dialogs_first_standard_fittings_are_made() {
+    for (cmd, p) in [
+        ("fitting.flange", json!({"type": "02", "pn": 10, "dn": 80, "standard": "EN"})),
+        ("fitting.flange", json!({"type": "01", "pn": 16, "dn": 50, "standard": "EN"})),
+        ("fitting.socket", json!({"size": "1/2", "form": "full"})),
+        ("fitting.nipple", json!({"size": "1/2", "height": 60})),
+        ("fitting.collar", json!({"pn": 16, "dn": 50, "standard": "EN", "height": 80})),
+    ] {
+        let mut s = Session::default();
+        if let Err(e) = s.execute(cmd, &p) {
+            panic!("{cmd} {p}: {e}");
+        }
+    }
 }
